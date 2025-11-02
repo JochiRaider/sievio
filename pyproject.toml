@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "repocapsule"
 version = "0.1.0"
-description = "Repository → JSONL converter with robust decoding, structure-aware chunking, Markdown/KQL extraction, and GitHub helpers (stdlib-only)."
+description = "Repository → JSONL converter with robust decoding, structure-aware chunking, Markdown/KQL extraction, and GitHub helpers."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [{ name = "Your Name", email = "you@example.com" }]
@@ -15,15 +15,18 @@ classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
   "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
   "License :: OSI Approved :: MIT License",
   "Operating System :: OS Independent"
 ]
 
-[project.urls]
-Homepage = "https://github.com/your-org/repocapsule"
-Issues = "https://github.com/your-org/repocapsule/issues"
+# Core library has no hard runtime deps (stdlib-only)
+dependencies = []
 
 [project.optional-dependencies]
+# Dev/test tooling
 dev = [
   "pytest>=8",
   "pytest-cov>=5",
@@ -32,24 +35,34 @@ dev = [
   "build>=1.2",
   "twine>=5.1"
 ]
+
+# Optional tokenizer for accurate token counts
+tok = ["tiktoken>=0.6"]
+
+# Quality scoring / model-based extras (heavy)
 qc = [
-  "torch",
-  "transformers",
-  "tiktoken",
-  "pyyaml"
+  "torch>=2.2",
+  "transformers>=4.44",
+  "tiktoken>=0.6",
+  "pyyaml>=6"
 ]
 
-[project.scripts]
-repocapsule-qc = "repocapsule.qc:main"
+[project.urls]
+Homepage = "https://github.com/your-org/repocapsule"
+Repository = "https://github.com/your-org/repocapsule"
+Issues = "https://github.com/your-org/repocapsule/issues"
+
+# Enable when you add a CLI entry point, e.g. repocapsule.qc:main
+# [project.scripts]
+# repocapsule-qc = "repocapsule.qc:main"
 
 [tool.setuptools]
+# <-- src layout -->
 package-dir = { "" = "src" }
 
 [tool.setuptools.packages.find]
 where = ["src"]
 include = ["repocapsule*"]
-
-# --- Optional tooling configs ---
 
 [tool.ruff]
 line-length = 100
