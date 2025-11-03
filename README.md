@@ -8,6 +8,11 @@
 
 
 <div align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="logo.png" />
+    <source media="(prefers-color-scheme: light)" srcset="logo.png" />
+    <img alt="RepoCapsule logo" src="logo.png" width="160" height="160" />
+  </picture>
   <h1>RepoCapsule</h1>
   <p>
     Repository → JSONL converter with robust decoding, structure‑aware chunking, Markdown→KQL extraction, and GitHub streaming helpers — ideal for pre‑training corpora and RAG.
