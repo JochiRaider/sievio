@@ -1,92 +1,206 @@
-# RepoCapsule
+<div id="top"></div>
 
-**Repository → JSONL (PTD) converter with robust decoding, structure‑aware chunking, optional KQL‑from‑Markdown extraction, GitHub streaming helpers, and an optional quality‑scoring pass.**
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+[![MIT License][license-shield]][license-url]
 
-Python 3.11+, standard library by default (optional extras for QC).
 
----
+<div align="center">
+  <h1>RepoCapsule</h1>
+  <p>
+    Repository → JSONL converter with robust decoding, structure‑aware chunking, Markdown→KQL extraction, and GitHub streaming helpers — ideal for pre‑training corpora and RAG.
+  </p>
+  <p>
+    <a href="https://github.com/your-org/repocapsule"><strong>Explore the docs »</strong></a>
+    ·
+    <a href="https://github.com/your-org/repocapsule/issues">Report Bug</a>
+    ·
+    <a href="https://github.com/your-org/repocapsule/issues">Request Feature</a>
+  </p>
+</div>
 
-## Why?
+<details>
+  <summary>Table of Contents</summary>
+  <ol>
+    <li><a href="#about-the-project">About The Project</a>
+      <ul>
+        <li><a href="#features">Features</a></li>
+        <li><a href="#built-with">Built With</a></li>
+      </ul>
+    </li>
+    <li><a href="#getting-started">Getting Started</a>
+      <ul>
+        <li><a href="#prerequisites">Prerequisites</a></li>
+        <li><a href="#installation">Installation</a></li>
+        <li><a href="#configuration">Configuration</a></li>
+      </ul>
+    </li>
+    <li><a href="#usage">Usage</a>
+      <ul>
+        <li><a href="#quick-start">Quick Start</a></li>
+        <li><a href="#api-surface">API Surface</a></li>
+        <li><a href="#kql-extraction">KQL Extraction from Markdown</a></li>
+        <li><a href="#chunking">Chunking & Policies</a></li>
+        <li><a href="#quality-scoring">Quality Scoring (optional)</a></li>
+        <li><a href="#jsonl-schema">JSONL Schema</a></li>
+      </ul>
+    </li>
+    <li><a href="#roadmap">Roadmap</a></li>
+    <li><a href="#contributing">Contributing</a></li>
+    <li><a href="#license">License</a></li>
+    <li><a href="#contact">Contact</a></li>
+    <li><a href="#acknowledgments">Acknowledgments</a></li>
+  </ol>
+</details>
 
-RepoCapsule turns heterogeneous repositories into **clean JSONL corpora** for pre‑training, post‑training refinement, retrieval, or evaluation. It preserves structure (Markdown sections, fenced code, code lines), emits a consistent JSONL schema (with `meta.tokens` and `meta.bytes`), and can also write a **prompt‑text sidecar** in the same pass for quick prompting and spot QA.
 
----
+## About The Project
 
-## Features
+RepoCapsule turns GitHub repositories (or local folders) into clean, structure‑aware JSONL corpora.
+It is designed for LLM data pipelines: efficient conversion, robust Unicode decoding, and sensible chunking for both code and docs. Optional helpers extract KQL queries from Markdown, and an add‑on quality module scores the resulting chunks.
 
-- **Streamed GitHub ingestion** with defensive limits and license‑aware output names
-- **Robust decoding**: UTF‑8 first, BOM handling, UTF‑16 heuristics, cp1252 fallback, mojibake repair
+### Features
+
+- **Stream‑safe GitHub ingestion**: Download zipballs in chunks (disk‑buffered), with zip‑bomb defenses and path safety checks.
+- **Robust decoding**: BOM‑aware UTF‑8/16/32 detection, heuristic UTF‑16 guess, cp1252 fallback, newline/control cleanup.
 - **Structure‑aware chunking**:
-  - Docs and Markdown → paragraph‑based with sentence, fence, and table awareness
-  - Code → line‑aware packing with a lightweight token estimate (no external tokenizer required)
-- **Markdown → KQL extraction** (opt‑in): pull only KQL code blocks from `.md`
-- **JSONL schema** with `meta.lang`, `meta.tokens`, `meta.bytes`, `meta.sha256`, chunk indices, and license
-- **Prompt text sidecar**: write `*.prompt.txt` while streaming JSONL, no giant in‑memory list
-- **.gitignore‑aware** traversal for local directories
-- **Optional QC**: heuristics and optional LM perplexity to produce a CSV quality report
-- **Library‑friendly logging** helpers
+  - Markdown (ATX/Setext + fenced code) and reStructuredText (titles, directives, literal blocks).
+  - Code line‑packer tuned for source files.
+  - Target/min/overlap token policy with **tiktoken** when available, fast estimate otherwise.
+- **Markdown → KQL**: Detect fenced/indented KQL blocks (or infer via heuristics), capture nearby headings as titles.
+- **Canonical JSONL records**: Include path, language hint, license, stable `sha256`, and `tokens`/`bytes` size.
+- **Optional QC**: Lightweight heuristics (+ optional HF perplexity) to sanity‑check corpora and write a CSV.
 
----
+### Built With
 
-## Install
+- Python ≥ 3.11 (stdlib‑only core)
+- Optional extras:
+  - `tiktoken` for exact token counts
+  - `torch` + `transformers` for perplexity in QC
+  - `pyyaml` for YAML validation in QC
+
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.11+ (3.12/3.13/3.14 also supported)
+- (Optional) CUDA GPU if you plan to run QC with perplexity
+
+### Installation
+
+From source (editable) with optional extras:
 
 ```bash
-# from repo root
-python -m pip install -e .
-
-# optional extras for quality scoring (torch, transformers, tiktoken, pyyaml)
-python -m pip install -e .[qc]
+pip install -e .[dev]
+# add accurate tokenization
+pip install -e .[tok]
+# add quality scoring w/ perplexity
+pip install -e .[qc]
 ```
 
-Tip: For GitHub API calls, set a token to reduce throttling.
+### Configuration
 
-- Windows: `setx GITHUB_TOKEN "<your-token>"`
-- macOS/Linux: `export GITHUB_TOKEN="<your-token>"`
+- GitHub API: set `GITHUB_TOKEN` (or `GH_TOKEN`) to avoid low anonymous rate limits.
 
----
+```bash
+export GITHUB_TOKEN=ghp_...
+```
 
-## Quickstart
 
-### 1) Convert a GitHub repo with auto‑named outputs
+## Usage
+
+### Quick Start
+
+Convert a GitHub repo to JSONL — and also a prompt‑friendly text file in the same pass:
 
 ```python
 from pathlib import Path
-from repocapsule import convert_github_url_to_jsonl_autoname
+from repocapsule import configure_logging, ChunkPolicy, convert_github_url_to_jsonl_autoname
 
-out_dir = Path("out")
-out_dir.mkdir(parents=True, exist_ok=True)
+configure_logging(level="INFO")
+out_dir = Path("out"); out_dir.mkdir(parents=True, exist_ok=True)
 
 jsonl_path, prompt_path = convert_github_url_to_jsonl_autoname(
-    "https://github.com/olafhartong/sysmon-modular",
+    "https://github.com/owner/repo",
     out_dir,
-    include_exts={".yml", ".yaml", ".xml", ".md", ".txt"},
-    also_prompt_text=True,       # stream‑write JSONL + prompt together
-    kql_from_markdown=False,     # not needed for this repo
+    also_prompt_text=True,                   # stream JSONL + prompt together
+    kql_from_markdown=False,                 # set True to extract only KQL from Markdown
+    policy=ChunkPolicy(mode="auto", target_tokens=1200, overlap_tokens=150, min_tokens=250),
 )
 print(jsonl_path, prompt_path)
 ```
 
-A ready‑made runner is included: `python scripts/test_sysmon_modular.py`.
-
-### 2) Convert a local directory
+Convert a **local** folder to JSONL with default include‑exts:
 
 ```python
-from repocapsule import convert_repo_to_jsonl_autoname
-
-jsonl_path = convert_repo_to_jsonl_autoname(
-    "path/to/repo",
-    "out",
-    include_exts={".py", ".md", ".yml", ".json", ".xml"},
-    kql_from_markdown=True,   # only if you want KQL blocks from .md
+from repocapsule import convert_repo_to_jsonl, ChunkPolicy
+convert_repo_to_jsonl(
+    root="/path/to/repo",
+    jsonl_path="/path/to/out/repo.jsonl",
+    policy=ChunkPolicy(mode="doc", target_tokens=1700, overlap_tokens=40, min_tokens=400),
 )
-print(jsonl_path)
 ```
 
----
+### API Surface
 
-## JSONL schema
+Public entry points (selection):
 
-Each line is one object:
+- GitHub I/O: `parse_github_url`, `get_repo_info`, `download_zipball_to_temp`, `iter_zip_members`, `build_output_basename`
+- Converters: `convert_repo_to_jsonl`, `convert_repo_to_jsonl_autoname`,
+  `convert_github_url_to_jsonl`, `convert_github_url_to_both`, `convert_github_url_to_jsonl_autoname`
+- Chunking: `ChunkPolicy`, `chunk_text`, `split_doc_blocks`, `count_tokens`
+- Markdown/KQL: `extract_kql_blocks_from_markdown`, `is_probable_kql`, `guess_kql_tables`, `derive_category_from_rel`
+- Records: `build_record`, language/extension helpers
+- Logging: `configure_logging`, `get_logger`
+
+See the docstrings and source for full signatures.
+
+### KQL Extraction
+
+Extract only KQL blocks from Markdown files (good for hunting query repos):
+
+```python
+from repocapsule import convert_github_url_to_jsonl_autoname
+convert_github_url_to_jsonl_autoname(
+    "https://github.com/owner/repo-of-kql",
+    "out",
+    kql_from_markdown=True,
+)
+```
+
+Heuristics accept fences labeled `kql`/`kusto`, or infer KQL by operators (e.g., `| where`, `summarize`).
+
+### Chunking
+
+`ChunkPolicy` controls chunk size and overlap. For prose, targets ~1500–2000 tokens work well; for code, slightly smaller targets reduce truncation risk.
+
+- **Docs**: format‑aware splitters are applied before packing (Markdown, reStructuredText).
+- **Code**: simple line‑based blocks that prefer blank lines as boundaries.
+- **Token counting**: uses `tiktoken` if installed; otherwise a fast char/token estimate.
+
+### Quality Scoring
+
+Install the `qc` extra to compute lightweight scores and (optionally) perplexity:
+
+```python
+from repocapsule import score_jsonl_to_csv
+csv_path = score_jsonl_to_csv(
+    "/path/to/corpus.jsonl",
+    lm_model_id="Qwen/Qwen2.5-1.5B",  # optional; omit to skip perplexity
+    device="cuda",
+    dtype="bfloat16",
+)
+print(csv_path)
+```
+
+Produces a CSV with columns like `score`, `tokens`, `lang`, `path`, `near_dup`, etc.
+
+### JSONL Schema
+
+Each line is an object:
 
 ```json
 {
@@ -94,120 +208,70 @@ Each line is one object:
   "meta": {
     "source": "https://github.com/owner/repo",
     "repo": "owner/repo",
-    "path": "sub/dir/file.ext",
+    "path": "sub/dir/file.py",
     "license": "Apache-2.0",
-    "lang": "Markdown",
+    "lang": "Python",
     "chunk_id": 1,
     "n_chunks": 3,
     "encoding": "utf-8",
     "had_replacement": false,
-    "sha256": "…",
+    "sha256": "...",
     "tokens": 1234,
     "bytes": 5678
   }
 }
 ```
 
-`tokens` is a fast, symbols‑aware estimate. `bytes` is the UTF‑8 length of `text`.
 
----
+## Roadmap
 
-## Prompt text sidecar
+- [ ] CLI entry point(s) for common conversions and QC
+- [ ] Additional doc splitters (Asciidoc), more language hints
+- [ ] More extractors (e.g., SPL/Sigma/YARA from docs)
+- [ ] Optional parallelism for large local folders
+- [ ] Dedup/near‑dup filtering helpers
+- [ ] License classifier heuristics & SPDX enrichment
 
-When `also_prompt_text=True` or when using `convert_github_url_to_both(...)`, the converter writes a `*.prompt.txt` file while streaming JSONL. Each chunk is prefixed like:
+See open issues for current plans and discussion.
 
-```
-### path/to/file.ext [3/7] (lang=YAML)
-
-<chunk text>
-```
-
----
-
-## Markdown → KQL extraction (opt‑in)
-
-Set `kql_from_markdown=True` to emit records only for Markdown code blocks that look like KQL. Unlabeled fences are accepted if they match a small KQL heuristic (operators and shape). Useful for repos that interleave prose and hunting queries.
-
----
-
-## Chunking policy
-
-Use `ChunkPolicy` to tune chunk sizes.
-
-```python
-from repocapsule import ChunkPolicy, convert_repo_to_jsonl
-
-policy = ChunkPolicy(
-    mode="auto",       # "auto" | "doc" | "code"
-    target_tokens=800,
-    overlap_tokens=100,
-    min_tokens=200
-)
-
-convert_repo_to_jsonl("repo_dir", "out/repo.jsonl", policy=policy)
-```
-
-Guidelines:
-
-- Docs: paragraph‑aware packing that keeps fences, tables, and lists intact
-- Code: line‑aware packing that is deterministic and diff‑friendly
-
----
-
-## Quality scoring (optional)
-
-Install extras with `.[qc]` and then:
-
-```python
-from repocapsule import score_jsonl_to_csv
-csv_path = score_jsonl_to_csv("out/owner_repo__main__MIT.jsonl",
-                              lm_model_id=None)  # or a local HF model id
-print(csv_path)  # …_quality.csv
-```
-
-The CSV includes fields such as `score`, `perplexity` when a model is supplied, `parse_ok` (syntax checks), `repetition`, and `near_dup`.
-
----
-
-## Safety and limits
-
-- Defensive archive reading: member count caps, total uncompressed limits, per‑file caps, and compression‑ratio checks when iterating zip members
-- `.gitignore` is honored for local traversal, and common junk or build paths are excluded by default
-
----
-
-## Logging
-
-Library‑friendly by default with no noisy root handlers. For scripts:
-
-```python
-from repocapsule import configure_logging
-log = configure_logging(level="INFO")
-```
-
-A `temp_level(...)` context manager is also available for scoped verbosity.
-
----
-
-## Troubleshooting
-
-- API throttling: provide a GitHub token via `GITHUB_TOKEN` or `GH_TOKEN`
-- If you hit 403 or 429, wait until the reset timestamp in rate‑limit headers
-- Markdown basics: use headings, lists, code fences, and tables for readability
-- SPDX license IDs: outputs may include an SPDX short identifier in the filename for provenance, for example `…__MIT.jsonl`
-
----
 
 ## Contributing
 
-- Python 3.11+
-- Lint and type check with dev extras (`ruff`, `mypy`, `pytest`)
-- Open issues or PRs with focused changes and clear repro steps
+Contributions are welcome! Please open an issue to discuss significant changes.
 
----
+1. Fork the project
+2. Create a feature branch: `git checkout -b feat/awesome`
+3. Commit your changes: `git commit -m "feat: add awesome"`
+4. Push to the branch: `git push origin feat/awesome`
+5. Open a Pull Request
+
 
 ## License
 
-MIT (see `LICENSE`).
+Distributed under the MIT License. See `LICENSE` for details.
 
+
+## Contact
+
+Open an issue on GitHub or start a discussion. You can also file bugs anonymously by emailing your CI or a group mailbox (replace this line with your preferred contact).
+
+
+## Acknowledgments
+
+- Inspired by real‑world data‑prep needs for LLM pre‑training and RAG
+- Thanks to the maintainers of the Best‑README‑Template and the broader OSS ecosystem
+
+
+---
+
+[contributors-shield]: https://img.shields.io/github/contributors/your-org/repocapsule.svg?style=for-the-badge
+[contributors-url]: https://github.com/your-org/repocapsule/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/your-org/repocapsule.svg?style=for-the-badge
+[forks-url]: https://github.com/your-org/repocapsule/network/members
+[stars-shield]: https://img.shields.io/github/stars/your-org/repocapsule.svg?style=for-the-badge
+[stars-url]: https://github.com/your-org/repocapsule/stargazers
+[issues-shield]: https://img.shields.io/github/issues/your-org/repocapsule.svg?style=for-the-badge
+[issues-url]: https://github.com/your-org/repocapsule/issues
+[license-shield]: https://img.shields.io/github/license/your-org/repocapsule.svg?style=for-the-badge
+[license-url]: https://github.com/your-org/repocapsule/blob/main/LICENSE
 
