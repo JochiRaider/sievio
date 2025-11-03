@@ -1,10 +1,10 @@
 <div id="top"></div>
 
-[![Contributors][contributors-shield]][contributors-url]
-[![Forks][forks-shield]][forks-url]
-[![Stargazers][stars-shield]][stars-url]
-[![Issues][issues-shield]][issues-url]
-[![MIT License][license-shield]][license-url]
+[![license](https://img.shields.io/github/license/JochiRaider/RepoCapsule?style=for-the-badge)](LICENSE)
+[![forks](https://img.shields.io/github/forks/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/network/members)
+[![contributors](https://img.shields.io/github/contributors/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/graphs/contributors)
+[![stars](https://img.shields.io/github/stars/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/stargazers)
+[![issues](https://img.shields.io/github/issues/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/issues)
 
 
 <div align="center">
