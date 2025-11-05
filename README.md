@@ -1,10 +1,12 @@
 <div id="top"></div>
 
-[license](https://img.shields.io/github/license/JochiRaider/RepoCapsule?style=for-the-badge)](LICENSE)
-[forks](https://img.shields.io/github/forks/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/network/members)
-[contributors](https://img.shields.io/github/contributors/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/graphs/contributors)
-[stars](https://img.shields.io/github/stars/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/stargazers)
-[issues](https://img.shields.io/github/issues/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/issues)
+
+[license](https://img.shields.io/github/license/JochiRaider/RepoCapsule?style=for-the-badge)[LICENSE]
+[forks](https://img.shields.io/github/forks/JochiRaider/RepoCapsule?style=for-the-badge)(https://github.com/JochiRaider/RepoCapsule/network/members)
+[contributors](https://img.shields.io/github/contributors/JochiRaider/RepoCapsule?style=for-the-badge)(https://github.com/JochiRaider/RepoCapsule/graphs/contributors)
+[stars](https://img.shields.io/github/stars/JochiRaider/RepoCapsule?style=for-the-badge)(https://github.com/JochiRaider/RepoCapsule/stargazers)
+[issues](https://img.shields.io/github/issues/JochiRaider/RepoCapsule?style=for-the-badge)(https://github.com/JochiRaider/RepoCapsule/issues)
+
 
 <p align="center">
   <img alt="RepoCapsule logo" src="logo.png" width="256" height="256" />
