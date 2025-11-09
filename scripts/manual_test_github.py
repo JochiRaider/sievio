@@ -6,7 +6,7 @@ RepoCapsule - manual smoke test (updated for current API).
 Run this from your workspace root (no install required). The script:
 - Validates the GitHub URL up front
 - Autonames outputs with SPDX license + optional ref + timestamp
-- Uses the current `Options` and `convert_github(...)` API
+- Builds a `RepocapsuleConfig` and passes it into `convert_github(...)`
 - Treats KQL-from-Markdown as an optional Extractor
 - Lets the pipeline own sink open/close
 - Optionally runs QC if extras are available
@@ -28,7 +28,7 @@ import os
 from repocapsule.log import configure_logging
 # Current public API surface (re-exported at package level)
 from repocapsule import (
-    Options,
+    RepocapsuleConfig,
     parse_github_url,
     get_repo_license_spdx,
     build_output_basename_github,
@@ -53,13 +53,7 @@ URL = "https://github.com/microsoft/Microsoft-365-Defender-Hunting-Queries"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
 
 # Output directory for artifacts:
-OUT_DIR = Path(r"C:\Users\wetou\OneDrive\Documents\projects\out")
-
-# File filters (dot-prefixed, lowercase). Use None for defaults.
-INCLUDE_EXTS: Optional[Sequence[str]] = [
-    ".py", ".md", ".txt", ".toml", ".sh", ".lock", ".rs", ".html",
-]
-EXCLUDE_EXTS: Optional[Sequence[str]] = None
+OUT_DIR = Path(r"C:\Users\wetou\OneDrive\Documents\projects\out\test")
 
 # Markdown → KQL extraction (now via Extractor; this just toggles whether we add it)
 ENABLE_KQL_MD_EXTRACTOR = True
@@ -77,18 +71,6 @@ MAX_FILE_MB = 50
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
-
-def _normalize_exts(exts: Optional[Sequence[str]]) -> Optional[set[str]]:
-    if not exts:
-        return None
-    out = set()
-    for e in exts:
-        e = e.strip()
-        if not e:
-            continue
-        out.add(e if e.startswith(".") else "." + e.lower())
-    return out or None
-
 
 def _plan_output_paths(url: str, out_dir: Path, *, ref_hint: str | None, with_prompt: bool) -> tuple[Path, Path | None]:
     spec = parse_github_url(url)
@@ -113,6 +95,14 @@ def _plan_output_paths(url: str, out_dir: Path, *, ref_hint: str | None, with_pr
     return jsonl, prompt
 
 
+def _build_config(extractors: Sequence[object]) -> RepocapsuleConfig:
+    cfg = RepocapsuleConfig()
+    cfg.chunk.policy = POLICY
+    cfg.pipeline.extractors = tuple(extractors)
+    cfg.sources.github.per_file_cap = int(MAX_FILE_MB) * 1024 * 1024
+    return cfg
+
+
 # ──────────────────────────────────────────────────────────────────────────────
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
@@ -128,28 +118,17 @@ def main() -> None:
 
     jsonl_path, prompt_path = _plan_output_paths(URL, OUT_DIR, ref_hint=REF, with_prompt=ALSO_PROMPT_TEXT)
 
-    include = _normalize_exts(INCLUDE_EXTS)
-    exclude = _normalize_exts(EXCLUDE_EXTS)
-
     extractors = []
     if ENABLE_KQL_MD_EXTRACTOR and KqlFromMarkdownExtractor is not None:
         extractors.append(KqlFromMarkdownExtractor())
 
-    opts = Options(
-        include_exts=include,
-        exclude_exts=exclude,
-        skip_hidden=True,
-        max_file_bytes=int(MAX_FILE_MB) * 1024 * 1024,
-        policy=POLICY,
-        extractors=tuple(extractors),
-        context=None,
-    )
+    base_config = _build_config(extractors)
 
     stats = convert_github(
         URL,
         str(jsonl_path),
         out_prompt=(str(prompt_path) if prompt_path else None),
-        opts=opts,
+        base_config=base_config,
     )
 
     print("\n=== Done ===")

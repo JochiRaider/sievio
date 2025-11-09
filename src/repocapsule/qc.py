@@ -3,11 +3,11 @@
 
 from __future__ import annotations
 import json, re, zlib, math, hashlib, os, csv
-from typing import Iterable, Dict, Any, Generator, Optional
+from typing import Iterable, Dict, Any, Generator, Optional, Sequence
 from collections import deque
 import random
 
-__all__ = ['JSONLQualityScorer','score_jsonl_to_csv', 'write_csv']
+__all__ = ['JSONLQualityScorer','score_jsonl_to_csv', 'write_csv', 'main']
 
 
 # ---------- Optional deps (silently degrade if missing) ----------
@@ -74,7 +74,8 @@ def repetition_rate(s: str, k: int = 16) -> float:
         return 0.0
     seen = {}
     reps = 0
-    for i in range(0, len(s)-k):
+    # include the last k-gram starting at len(s)-k
+    for i in range(0, len(s) - k + 1):
         gram = s[i:i+k]
         seen[gram] = seen.get(gram, 0) + 1
         if seen[gram] > 1:
@@ -85,7 +86,9 @@ def code_complexity(s: str) -> float:
     """Very rough code-ness: braces, semicolons, operators, short lines."""
     if not s:
         return 0.0
-    punct = sum(s.count(ch) for ch in "{}();[],:+-*/=<>&|%")
+    # count in a single pass to avoid repeated scans
+    _P = set("{}();[],:+-*/=<>&|%")
+    punct = sum(1 for ch in s if ch in _P)
     short_lines = sum(1 for ln in s.splitlines() if len(ln.strip()) <= 60)
     total_lines = max(1, len(s.splitlines()))
     return min(1.0, 0.5*(punct/ max(1,len(s))) + 0.5*(short_lines/total_lines))
@@ -228,8 +231,18 @@ def parse_ok(text: str, lang: str) -> float:
     try:
         if lang == "python":
             import ast; ast.parse(text); return 1.0
-        if lang in {"json","jsonl"}:
+        if lang == "json":
             json.loads(text); return 1.0
+        if lang == "jsonl":
+            # Treat JSON Lines as a sequence of independent JSON objects
+            any_obj = False
+            for ln in text.splitlines():
+                s = ln.strip()
+                if not s:
+                    continue
+                json.loads(s)
+                any_obj = True
+            return 1.0 if any_obj else 0.0
         if lang == "yaml" and yaml:
             yaml.safe_load(text); return 1.0
         # reStructuredText / Markdown: look for common section/heading structure
@@ -318,7 +331,7 @@ class _Perplexity:
         self.tok = AutoTokenizer.from_pretrained(model_id, use_fast=True, local_files_only=local_files_only)
         self.model = AutoModelForCausalLM.from_pretrained(
             model_id,
-            dtype=getattr(torch, dtype) if hasattr(torch, dtype) else None,
+            torch_dtype=getattr(torch, dtype) if hasattr(torch, dtype) else None,
             local_files_only=local_files_only,
         )
         # place model
@@ -537,7 +550,7 @@ def score_jsonl_to_csv(
     dtype: str = "bfloat16",
     simhash_hamm_thresh: int = 4,
     local_files_only: bool = False,
-) -> str:
+    ) -> str:
     """
     One-call helper: score a JSONL file and write a CSV next to it.
     Returns the CSV path.
@@ -553,3 +566,26 @@ def score_jsonl_to_csv(
     )
     rows = scorer.score_jsonl_path(jsonl_path)
     return write_csv(rows, out_csv)
+
+
+# ---------- Minimal CLI ----------
+
+def main(argv: Optional[Sequence[str]] = None) -> int:
+    import argparse
+    ap = argparse.ArgumentParser(description="Score a JSONL file and write a quality CSV.")
+    ap.add_argument("jsonl", help="Path to input JSONL file")
+    ap.add_argument("-o", "--out", dest="out_csv", help="Output CSV path (defaults to <jsonl>_quality.csv)")
+    ap.add_argument("--simhash", dest="simhash", type=int, default=4, help="Simhash Hamming threshold (default: 4)")
+    ap.add_argument("--no-minhash", dest="minhash", action="store_false", help="Disable MinHash LSH duplicate detection")
+    ap.add_argument("--no-gopher", dest="gopher", action="store_false", help="Disable Gopher-style heuristics")
+    args = ap.parse_args(list(argv) if argv is not None else None)
+
+    scorer = JSONLQualityScorer(
+        simhash_hamm_thresh=int(args.simhash),
+        enable_minhash=bool(args.minhash),
+        enable_gopher=bool(args.gopher),
+    )
+    rows = scorer.score_jsonl_path(str(args.jsonl))
+    out_csv = args.out or (str(os.path.splitext(str(args.jsonl))[0]) + "_quality.csv")
+    write_csv(rows, out_csv)
+    return 0

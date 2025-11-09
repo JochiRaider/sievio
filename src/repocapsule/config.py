@@ -3,13 +3,23 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Mapping, Optional, Sequence, Tuple, Any
+from typing import Any, Callable, Iterable, Mapping, Optional, Sequence, Tuple
 
 from .chunk import ChunkPolicy
-from .convert import get_default_bytes_handlers, Sniff, BytesHandler
-from .interfaces import Extractor, RepoContext, Source
+from .interfaces import Extractor, RepoContext, Source, Record
 from .log import configure_logging
 from .safe_http import SafeHttpClient, set_global_http_client
+
+
+# Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
+Sniff = Callable[[bytes, str], bool]
+BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy]], Optional[Iterable[Record]]]
+
+
+def _default_bytes_handlers() -> Sequence[Tuple[Sniff, BytesHandler]]:
+    from .convert import get_default_bytes_handlers
+
+    return get_default_bytes_handlers()
 
 try:  # optional extras
     from .qc import JSONLQualityScorer
@@ -81,7 +91,7 @@ class ChunkConfig:
 class PipelineConfig:
     extractors: Sequence[Extractor] = field(default_factory=tuple)
     bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(
-        default_factory=get_default_bytes_handlers
+        default_factory=_default_bytes_handlers
     )
     max_workers: int = 0
     submit_window: Optional[int] = None

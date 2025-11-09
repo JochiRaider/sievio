@@ -1,102 +1,5 @@
 # fs.py
 # SPDX-License-Identifier: MIT
-"""
-Filesystem utilities for repository traversal with optional .gitignore support.
-
-This module provides fast, low-allocation helpers to walk a repository tree and
-yield files that pass a set of filters. It supports basic `.gitignore` semantics,
-hidden-file pruning, extension allow/deny lists, size guards, and optional
-symlink following. A small matcher implements the “last rule wins” behavior with
-negation and directory-only patterns. Paths are returned as `pathlib.Path`
-objects.
-
-Public API
-----------
-- DEFAULT_SKIP_DIRS : set[str]
-    Common junk/build/metadata directories pruned unless explicitly allowed.
-- DEFAULT_SKIP_FILES : set[str]
-    Common junk files pruned by default.
-- GitignoreRule : dataclass
-    Parsed representation of a `.gitignore` rule (pattern, negate, dir_only, base).
-- GitignoreMatcher
-    Evaluates `.gitignore`-style patterns; the last matching rule wins.
-- iter_repo_files(root, *, include_exts=None, exclude_exts=None,
-                  follow_symlinks=False, respect_gitignore=True,
-                  skip_hidden=True, max_file_bytes=None) -> Iterator[Path]
-    Stream file paths under `root` according to filters.
-- collect_repo_files(...)
-    Convenience wrapper that returns a `list[Path]`.
-
-Behavior
---------
-- Traversal: uses `os.walk(topdown=True)` so ignored directories can be pruned
-  in-place during descent.
-- Hidden entries: dot-prefixed directories/files are skipped when `skip_hidden`
-  is True (default).
-- Extension filters: case-insensitive. `include_exts` restricts; `exclude_exts`
-  removes. Extensions are compared via `Path.suffix.lower()` (e.g., ".py").
-- Size guard: if `max_file_bytes` is set, files larger than the threshold are
-  skipped using a best-effort `stat()` check.
-- Symlinks: file symlinks are yielded; directory symlinks are followed only
-  when `follow_symlinks=True`.
-- `.gitignore`:
-  * Each directory's `.gitignore` is read (UTF-8 with replacement on errors) and
-    rules are scoped to that subtree via a base path.
-  * Patterns support leading `/` anchoring and trailing `/` for directory-only
-    rules; negation (`!`) re-includes previously ignored paths.
-  * Matching approximates Git semantics; parent-directory ignore behavior is
-    handled by pruning ignored directories from traversal.
-
-Parameters (iter_repo_files)
-----------------------------
-root : str | os.PathLike[str]
-    Repository root directory to walk.
-include_exts : set[str] | None
-    Allowed extensions (e.g., {".py", ".md"}). If provided, acts as a whitelist.
-exclude_exts : set[str] | None
-    Blocked extensions. Applied after `include_exts`.
-follow_symlinks : bool
-    Whether to follow directory symlinks during traversal. Default: False.
-respect_gitignore : bool
-    Honor `.gitignore` files. Default: True.
-skip_hidden : bool
-    Skip dotfiles and dot-directories. Default: True.
-max_file_bytes : int | None
-    Skip files larger than this many bytes (best effort).
-
-Returns
--------
-Iterator[pathlib.Path]
-    A stream of `Path` objects rooted under `root` that pass all filters.
-
-Examples
---------
-List all Python files (respecting `.gitignore`):
-
->>> from repocapsule.fs import iter_repo_files
->>> for p in iter_repo_files("myrepo", include_exts={".py"}):
-...     print(p)
-
-Collect Markdown and reStructuredText files, ignoring `.gitignore`:
-
->>> from repocapsule.fs import collect_repo_files
->>> docs = collect_repo_files(
-...     "myrepo", include_exts={".md", ".rst"}, respect_gitignore=False
-... )
->>> len(docs) >= 0
-True
-
-Notes
------
-- Paths yielded are absolute `Path` instances; use `.relative_to(root)` to get
-  repository-relative POSIX strings in logs or metadata.
-- `GitignoreMatcher` is exposed primarily for testing and specialized tooling;
-  most callers should use `iter_repo_files`.
-- The matcher's behavior is compatible with common `.gitignore` usage but does
-  not implement every edge case of Git's specification; limits and directory
-  pruning are chosen for performance and simplicity.
-"""
-
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -220,8 +123,8 @@ class GitignoreMatcher:
 def _parse_gitignore_lines(lines: Iterable[str], base: str) -> list[GitignoreRule]:
     rules: list[GitignoreRule] = []
     for raw in lines:
+        # Normalize newlines once
         line = raw.rstrip("\r\n")
-        line = raw.rstrip("\n")
         if not line:
             continue
         # Handle escaped leading '#' or '!'

@@ -55,9 +55,8 @@ Homepage = "https://github.com/your-org/repocapsule"
 Repository = "https://github.com/your-org/repocapsule"
 Issues = "https://github.com/your-org/repocapsule/issues"
 
-# Enable when you add a CLI entry point, e.g. repocapsule.qc:main
-# [project.scripts]
-# repocapsule-qc = "repocapsule.qc:main"
+[project.scripts]
+repocapsule-qc = "repocapsule.qc:main"
 
 [tool.setuptools]
 # <-- src layout -->
