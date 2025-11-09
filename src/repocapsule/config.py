@@ -1,0 +1,181 @@
+# config.py
+from __future__ import annotations
+
+from dataclasses import dataclass, field, replace
+from pathlib import Path
+from typing import Mapping, Optional, Sequence, Tuple
+
+from .chunk import ChunkPolicy
+from .convert import get_default_bytes_handlers, Sniff, BytesHandler
+from .interfaces import Extractor, RepoContext, Source
+from .log import configure_logging
+from .safe_http import SafeHttpClient, set_global_http_client
+
+try:  # optional extras
+    from .qc import JSONLQualityScorer
+except Exception:  
+    JSONLQualityScorer = None  
+
+
+# ---------------------------------------------------------------------------
+# Source configs
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class LocalDirSourceConfig:
+    include_exts: Optional[set[str]] = None
+    exclude_exts: Optional[set[str]] = None
+    skip_hidden: bool = True
+    follow_symlinks: bool = False
+    respect_gitignore: bool = True
+    max_file_bytes: Optional[int] = 200 * 1024 * 1024
+
+
+@dataclass(slots=True)
+class GitHubSourceConfig:
+    per_file_cap: Optional[int] = 200 * 1024 * 1024
+    max_total_uncompressed: int = 2 * 1024 * 1024 * 1024
+    max_members: int = 200_000
+    max_compression_ratio: float = 100.0
+
+
+@dataclass(slots=True)
+class PdfSourceConfig:
+    timeout: int = 60
+    max_pdf_bytes: int = 200 * 1024 * 1024
+    max_links: int = 200
+    require_pdf: bool = True
+    include_ambiguous: bool = False
+    retries: int = 1
+    user_agent: str = "repocapsule/0.1 (+https://github.com)"
+
+
+@dataclass(slots=True)
+class SourceConfig:
+    sources: Sequence[Source] = field(default_factory=tuple)
+    local: LocalDirSourceConfig = field(default_factory=LocalDirSourceConfig)
+    github: GitHubSourceConfig = field(default_factory=GitHubSourceConfig)
+    pdf: PdfSourceConfig = field(default_factory=PdfSourceConfig)
+
+
+# ---------------------------------------------------------------------------
+# Decode / chunk / pipeline
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class DecodeConfig:
+    normalize: Optional[str] = "NFC"
+    strip_controls: bool = True
+    fix_mojibake: bool = True
+    max_bytes_per_file: Optional[int] = None
+
+
+@dataclass(slots=True)
+class ChunkConfig:
+    policy: ChunkPolicy = field(default_factory=ChunkPolicy)
+    tokenizer_name: Optional[str] = None
+    attach_language_metadata: bool = True
+
+
+@dataclass(slots=True)
+class PipelineConfig:
+    extractors: Sequence[Extractor] = field(default_factory=tuple)
+    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(
+        default_factory=get_default_bytes_handlers
+    )
+    max_workers: int = 0
+    submit_window: Optional[int] = None
+    fail_fast: bool = False
+
+
+# ---------------------------------------------------------------------------
+# Sinks / naming
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class PromptConfig:
+    heading_fmt: str = "### {path} [chunk {chunk}]"
+    include_prompt_file: bool = True
+
+
+@dataclass(slots=True)
+class SinkConfig:
+    sinks: Sequence = field(default_factory=tuple)
+    context: Optional[RepoContext] = None
+    output_dir: Path = Path(".")
+    primary_jsonl_name: Optional[str] = None
+    prompt: PromptConfig = field(default_factory=PromptConfig)
+
+
+# ---------------------------------------------------------------------------
+# HTTP / PDF / Web configs
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class HttpConfig:
+    timeout: float = 60.0
+    max_redirects: int = 5
+    allowed_redirect_suffixes: Tuple[str, ...] = ("github.com",)
+    client: Optional[SafeHttpClient] = None
+
+
+# ---------------------------------------------------------------------------
+# QC / logging / misc
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class QCConfig:
+    enabled: bool = False
+    write_csv: bool = False
+    csv_suffix: str = "_quality.csv"
+    scorer: Optional[Any] = None  # optional extra
+    fail_on_error: bool = False
+
+
+@dataclass(slots=True)
+class LoggingConfig:
+    level: int | str = "INFO"
+    propagate: bool = False
+    fmt: Optional[str] = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+
+    def apply(self) -> None:
+        configure_logging(level=self.level, propagate=self.propagate, fmt=self.fmt)
+
+
+# ---------------------------------------------------------------------------
+# Master config
+# ---------------------------------------------------------------------------
+
+@dataclass(slots=True)
+class RepocapsuleConfig:
+    sources: SourceConfig = field(default_factory=SourceConfig)
+    decode: DecodeConfig = field(default_factory=DecodeConfig)
+    chunk: ChunkConfig = field(default_factory=ChunkConfig)
+    pipeline: PipelineConfig = field(default_factory=PipelineConfig)
+    sinks: SinkConfig = field(default_factory=SinkConfig)
+    http: HttpConfig = field(default_factory=HttpConfig)
+    qc: QCConfig = field(default_factory=QCConfig)
+    logging: LoggingConfig = field(default_factory=LoggingConfig)
+    metadata: Mapping[str, object] = field(default_factory=dict)
+
+    def with_context(self, ctx: RepoContext) -> RepocapsuleConfig:
+        return replace(self, sinks=replace(self.sinks, context=ctx))
+
+    def prepare(self) -> None:
+        self.logging.apply()
+        http_client = SafeHttpClient(
+            timeout=self.http.timeout,
+            max_redirects=self.http.max_redirects,
+            allowed_redirect_suffixes=self.http.allowed_redirect_suffixes,
+        )
+        self.http.client = http_client
+        set_global_http_client(http_client)
+        if not self.pipeline.bytes_handlers:
+            self.pipeline.bytes_handlers = get_default_bytes_handlers()
+        if self.qc.enabled and not self.qc.scorer and JSONLQualityScorer is not None:
+            self.qc.scorer = JSONLQualityScorer()
+        if self.qc.enabled and self.qc.scorer is None and JSONLQualityScorer is None:
+            raise RuntimeError("QC extras not installed; disable QC or install optional deps.")
+
+
+__all__ = ["RepocapsuleConfig"]
