@@ -163,13 +163,13 @@ class RepocapsuleConfig:
 
     def prepare(self) -> None:
         self.logging.apply()
-        http_client = SafeHttpClient(
-            timeout=self.http.timeout,
-            max_redirects=self.http.max_redirects,
-            allowed_redirect_suffixes=self.http.allowed_redirect_suffixes,
-        )
-        self.http.client = http_client
-        set_global_http_client(http_client)
+        if self.http.client is None:
+            self.http.client = SafeHttpClient(
+                timeout=self.http.timeout,
+                max_redirects=self.http.max_redirects,
+                allowed_redirect_suffixes=self.http.allowed_redirect_suffixes,
+            )
+        set_global_http_client(self.http.client)
         if not self.pipeline.bytes_handlers:
             self.pipeline.bytes_handlers = get_default_bytes_handlers()
         if self.qc.enabled and not self.qc.scorer and JSONLQualityScorer is not None:

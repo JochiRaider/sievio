@@ -51,8 +51,18 @@ def convert(config: RepocapsuleConfig) -> Dict[str, int]:
             config.qc.scorer = scorer
             rows = scorer.score_jsonl_path(jsonl_path)
             if config.qc.write_csv:
+                # use library-level helper if present; fall back to a tiny local writer
                 suffix = config.qc.csv_suffix or "_quality.csv"
-                scorer.write_csv(rows, jsonl_path.replace(".jsonl", suffix))
+                try:
+                    from .qc import score_jsonl_to_csv  # optional extra
+                    score_jsonl_to_csv(jsonl_path, jsonl_path.replace(".jsonl", suffix))
+                except Exception:
+                    import csv
+                    out_csv = jsonl_path.replace(".jsonl", suffix)
+                    with open(out_csv, "w", newline="", encoding="utf-8") as f:
+                        w = csv.DictWriter(f, fieldnames=sorted({k for r in rows for k in r}))
+                        w.writeheader()
+                        w.writerows(rows)
     return stats
 
 

@@ -12,6 +12,7 @@ import posixpath, re, time, io
 from .interfaces import Source, FileItem
 from . import safe_http
 from .config import PdfSourceConfig
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 
@@ -193,41 +194,45 @@ class WebPdfListSource(Source):
 
     def iter_files(self) -> Iterable[FileItem]:
         used_names: set[str] = set()
-        for u in self.urls:
-            try:
-                data, headers = self._download(u)
-            except Exception:
-                # Skip on fetch error
-                continue
-
-            # Decide on filename: Content-Disposition > URL path
-            cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
-            name = _sanitize_name(cd_name or _name_from_url(u))
-            # Ensure .pdf extension
-            if not name.lower().endswith(".pdf"):
-                name = f"{name}.pdf"
-
-            # PDF sniff (strict if require_pdf)
-            sniff_head = bytes.fromhex(headers.get("_X-SNIFF", "")) if headers.get("_X-SNIFF") else data[:8]
-            if self.require_pdf and not _looks_like_pdf(sniff_head):
-                # Some servers mislabel; add a lenient fallback: allow if body still looks like PDF
-                if not _looks_like_pdf(data[:8]):
+        # modest parallelism; keep under network limits
+        max_workers = min(8, max(1, len(self.urls)))
+        with ThreadPoolExecutor(max_workers=max_workers) as pool:
+            futures = {pool.submit(self._download, u): u for u in self.urls}
+            for fut in as_completed(futures):
+                u = futures[fut]
+                try:
+                    data, headers = fut.result()
+                except Exception:
                     continue
 
-            # Deduplicate filenames
-            orig = name
-            n = 1
-            while name in used_names:
-                stem, dot, ext = orig.rpartition(".")
-                if dot:
-                    name = f"{stem}__{n}.{ext}"
-                else:
-                    name = f"{orig}__{n}"
-                n += 1
-            used_names.add(name)
+                # Decide on filename: Content-Disposition > URL path
+                cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
+                name = _sanitize_name(cd_name or _name_from_url(u))
+                # Ensure .pdf extension
+                if not name.lower().endswith(".pdf"):
+                    name = f"{name}.pdf"
 
-            if self.add_prefix:
-                name = f"{self.add_prefix}/{name}"
+                # PDF sniff (strict if require_pdf)
+                sniff_head = bytes.fromhex(headers.get("_X-SNIFF", "")) if headers.get("_X-SNIFF") else data[:8]
+                if self.require_pdf and not _looks_like_pdf(sniff_head):
+                    # Some servers mislabel; add a lenient fallback: allow if body still looks like PDF
+                    if not _looks_like_pdf(data[:8]):
+                        continue
+
+                # Deduplicate filenames
+                orig = name
+                n = 1
+                while name in used_names:
+                    stem, dot, ext = orig.rpartition(".")
+                    if dot:
+                        name = f"{stem}__{n}.{ext}"
+                    else:
+                        name = f"{orig}__{n}"
+                    n += 1
+                used_names.add(name)
+
+                if self.add_prefix:
+                    name = f"{self.add_prefix}/{name}"
 
             yield FileItem(path=name, data=data, size=len(data))
 

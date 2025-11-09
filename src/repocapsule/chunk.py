@@ -451,7 +451,7 @@ def _pack_blocks(
 ) -> List[Tuple[str, int, int, int]]:
     """
     Pack block list into chunks near target_tokens with optional overlap.
-    Returns list of (chunk_text, start_pos, end_pos).
+    Returns list of (chunk_text, start_pos, end_pos, n_tokens).
     """
     chunks: List[Tuple[str, int, int, int]] = []
     cur_buf: List[str] = []

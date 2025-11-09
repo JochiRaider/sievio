@@ -6,7 +6,7 @@ from __future__ import annotations
 from contextlib import ExitStack
 from concurrent.futures import ThreadPoolExecutor, FIRST_COMPLETED, wait, Future
 from dataclasses import dataclass, field
-from typing import Optional, Sequence, Dict, List, Tuple, Any
+from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any
 from pathlib import Path
 
 from .config import RepocapsuleConfig
@@ -117,7 +117,7 @@ def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
         if not open_sinks:
             log.warning("No sinks are open; processed records will be dropped.")
 
-        def process_one(item: Any, ctx: Optional[RepoContext]) -> Tuple[Any, List[Record]]:
+        def process_one(item: Any, ctx: Optional[RepoContext]) -> Tuple[Any, Iterable[Record]]:
             rel = getattr(item, "path", None) or getattr(item, "rel_path", None)
             data = getattr(item, "data", None)
             if rel is None or data is None:
@@ -128,7 +128,8 @@ def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
                 config=cfg,
                 context=ctx,
             )
-            return item, (recs if isinstance(recs, list) else list(recs))
+            # do NOT materialize; allow generators to stream
+            return item, (recs if isinstance(recs, list) else recs)
 
         def _increment_file_stats(item: Any) -> None:
             size = getattr(item, "size", None)
@@ -140,7 +141,7 @@ def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
             ext = _ext_key(getattr(item, "path", ""))
             stats.by_ext[ext] = stats.by_ext.get(ext, 0) + 1
 
-        def _write_records(item: Any, recs: Sequence[Record]) -> None:
+        def _write_records(item: Any, recs: Iterable[Record]) -> None:
             for record in recs:
                 wrote_any = False
                 for sink in open_sinks:
@@ -162,7 +163,6 @@ def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
             try:
                 _increment_file_stats(item)
                 _, recs = process_one(item, ctx)
-                # Allow iterables/generators: write as produced
                 _write_records(item, recs)
             except Exception as exc:
                 log.warning(
@@ -186,7 +186,7 @@ def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
             window = cfg.pipeline.submit_window or (4 * cfg.pipeline.max_workers)
             window = max(window, cfg.pipeline.max_workers)
             with ThreadPoolExecutor(max_workers=cfg.pipeline.max_workers) as pool:
-                pending: List[Future[Tuple[Any, List[Record]]]] = []
+                pending: List[Future[Tuple[Any, Iterable[Record]]]] = []
 
                 def _drain(block: bool = False) -> List[Tuple[Any, List[Record]]]:
                     nonlocal pending

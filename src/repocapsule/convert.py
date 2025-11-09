@@ -143,9 +143,14 @@ def make_records_from_bytes(
     handlers = list(cfg.pipeline.bytes_handlers)
     for sniff, handler in handlers:
         if sniff(data, rel_path):
-            records = handler(data, rel_path, context, cfg.chunk.policy)
+            try:
+                records = handler(data, rel_path, context, cfg.chunk.policy)
+            except UnsupportedBinary as e:
+                log.info("Skipping unsupported binary for %s: %s", rel_path, e)
+                records = None
             if records:
-                return list(records)
+                # preserve streaming if handler yields
+                return list(records) if isinstance(records, list) else list(records)
 
     max_bytes = cfg.decode.max_bytes_per_file
     if max_bytes is not None and len(data) > max_bytes:
