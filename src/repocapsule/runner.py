@@ -14,11 +14,10 @@ from .config import RepocapsuleConfig
 from .factories import build_default_sinks
 from .interfaces import RepoContext
 from .pipeline import run_pipeline
-from .githubio import get_repo_info, parse_github_url
+from .githubio import GitHubZipSource, get_repo_info, parse_github_url
 from .log import get_logger
 from .naming import build_output_basename_github, build_output_basename_pdf
-from .sources.local import LocalDirSource
-from .sources.github_zip import GitHubZipSource
+from .fs import LocalDirSource
 from .qc_utils import update_dup_family_counts, top_dup_families
 
 try:  # optional extra
@@ -60,11 +59,19 @@ def convert(config: RepocapsuleConfig) -> Dict[str, int]:
             stats["qc"] = qc_summary
 
         if config.qc.write_csv and mode == "inline":
-            if score_jsonl_to_csv is None:
-                raise RuntimeError("score_jsonl_to_csv helper is unavailable; reinstall QC extras.")
             out_csv = _derive_csv_path(jsonl_path, config.qc.csv_suffix)
             if out_csv:
-                score_jsonl_to_csv(str(jsonl_path), out_csv)
+                scorer_for_csv = config.qc.scorer
+                if scorer_for_csv is not None and write_csv is not None:
+                    reset = getattr(scorer_for_csv, "reset_state", None)
+                    if callable(reset):
+                        reset()
+                    rows = scorer_for_csv.score_jsonl_path(str(jsonl_path))
+                    write_csv(rows, out_csv)
+                else:
+                    if score_jsonl_to_csv is None:
+                        raise RuntimeError("QC CSV helpers unavailable; reinstall optional dependencies.")
+                    score_jsonl_to_csv(str(jsonl_path), out_csv)
 
     if qc_summary and jsonl_path:
         _append_qc_summary(jsonl_path, qc_summary)

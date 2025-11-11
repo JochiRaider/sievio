@@ -224,6 +224,10 @@ class MinHashLSH:
             self.buckets.setdefault(key, set()).add(doc_id)
         return (best_j >= self.jaccard_threshold, best_j, best_id)
 
+    def reset(self) -> None:
+        self.buckets.clear()
+        self.sigs.clear()
+
 # ---------- syntax checks ----------
 
 def parse_ok(text: str, lang: str) -> float:
@@ -329,11 +333,24 @@ class _Perplexity:
             self.tok = None
             return
         self.tok = AutoTokenizer.from_pretrained(model_id, use_fast=True, local_files_only=local_files_only)
-        self.model = AutoModelForCausalLM.from_pretrained(
-            model_id,
-            torch_dtype=getattr(torch, dtype) if hasattr(torch, dtype) else None,
-            local_files_only=local_files_only,
-        )
+        dtype_value = getattr(torch, dtype) if hasattr(torch, dtype) else None
+        model_kwargs = {"local_files_only": local_files_only}
+        if dtype_value is not None:
+            model_kwargs["dtype"] = dtype_value
+        try:
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                **model_kwargs,
+            )
+        except TypeError:
+            if dtype_value is None or "torch_dtype" in model_kwargs:
+                raise
+            model_kwargs.pop("dtype", None)
+            model_kwargs["torch_dtype"] = dtype_value
+            self.model = AutoModelForCausalLM.from_pretrained(
+                model_id,
+                **model_kwargs,
+            )
         # place model
         dev = device if device in ("cuda", "cpu") else "cpu"
         self.model.to(dev)
@@ -347,8 +364,7 @@ class _Perplexity:
         if self.model is None or self.tok is None:
             return float("inf")
         import torch
-        with torch.no_grad():
-            ids = self.tok.encode(text, add_special_tokens=False)    
+        ids = self.tok.encode(text, add_special_tokens=False)
         if not ids:
             return float("inf")
         input_ids = torch.tensor([ids], device=self.model.device)
@@ -363,8 +379,10 @@ class _Perplexity:
             slice_ids = input_ids[:, begin:end]
             target = slice_ids.clone()
             target[:, :-trg] = -100
-            out = self.model(slice_ids, labels=target)
-            nll += float(out.loss) * trg
+            with torch.no_grad():
+                out = self.model(slice_ids, labels=target)
+                loss_val = float(out.loss.detach())
+            nll += loss_val * trg
         return math.exp(nll / max(1, denom))
 
 # ---------- Scorer ----------
@@ -500,6 +518,11 @@ class JSONLQualityScorer:
             "repo": meta.get("repo"),
             "doc_id": doc_id,
         }
+
+    def reset_state(self) -> None:
+        self.sim_seen.clear()
+        if self.lsh is not None:
+            self.lsh.reset()
 
     def score_jsonl_path(self, jsonl_path: str) -> list[Dict[str, Any]]:
         rows: list[Dict[str, Any]] = []

@@ -19,6 +19,7 @@ from .log import get_logger, configure_logging, temp_level
 from .fs import (
     DEFAULT_SKIP_DIRS,
     DEFAULT_SKIP_FILES,
+    LocalDirSource,
     GitignoreRule,
     GitignoreMatcher,
     iter_repo_files,
@@ -50,6 +51,7 @@ from .md_kql import (
 # GitHub I/O
 from .githubio import (
     RepoSpec,
+    GitHubZipSource,
     parse_github_url,
     github_api_get,
     get_repo_info,
@@ -85,10 +87,8 @@ from .runner import (
     convert_github,
 )
 
-from .sources.local import LocalDirSource
-from .sources.github_zip import GitHubZipSource
 from .sinks import JSONLSink, PromptTextSink, NoopSink
-
+from .evtxio import handle_evtx,sniff_evtx
 from .pipeline import run_pipeline, PipelineStats
 from .interfaces import FileItem, RepoContext, Source, Sink, Extractor
 from .config import RepocapsuleConfig
@@ -130,6 +130,8 @@ __all__ = [
     "FileItem", "RepoContext", "Source", "Sink", "Extractor",
     # naming
     "build_output_basename", "build_output_basename_github", "build_output_basename_pdf",
+    # Windows Event Logs
+    "handle_evtx","sniff_evtx",
 ]
 # Optional: QC Check (depends on torch, transformers, tiktoken, pyyaml); expose if available
 try:

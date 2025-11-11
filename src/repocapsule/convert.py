@@ -45,13 +45,35 @@ BytesHandler = Callable[
     Optional[Iterable[Record]],
 ]
 
+# Fallbacks in case the extra is missing (keep sniff cheap; raise on handle)
+def _fallback_sniff_evtx(data: bytes, rel: str) -> bool:
+    # light sniff = .evtx OR 'ElfFile' OR 'ElfChnk' early in the file
+    if rel.lower().endswith(".evtx"):
+        return True
+    if data.startswith(b"ElfFile"):
+        return True
+    if b"ElfChnk" in data[:1_048_576]:  # first ~1MiB
+        return True
+    return False
+
+def _fallback_handle_evtx(data, rel, ctx, policy):
+    raise UnsupportedBinary("evtx")
+
 def get_default_bytes_handlers() -> List[Tuple[Sniff, BytesHandler]]:
     """Return built-in handlers if their optional dependencies are met."""
     try:
         from .pdfio import sniff_pdf, handle_pdf  # type: ignore-import
     except Exception:
         sniff_pdf, handle_pdf = _fallback_sniff_pdf, _fallback_handle_pdf
-    return [(sniff_pdf, handle_pdf)]
+
+    try:
+        from .evtxio import sniff_evtx, handle_evtx
+    except Exception:
+        sniff_evtx, handle_evtx = _fallback_sniff_evtx, _fallback_handle_evtx
+    return [
+            (sniff_pdf, handle_pdf),
+            (sniff_evtx, handle_evtx),
+        ]
 
 # ---------------------------------------------------------------------------
 # Record creation for a single file 

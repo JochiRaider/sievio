@@ -47,6 +47,8 @@ class GitHubSourceConfig:
     max_total_uncompressed: int = 2 * 1024 * 1024 * 1024
     max_members: int = 200_000
     max_compression_ratio: float = 100.0
+    include_exts: Optional[set[str]] = None
+    exclude_exts: Optional[set[str]] = None
 
 
 @dataclass(slots=True)

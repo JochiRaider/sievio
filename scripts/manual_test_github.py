@@ -23,8 +23,8 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from pathlib import Path
 from typing import Optional, Sequence
 from datetime import datetime
-import os
 
+from repocapsule.qc import JSONLQualityScorer
 from repocapsule.log import configure_logging
 # Current public API surface (re-exported at package level)
 from repocapsule import (
@@ -47,16 +47,27 @@ except Exception:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Example GitHub repo to test:
-URL = "https://github.com/microsoft/Microsoft-365-Defender-Hunting-Queries"
+URL = "https://github.com/pallets/flask/tree/main/docs"
 # URL = "https://github.com/chinapandaman/PyPDFForm"
 # URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
 
-# Output directory for artifacts:
-OUT_DIR = Path(r"C:\Users\wetou\OneDrive\Documents\projects\out\test")
+# Output directory for artifacts (portable path under the repo root):
+REPO_ROOT = Path(__file__).resolve().parents[1]
+OUT_DIR = REPO_ROOT / "out" 
 
 # Markdown → KQL extraction (now via Extractor; this just toggles whether we add it)
-ENABLE_KQL_MD_EXTRACTOR = True
+ENABLE_KQL_MD_EXTRACTOR = False
+
+# Inline QC (requires optional torch/transformers/tiktoken extras)
+ENABLE_INLINE_QC = True
+QC_MIN_SCORE = 60.0
+QC_DROP_NEAR_DUPS = False
+QC_WRITE_CSV = True
+QC_CSV_SUFFIX = "_quality.csv"
+
+# Post-QC (summaries/CSV after JSONL write)
+ENABLE_POST_QC = False
 
 # Chunking policy: tweak as needed
 POLICY = ChunkPolicy(mode="auto")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
@@ -98,8 +109,24 @@ def _plan_output_paths(url: str, out_dir: Path, *, ref_hint: str | None, with_pr
 def _build_config(extractors: Sequence[object]) -> RepocapsuleConfig:
     cfg = RepocapsuleConfig()
     cfg.chunk.policy = POLICY
+    cfg.sources.github.include_exts = {".rst"}
     cfg.pipeline.extractors = tuple(extractors)
     cfg.sources.github.per_file_cap = int(MAX_FILE_MB) * 1024 * 1024
+    cfg.qc.scorer = JSONLQualityScorer(
+    lm_model_id="Qwen/Qwen2.5-1.5B",
+    device="cuda",        # or "cpu"
+    dtype="bfloat16",     # or "float32" / "float16"
+    local_files_only=False,
+    )
+    if ENABLE_INLINE_QC:
+        cfg.qc.enabled = True
+        cfg.qc.mode = "inline"
+        cfg.qc.min_score = QC_MIN_SCORE
+        cfg.qc.drop_near_dups = QC_DROP_NEAR_DUPS
+        cfg.qc.write_csv = QC_WRITE_CSV
+        cfg.qc.csv_suffix = QC_CSV_SUFFIX
+    else:
+        cfg.qc.enabled = False
     return cfg
 
 
@@ -136,9 +163,14 @@ def main() -> None:
     print("Prompt:", prompt_path)
     print("Stats :", stats)
 
-    # Optional QC pass (best-effort; will skip if deps are missing)
+    if ENABLE_POST_QC:
+        _run_post_qc(jsonl_path)
+
+
+def _run_post_qc(jsonl_path: Path) -> None:
     try:
         from repocapsule.qc import score_jsonl_to_csv
+
         qc_csv = score_jsonl_to_csv(
             str(jsonl_path),
             lm_model_id="Qwen/Qwen2.5-1.5B",
@@ -147,9 +179,9 @@ def main() -> None:
             local_files_only=False,
             simhash_hamm_thresh=2,
         )
-        print("QC CSV:", qc_csv)
+        print("Post-QC CSV:", qc_csv)
     except Exception as e:
-        print("QC skipped:", e)
+        print("Post-QC skipped:", e)
 
 
 if __name__ == "__main__":

@@ -42,6 +42,9 @@ tok = ["tiktoken>=0.6"]
 # Optional PDF ingestion support
 pdf = ["pypdf>=4"]
 
+# Optional EVTX ingestion support
+evtx = ["python-evtx>=0.8"]
+
 # Quality scoring / model-based extras (heavy)
 qc = [
   "torch>=2.2",

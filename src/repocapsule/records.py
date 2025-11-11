@@ -38,7 +38,7 @@ CODE_EXTS: set[str] = {
     ".sql", ".sparql",
     # config / structured (treated as code-ish for token ratios)
     ".json", ".jsonc", ".yaml", ".yml", ".toml", ".ini", ".cfg",
-    ".xml", ".xslt",
+    ".xml", ".xslt", ".evtx",
     # data / rules
     ".yara", ".yar", ".sigma", ".ndjson", ".log",
 }
@@ -109,6 +109,7 @@ EXT_LANG: Dict[str, str] = {
     ".rst": "restructuredtext",
     ".adoc": "asciidoc",
     ".txt": "text",
+    ".evtx":"windows-eventlog",
 }
 
 @dataclass
