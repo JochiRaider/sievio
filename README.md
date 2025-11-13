@@ -156,18 +156,22 @@ pip --version
    pip install -e .
    ```
 
-   For optional exact token counting support (via `tiktoken`), use the `tok` extra if it is defined in `pyproject.toml`:
+   For optional features (exact token counting, PDFs, EVTX logs), use the extras defined in `pyproject.toml`:
 
    ```sh
-   pip install -e .[tok]
+   pip install -e ".[tok]"   # tiktoken-based exact token counts
+   pip install -e ".[pdf]"   # pypdf-based PDF parsing
+   pip install -e ".[evtx]"  # python-evtx-based EVTX parsing
    ```
 
 #### Option 2: Install from PyPI (if / when published)
 
 ```sh
 pip install repocapsule
-# or, with optional extras
-pip install "repocapsule[tok]"
+# or, with optional extras (see pyproject extras)
+pip install "repocapsule[tok]"   # tiktoken-based exact token counts
+pip install "repocapsule[pdf]"   # pypdf-based PDF parsing
+pip install "repocapsule[evtx]"  # python-evtx-based EVTX parsing
 ```
 
 <p align="right">(<a href="#top">back to top</a>)</p>
@@ -186,6 +190,45 @@ RepoCapsule is designed as a library-first toolkit. The main pieces you will int
 
 > **Note**
 > The examples below are intentionally minimal and focus on the *shape* of the pipeline. For exact signatures and all options, see `config.py`, `runner.py`, `factories.py`, and `sinks.py` in this repository.
+
+
+### RepocapsuleConfig at a glance
+
+`RepocapsuleConfig` is a dataclass that groups all of the knobs for the ingestion pipeline into nested blocks (see `config.py`). At the top level it contains:
+
+- `sources: SourceConfig`
+  - `sources`: explicit `Source` objects (advanced usage; helpers like `make_local_dir_source` / `make_github_zip_source` usually populate this for you).
+  - `local: LocalDirSourceConfig` – defaults for walking local directories (extensions, hidden files, `.gitignore`, per-file size caps).
+  - `github: GitHubSourceConfig` – defaults for GitHub ZIPs / API downloads (per-file caps, total uncompressed cap, allowed extensions, zip-bomb protection).
+  - `pdf: PdfSourceConfig` – defaults for web-PDF ingestion (timeouts, maximum PDF size, maximum links per page, whether to require PDFs, retry policy, user agent).
+- `decode: DecodeConfig`
+  - How raw bytes are normalised and decoded (Unicode normalisation, stripping control characters, fixing mojibake, optional per-file byte cap).
+- `chunk: ChunkConfig`
+  - `policy: ChunkPolicy` – the chunking strategy (e.g., `mode`, `target_tokens`, `overlap_tokens`, `min_tokens`).
+  - `tokenizer_name`: optional exact-token tokenizer name used when the `tok` extra is installed.
+  - `attach_language_metadata`: whether to attach language guesses to each record.
+- `pipeline: PipelineConfig`
+  - `extractors`: `Extractor` instances that turn files into logical text blocks (Markdown sections, code blocks, etc.).
+  - `bytes_handlers`: sniff-and-decode handlers; normally left as-is so `prepare()` can populate sensible defaults.
+  - `max_workers`: thread-pool size (0 = choose automatically based on CPU).
+  - `submit_window`: optional cap on the number of in-flight tasks (for backpressure), or `None` for unbounded.
+  - `fail_fast`: abort the run on the first error instead of best-effort processing.
+- `sinks: SinkConfig`
+  - `sinks`: output sinks (e.g. JSONL, prompt text, custom sinks).
+  - `context`: `RepoContext` describing the source repository; attached to each record.
+  - `output_dir`: where sink outputs are written.
+  - `primary_jsonl_name`: name for the main JSONL file (used by QC helpers and some convenience functions).
+  - `prompt: PromptConfig` – controls prompt heading format and whether a `.prompt.txt` file is emitted.
+- `http: HttpConfig`
+  - Shared HTTP client settings (timeout, redirect policy, allowed redirect suffixes). `prepare()` creates a `SafeHttpClient` and installs it globally.
+- `qc: QCConfig`
+  - Toggles dataset-quality scoring (if QC extras are installed), thresholds, duplicate detection, CSV summaries, and whether QC runs inline vs as a post-processing step.
+- `logging: LoggingConfig`
+  - Global logging level / format applied by `prepare()`.
+- `metadata: Mapping[str, object]`
+  - Free-form metadata you can attach to the run (e.g. `run_id`, `source_url`, `experiment`).
+
+In normal usage you only override the pieces you care about, then pass the config into `convert(cfg)`. The `convert` entrypoint calls `cfg.prepare()` for you, so you do not need to call it manually unless you are wiring up the pipeline yourself.
 
 ### Converting a local repository
 
@@ -318,15 +361,15 @@ Project Link: [https://github.com/JochiRaider/RepoCapsule](https://github.com/Jo
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/RepoCapsule.svg
+[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [contributors-url]: https://github.com/JochiRaider/RepoCapsule/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/JochiRaider/RepoCapsule.svg
+[forks-shield]: https://img.shields.io/github/forks/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [forks-url]: https://github.com/JochiRaider/RepoCapsule/network/members
-[stars-shield]: https://img.shields.io/github/stars/JochiRaider/RepoCapsule.svg
+[stars-shield]: https://img.shields.io/github/stars/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [stars-url]: https://github.com/JochiRaider/RepoCapsule/stargazers
-[issues-shield]: https://img.shields.io/github/issues/JochiRaider/RepoCapsule.svg
+[issues-shield]: https://img.shields.io/github/issues/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [issues-url]: https://github.com/JochiRaider/RepoCapsule/issues
-[license-shield]: https://img.shields.io/github/license/JochiRaider/RepoCapsule.svg
+[license-shield]: https://img.shields.io/github/license/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [license-url]: https://github.com/JochiRaider/RepoCapsule/blob/main/LICENSE
 [product-screenshot]: images/screenshot.png
 
