@@ -318,7 +318,7 @@ Project Link: [https://github.com/JochiRaider/RepoCapsule](https://github.com/Jo
 
 <!-- MARKDOWN LINKS & IMAGES -->
 <!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
-[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/RepoCapsule.svg
 [contributors-url]: https://github.com/JochiRaider/RepoCapsule/graphs/contributors
 [forks-shield]: https://img.shields.io/github/forks/JochiRaider/RepoCapsule.svg?style=for-the-badge
 [forks-url]: https://github.com/JochiRaider/RepoCapsule/network/members
