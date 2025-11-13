@@ -690,16 +690,28 @@ def _split_code_lines(text: str, tokenizer) -> List[Block]:
     blank_run = 0
     MAX_RUN = 4000  # soft guard for giant files
     for ln in lines:
+        stripped = ln.strip()
+
+        if stripped == "":
+            if not buf:
+                start = pos
+            buf.append(ln)
+            pos += len(ln)
+            blank_run += 1
+            if len(buf) >= MAX_RUN:
+                flush()
+                blank_run = 0
+            continue
+
+        if blank_run >= 2 and buf:
+            flush()
+        blank_run = 0
+
         if not buf:
             start = pos
         buf.append(ln)
         pos += len(ln)
-        if ln.strip() == "":
-            blank_run += 1
-        else:
-            if blank_run >= 2:
-                flush()
-            blank_run =0
+
         if len(buf) >= MAX_RUN:
             flush()
             blank_run = 0
