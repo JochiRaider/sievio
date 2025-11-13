@@ -1,47 +1,58 @@
 <div id="top"></div>
+
+<!-- PROJECT SHIELDS -->
+<!--
+  Reference-style links for badges live at the bottom of this file.
+  This keeps the markdown a bit easier to read.
+-->
+[![Contributors][contributors-shield]][contributors-url]
+[![Forks][forks-shield]][forks-url]
+[![Stargazers][stars-shield]][stars-url]
+[![Issues][issues-shield]][issues-url]
+[![MIT License][license-shield]][license-url]
+
+
+<!-- PROJECT LOGO -->
+<br />
 <div align="center">
+  <a href="https://github.com/JochiRaider/RepoCapsule">
+    <img src="images/logo.png" alt="RepoCapsule logo" width="80" height="80">
+  </a>
 
-[![license](https://img.shields.io/github/license/JochiRaider/RepoCapsule?style=for-the-badge)](LICENSE)
-[![forks](https://img.shields.io/github/forks/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/network/members)
-[![contributors](https://img.shields.io/github/contributors/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/graphs/contributors)
-[![stars](https://img.shields.io/github/stars/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/stargazers)
-[![issues](https://img.shields.io/github/issues/JochiRaider/RepoCapsule?style=for-the-badge)](https://github.com/JochiRaider/RepoCapsule/issues)
+  <h3 align="center">RepoCapsule</h3>
 
+  <p align="center">
+    Stdlib-first pipeline to turn code, docs, PDFs, and logs into clean JSONL chunks.
+    <br />
+    <a href="https://github.com/JochiRaider/RepoCapsule"><strong>Explore the docs »</strong></a>
+    <br />
+    <br />
+    <a href="https://github.com/JochiRaider/RepoCapsule/issues">Report Bug</a>
+    ·
+    <a href="https://github.com/JochiRaider/RepoCapsule/issues">Request Feature</a>
+  </p>
 </div>
 
-<h1 align="center">RepoCapsule</h1>
 
-<p align="center">
-  Repository → JSONL converter with robust decoding, structure‑aware chunking, Markdown→KQL extraction, and GitHub streaming helpers — ideal for pre‑training corpora and RAG.
-</p>
-
+<!-- TABLE OF CONTENTS -->
 <details>
   <summary>Table of Contents</summary>
   <ol>
-    <li><a href="#about-the-project">About the Project</a></li>
-    <li><a href="#features">Features</a></li>
-    <li><a href="#architecture">Architecture</a></li>
-    <li><a href="#getting-started">Getting Started</a>
+    <li>
+      <a href="#about-the-project">About The Project</a>
+      <ul>
+        <li><a href="#built-with">Built With</a></li>
+      </ul>
+    </li>
+    <li>
+      <a href="#getting-started">Getting Started</a>
       <ul>
         <li><a href="#prerequisites">Prerequisites</a></li>
         <li><a href="#installation">Installation</a></li>
-        <li><a href="#configuration">Configuration</a></li>
       </ul>
     </li>
-    <li><a href="#usage">Usage</a>
-      <ul>
-        <li><a href="#quick-start">Quick Start</a></li>
-        <li><a href="#api-surface">API Surface</a></li>
-        <li><a href="#kql-extraction">KQL Extraction</a></li>
-        <li><a href="#chunking">Chunking</a></li>
-        <li><a href="#quality-scoring">Quality Scoring</a></li>
-        <li><a href="#jsonl-schema">JSONL Schema</a></li>
-      </ul>
-    </li>
-    <li><a href="#security-model">Security Model</a></li>
-    <li><a href="#observability">Observability</a></li>
+    <li><a href="#usage">Usage</a></li>
     <li><a href="#roadmap">Roadmap</a></li>
-    <li><a href="#known-limitations">Known Limitations</a></li>
     <li><a href="#contributing">Contributing</a></li>
     <li><a href="#license">License</a></li>
     <li><a href="#contact">Contact</a></li>
@@ -49,286 +60,273 @@
   </ol>
 </details>
 
-## About the Project
 
-RepoCapsule turns GitHub repositories (or local folders) into clean, structure‑aware JSONL corpora.
-It is designed for LLM data pipelines: efficient conversion, robust Unicode decoding, and sensible chunking for both code and docs. Optional helpers extract KQL queries from Markdown, and an add‑on quality module scores the resulting chunks.
+<!-- ABOUT THE PROJECT -->
+## About The Project
 
-## Features
+[![Product Name Screen Shot][product-screenshot]](https://github.com/JochiRaider/RepoCapsule)
 
-- **Stream‑safe GitHub ingestion**
-  - Zipball downloads are buffered to disk and iterated **without extraction**, with anti‑zip‑slip and anti‑zip‑bomb checks.
-  - Guards include: absolute/parent‑traversal rejection, per‑file and total uncompressed size caps, member count caps, and compression‑ratio screening.
-- **Robust decoding**
-  - BOM‑aware UTF‑8/16/32 detection, heuristic UTF‑16 guess, `cp1252` fallback, Mojibake repair, newline/control cleanup.
-- **Structure‑aware chunking**
-  - Markdown (ATX/Setext + fenced code) and reStructuredText (titles, directives, literal blocks).
-  - Code line packer tuned for source files.
-  - Policy‑driven targets/min/overlap; uses `tiktoken` if installed, else a fast estimate.
-- **Markdown → KQL**
-  - Detect fenced/indented KQL blocks (or infer via heuristics), capture nearby headings as titles. Use `KqlFromMarkdownExtractor` via the `extractors` parameter.
-- **Canonical JSONL records**
-  - Include `path`, language hint, license, stable `sha256`, and `meta.tokens`/`meta.bytes` for downstream accounting.
-- **Optional QC**
-  - Lightweight heuristics (+ optional LM perplexity) to sanity‑check corpora and write a CSV.
+RepoCapsule is a **stdlib-first ingestion pipeline** that turns:
 
-## Architecture
+- Local or GitHub-hosted repositories (code + docs)
+- Web-hosted PDFs
+- Windows EVTX event logs
 
-- `githubio.py` — GitHub URL parsing, metadata calls, zipball download, safe member iteration.
-- `fs.py` — Filesystem traversal with light ignore handling.
-- `decode.py` — Bytes→text with Unicode repair.
-- `convert.py` / `pipeline.py` — Orchestrate repo→records conversion and streaming writes.
-- `md_kql.py` — KQL extraction from Markdown.
-- `records.py` — Record assembly (hashes, language hints, `meta.tokens`, `meta.bytes`).
-- `qc.py` — Quality scoring utilities (heuristics; optional perplexity).
-- `runner.py` — High‑level convenience functions for local/GitHub inputs.
+into a **normalized JSONL dataset** that is ready for:
 
+- LLM fine-tuning / pre-training
+- Retrieval-augmented generation (RAG)
+- Search and analytics pipelines
+
+### Why RepoCapsule?
+
+There are many one-off scripts to scrape a repo or split a PDF. RepoCapsule focuses on being:
+
+- **Safe by default** – zip-bomb defenses, size caps, safe HTTP client, and license detection.
+- **Format aware** – Markdown / reStructuredText aware chunking, code vs doc heuristics, and KQL block extraction.
+- **Composable** – small, testable building blocks (`Source`, `Sink`, `ChunkPolicy`, etc.) wired together via a `RepocapsuleConfig` and `run_pipeline` / `convert` entrypoints.
+- **Stdlib-first** – relies mainly on the Python standard library, with *optional* extras for tokenization, PDF parsing, EVTX, and quality scoring.
+
+At a high level, RepoCapsule:
+
+1. **Discovers files** (respecting `.gitignore` and skip lists).
+2. **Safely decodes bytes** into text.
+3. **Splits text into semantic blocks** (headings, paragraphs, code fences, sections).
+4. **Chunks blocks into model-sized windows** using `ChunkPolicy` (with optional overlap).
+5. **Attaches rich metadata** (paths, languages, license info, duplication families, QC scores).
+6. **Streams JSONL records** (and optional prompt text) to your chosen sinks.
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+### Built With
+
+RepoCapsule is primarily a pure-Python project.
+
+- [Python](https://www.python.org/) (3.8+)
+- Python standard library (e.g., `pathlib`, `zipfile`, `concurrent.futures`, `urllib`)
+- Optional: [tiktoken](https://github.com/openai/tiktoken) for exact token counting
+- Optional: a PDF backend (see project extras / `pyproject.toml`)
+- Optional: an EVTX parser for Windows event logs
+- Optional: QC / scoring extras for dataset quality reports
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+<!-- GETTING STARTED -->
 ## Getting Started
+
+This section shows how to get a local copy of RepoCapsule up and running, either as a library or from a cloned repo.
 
 ### Prerequisites
 
-- Python 3.11+ (3.12/3.13 also fine)
-- (Optional) CUDA‑capable GPU if you plan to run QC with perplexity
+You will need:
+
+- **Python 3.8+**
+- **pip** (and optionally `venv` or another virtual environment manager)
+
+On many systems you can verify this with:
+
+```sh
+python --version
+pip --version
+```
 
 ### Installation
 
-From source with optional extras:
+#### Option 1: Install from source (recommended while iterating on the project)
 
-```bash
-pip install -e .[dev]
-# accurate tokenization
-pip install -e .[tok]
-# quality scoring w/ perplexity
-pip install -e .[qc]
+1. **Clone the repo**
+
+   ```sh
+   git clone https://github.com/JochiRaider/RepoCapsule.git
+   cd RepoCapsule
+   ```
+
+2. **Create & activate a virtual environment (optional but recommended)**
+
+   ```sh
+   python -m venv .venv
+   source .venv/bin/activate  # On Windows use: .venv\Scripts\activate
+   ```
+
+3. **Install RepoCapsule in editable mode**
+
+   ```sh
+   pip install -e .
+   ```
+
+   For optional exact token counting support (via `tiktoken`), use the `tok` extra if it is defined in `pyproject.toml`:
+
+   ```sh
+   pip install -e .[tok]
+   ```
+
+#### Option 2: Install from PyPI (if / when published)
+
+```sh
+pip install repocapsule
+# or, with optional extras
+pip install "repocapsule[tok]"
 ```
 
-### Configuration
+<p align="right">(<a href="#top">back to top</a>)</p>
 
-- **GitHub API token** — set `GITHUB_TOKEN` (or `GH_TOKEN`) to avoid anonymous rate limits.
 
-```bash
-export GITHUB_TOKEN=ghp_...
-```
-
+<!-- USAGE EXAMPLES -->
 ## Usage
 
-### Quick Start
+RepoCapsule is designed as a library-first toolkit. The main pieces you will interact with are:
 
-Convert a GitHub repo to JSONL:
+- `RepocapsuleConfig` – top-level configuration object.
+- `Source` implementations – where bytes come from (local dirs, GitHub zips, web PDFs, EVTX, ...).
+- `ChunkPolicy` and chunking helpers – how text gets split into model-sized chunks.
+- `Sink` implementations – where normalized records go (JSONL, prompt text, custom sinks).
+- `convert` / `run_pipeline` – orchestration entrypoints.
+
+> **Note**
+> The examples below are intentionally minimal and focus on the *shape* of the pipeline. For exact signatures and all options, see `config.py`, `runner.py`, `factories.py`, and `sinks.py` in this repository.
+
+### Converting a local repository
 
 ```python
-from pathlib import Path
-from repocapsule import configure_logging, ChunkPolicy, convert_github_url_to_jsonl_autoname
+import json
+from repocapsule import RepocapsuleConfig
+from repocapsule.runner import convert  # or: from repocapsule import convert
 
-configure_logging(level="INFO")
-out_dir = Path("out"); out_dir.mkdir(parents=True, exist_ok=True)
+cfg = RepocapsuleConfig()
 
-jsonl_path = convert_github_url_to_jsonl_autoname(
-    "https://github.com/owner/repo",
-    out_dir,
-    policy=ChunkPolicy(mode="auto", target_tokens=1200, overlap_tokens=150, min_tokens=250),
-)
-print(jsonl_path)
-```python
-from pathlib import Path
-from repocapsule import configure_logging, ChunkPolicy, convert_github_url_to_jsonl_autoname
+# Configure your sources/sinks.
+# Typical steps (see config.py for the concrete fields):
+#   - cfg.sources.sources: list of Source objects (e.g., local directories, web PDFs).
+#   - cfg.sinks.sinks: output sinks (e.g., JSONL, prompt text).
+#   - cfg.pipeline: concurrency and batching behaviour.
+#   - cfg.qc: optional quality scoring and duplicate handling.
 
-configure_logging(level="INFO")
-out_dir = Path("out"); out_dir.mkdir(parents=True, exist_ok=True)
-
-jsonl_path, prompt_path = convert_github_url_to_jsonl_autoname(
-    "https://github.com/owner/repo",
-    out_dir,
-    # For JSONL only (auto-named), just call and capture the returned path
-jsonl_path = convert_github_url_to_jsonl_autoname(
-    "https://github.com/owner/repo",
-    out_dir,
-    policy=ChunkPolicy(mode="auto", target_tokens=1200, overlap_tokens=150, min_tokens=250),
-)
-print(jsonl_path)
+# After filling out cfg, run the pipeline:
+stats = convert(cfg)
+print(json.dumps(stats, indent=2))
 ```
 
-Convert a **local** folder to JSONL with default include‑exts:
+### Converting a GitHub repo
+
+RepoCapsule includes helpers in `githubio.py` and `runner.py` to work with GitHub repositories. A typical flow is:
+
+1. Use `parse_github_url` to normalise any GitHub URL into a `RepoSpec`.
+2. Use `default_paths_for_github` to compute output paths and a `RepoContext`.
+3. Build a `RepocapsuleConfig` that includes a GitHub-based `Source`.
+4. Call `convert(config)`.
+
+### Working with PDFs
+
+To ingest a list of web-hosted PDFs:
+
+- Use `WebPdfListSource` with a list of direct PDF URLs.
+- Or use `WebPagePdfSource` to scrape one HTML page for PDF links and then delegate to `WebPdfListSource`.
+
+These sources enforce size caps, content sniffing, and retry/backoff logic, and they plug into the same pipeline as other sources.
+
+### Chunking utilities
+
+The `chunk` module is reusable on its own:
 
 ```python
-from repocapsule import convert_repo_to_jsonl, ChunkPolicy
-convert_repo_to_jsonl(
-    root="/path/to/repo",
-    jsonl_path="/path/to/out/repo.jsonl",
-    policy=ChunkPolicy(mode="doc", target_tokens=1700, overlap_tokens=40, min_tokens=400),
+from repocapsule.chunk import ChunkPolicy, count_tokens
+
+policy = ChunkPolicy(
+    mode="doc",          # or "code"
+    target_tokens=1700,
+    overlap_tokens=40,
+    min_tokens=400,
 )
+
+text = """# My document\n\nThis is a long document you want to chunk..."""
+
+# You can use the policy alongside the higher-level pipeline helpers
+# or integrate it into your own tooling.
+print("Estimated tokens:", count_tokens(text, mode="auto"))
 ```
 
-Write **both JSONL and a prompt text** in one pass:
+### Quality & license helpers
 
-```python
-from repocapsule import convert_github_url_to_both, ChunkPolicy
+- `licenses.detect_license_in_tree` / `detect_license_in_zip` – detect SPDX-style licenses, content licenses (e.g. Creative Commons), and attach them to a `RepoContext`.
+- `export.annotate_exact_token_counts` – post-process a JSONL file to add precise token counts when the `tok` extra is installed.
 
-jsonl_path, prompt_path = convert_github_url_to_both(
-    "https://github.com/owner/repo",
-    jsonl_path="out/repo.jsonl",
-    prompt_txt_path="out/repo.prompt.txt",
-    policy=ChunkPolicy(mode="auto", target_tokens=1200, overlap_tokens=150, min_tokens=250),
-)
-print(jsonl_path, prompt_path)
-```python
-from repocapsule import convert_repo_to_jsonl, ChunkPolicy
-convert_repo_to_jsonl(
-    root="/path/to/repo",
-    jsonl_path="/path/to/out/repo.jsonl",
-    policy=ChunkPolicy(mode="doc", target_tokens=1700, overlap_tokens=40, min_tokens=400),
-)
-```
-
-### API Surface
-
-Public entry points (selection):
-
-- **GitHub I/O:** `parse_github_url`, `get_repo_info`, `download_zipball_to_temp`, `iter_zip_members`, `build_output_basename`
-- **Converters:** `convert_repo_to_jsonl`, `convert_repo_to_jsonl_autoname`,
-  `convert_github_url_to_jsonl`, `convert_github_url_to_both`, `convert_github_url_to_jsonl_autoname`
-- **Chunking:** `ChunkPolicy`, `chunk_text`, `split_doc_blocks`, `count_tokens`
-- **Markdown/KQL:** `extract_kql_blocks_from_markdown`, `is_probable_kql`, `guess_kql_tables`, `derive_category_from_rel`, and the `KqlFromMarkdownExtractor` class (import from `repocapsule.md_kql`).
-- **Records:** `build_record`, language/extension helpers
-- **Logging:** `configure_logging`, `get_logger`
+<p align="right">(<a href="#top">back to top</a>)</p>
 
 
-
-Use the **extractors** parameter with the provided `KqlFromMarkdownExtractor`:
-
-```python
-from repocapsule import convert_github_url_to_jsonl_autoname, ChunkPolicy
-from repocapsule.md_kql import KqlFromMarkdownExtractor
-
-jsonl_path = convert_github_url_to_jsonl_autoname(
-    "https://github.com/owner/repo-of-kql",
-    "out",
-    policy=ChunkPolicy(mode="doc", target_tokens=1500, overlap_tokens=100, min_tokens=200),
-    extractors=[KqlFromMarkdownExtractor()],
-)
-```python
-from repocapsule import convert_github_url_to_jsonl_autoname
-convert_github_url_to_jsonl_autoname(
-    "https://github.com/owner/repo-of-kql",
-    "out",
-    kql_from_markdown=True,
-)
-```
-
-Heuristics accept fences labeled `kql`/`kusto`, or infer KQL by operators (e.g., `| where`, `summarize`).
-
-### Chunking
-
-`ChunkPolicy` controls chunk size and overlap. For prose, targets ~1500–2000 tokens work well; for code, slightly smaller targets reduce truncation risk.
-
-- **Docs:** format‑aware splitters are applied before packing (Markdown, reStructuredText).
-- **Code:** line‑based blocks that prefer blank lines as boundaries.
-- **Token counting:** uses `tiktoken` if installed; otherwise a fast char/token estimate.
-
-### Quality Scoring
-
-Install the `qc` extra to compute lightweight scores and (optionally) perplexity:
-
-```python
-from repocapsule import score_jsonl_to_csv
-csv_path = score_jsonl_to_csv(
-    "/path/to/corpus.jsonl",
-    lm_model_id="Qwen/Qwen2.5-1.5B",  # optional; omit to skip perplexity
-    device="cuda",
-    dtype="bfloat16",
-)
-print(csv_path)
-```
-
-Outputs a CSV with columns like `score`, `tokens`, `lang`, `path`, `near_dup`, etc.
-
-### JSONL Schema
-
-Each line is an object:
-
-```json
-{
-  "text": "<chunk>",
-  "meta": {
-    "source": "https://github.com/owner/repo",
-    "repo": "owner/repo",
-    "path": "sub/dir/file.py",
-    "license": "Apache-2.0",
-    "lang": "Python",
-    "chunk_id": 1,
-    "n_chunks": 3,
-    "encoding": "utf-8",
-    "had_replacement": false,
-    "sha256": "...",
-    "tokens": 1234,
-    "bytes": 5678
-  }
-}
-```
-
-## Security Model
-
-**Threat‑oriented ingestion** — RepoCapsule defends against common archive risks when consuming GitHub zipballs:
-
-- **Path traversal (Zip Slip)**: rejects absolute paths, drive letters, and parent (`..`) segments; strips GitHub’s top‑folder prefix.
-- **Zip bombs**: caps total uncompressed bytes, per‑file bytes, number of members, and flags extreme compression ratios.
-- **Symlinks**: skips symlinked entries (based on Unix mode bits in zip metadata).
-
-> **Note:** Default thresholds are conservative but adjustable at call time. If you ingest very large repos or binaries, tune caps accordingly.
-
-## Observability
-
-- Structured logs include info on processed/skipped members. For production, consider counters like `skipped_by_ratio`, `skipped_by_path`, `skipped_symlink`, and totals.
-
+<!-- ROADMAP -->
 ## Roadmap
 
-- [ ] CLI entry points for common conversions and QC
-- [ ] Additional doc splitters (Asciidoc), more language hints
-- [ ] More extractors (e.g., SPL/Sigma/YARA from docs)
-- [ ] Optional parallelism for large local folders
-- [ ] Dedup/near‑dup filtering helpers
-- [ ] License classifier heuristics & SPDX enrichment
-- [ ] Test suite (unit + negative): archive safety, RFC‑6266 filenames, long‑text QC
+Planned and aspirational improvements include:
 
-## Known Limitations
+- [ ] Higher-level convenience builders for common configs (e.g., "just give me a GitHub URL").
+- [ ] More built-in `ChunkPolicy` presets for different model sizes.
+- [ ] Additional quality-scoring heuristics and visual QC reports.
+- [ ] More input formats (e.g., additional log formats, archives, or markup languages).
+- [ ] Example notebooks and end-to-end walkthroughs.
 
-- **Tests:** a full pytest suite is still being built; until then, treat the archive safety code as defense‑in‑depth and monitor logs.
-- **Perplexity QC:** very long texts may emit warnings on small‑context models; use the stride parameters or avoid PPL for giant chunks.
-- **Symlink detection:** relies on Unix mode bits in zip metadata; some archives (non‑GitHub) may encode links inconsistently.
+See the [open issues](https://github.com/JochiRaider/RepoCapsule/issues) for a full list of proposed features (and known issues).
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+<!-- CONTRIBUTING -->
 ## Contributing
 
-Contributions are welcome! Please open an issue to discuss significant changes.
+Contributions are what make the open source community such an amazing place to learn, inspire, and create. Any contributions you make are **greatly appreciated**.
 
-1. Fork the project
-2. Create a feature branch: `git checkout -b feat/awesome`
-3. Commit your changes: `git commit -m "feat: add awesome"`
-4. Push to the branch: `git push origin feat/awesome`
+If you have a suggestion that would make this better, please fork the repo and create a pull request. You can also simply open an issue with the tag "enhancement".
+Don't forget to give the project a star! Thanks again!
+
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'Add some AmazingFeature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
 5. Open a Pull Request
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+<!-- LICENSE -->
 ## License
 
-Distributed under the MIT License. See [license-url] for details.
+Distributed under the MIT License. See the `LICENSE` file for more information.
 
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+<!-- CONTACT -->
 ## Contact
 
-Open an issue on GitHub or start a discussion.
+Maintainer: [@JochiRaider](https://github.com/JochiRaider)
 
+Project Link: [https://github.com/JochiRaider/RepoCapsule](https://github.com/JochiRaider/RepoCapsule)
+
+<p align="right">(<a href="#top">back to top</a>)</p>
+
+
+<!-- ACKNOWLEDGMENTS -->
 ## Acknowledgments
 
-- Inspired by real‑world data‑prep needs for LLM pre‑training and RAG
-- Thanks to the maintainers of the Best‑README‑Template and the broader OSS ecosystem
+- [Best-README-Template](https://github.com/othneildrew/Best-README-Template)
+- [Shields.io](https://shields.io)
+- All the open source projects that make Python ingestion pipelines possible.
 
----
+<p align="right">(<a href="#top">back to top</a>)</p>
 
-[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/repocapsule.svg?style=for-the-badge
-[contributors-url]: https://github.com/your-org/repocapsule/graphs/contributors
-[forks-shield]: https://img.shields.io/github/forks/JochiRaider/repocapsule.svg?style=for-the-badge
-[forks-url]: https://github.com/your-org/repocapsule/network/members
-[stars-shield]: https://img.shields.io/github/stars/JochiRaider/repocapsule.svg?style=for-the-badge
-[stars-url]: https://github.com/your-org/repocapsule/stargazers
-[issues-shield]: https://img.shields.io/github/issues/JochiRaider/repocapsule.svg?style=for-the-badge
-[issues-url]: https://github.com/your-org/repocapsule/issues
-[license-shield]: https://img.shields.io/github/license/JochiRaider/repocapsule.svg?style=for-the-badge
-[license-url]: https://github.com/your-org/repocapsule/blob/main/LICENSE
+
+<!-- MARKDOWN LINKS & IMAGES -->
+<!-- https://www.markdownguide.org/basic-syntax/#reference-style-links -->
+[contributors-shield]: https://img.shields.io/github/contributors/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[contributors-url]: https://github.com/JochiRaider/RepoCapsule/graphs/contributors
+[forks-shield]: https://img.shields.io/github/forks/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[forks-url]: https://github.com/JochiRaider/RepoCapsule/network/members
+[stars-shield]: https://img.shields.io/github/stars/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[stars-url]: https://github.com/JochiRaider/RepoCapsule/stargazers
+[issues-shield]: https://img.shields.io/github/issues/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[issues-url]: https://github.com/JochiRaider/RepoCapsule/issues
+[license-shield]: https://img.shields.io/github/license/JochiRaider/RepoCapsule.svg?style=for-the-badge
+[license-url]: https://github.com/JochiRaider/RepoCapsule/blob/main/LICENSE
+[product-screenshot]: images/screenshot.png
 
