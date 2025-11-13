@@ -103,7 +103,7 @@ At a high level, RepoCapsule:
 
 RepoCapsule is primarily a pure-Python project.
 
-- [Python](https://www.python.org/) (3.8+)
+- [Python](https://www.python.org/) (3.11+)
 - Python standard library (e.g., `pathlib`, `zipfile`, `concurrent.futures`, `urllib`)
 - Optional: [tiktoken](https://github.com/openai/tiktoken) for exact token counting
 - Optional: a PDF backend (see project extras / `pyproject.toml`)
@@ -122,7 +122,7 @@ This section shows how to get a local copy of RepoCapsule up and running, either
 
 You will need:
 
-- **Python 3.8+**
+- **Python 3.11+**
 - **pip** (and optionally `venv` or another virtual environment manager)
 
 On many systems you can verify this with:
