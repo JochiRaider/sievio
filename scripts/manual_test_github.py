@@ -1,7 +1,7 @@
 # manual_test_github.py
 # SPDX-License-Identifier: MIT
 """
-RepoCapsule - manual smoke test (updated for current API).
+RepoCapsule - manual smoke test
 
 Run this from your workspace root (no install required). The script:
 - Validates the GitHub URL up front
@@ -30,9 +30,10 @@ from repocapsule.chunk import ChunkPolicy
 from repocapsule.factories import make_output_paths_for_github
 
 try:
-    from repocapsule.qc import JSONLQualityScorer
+    from repocapsule.qc import JSONLQualityScorer, score_jsonl_to_csv
 except Exception:
     JSONLQualityScorer = None  # type: ignore[assignment]
+    score_jsonl_to_csv = None  # type: ignore[assignment]
 
 # Optional extractor for KQL blocks inside Markdown
 try:
@@ -69,7 +70,7 @@ QC_CSV_SUFFIX = "_quality.csv"
 ENABLE_POST_QC = False
 
 # Chunking policy: tweak as needed
-POLICY = ChunkPolicy(mode="auto")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
+POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
 
 # Write prompt text too?
 ALSO_PROMPT_TEXT = True
@@ -170,9 +171,11 @@ def main() -> None:
 
 
 def _run_post_qc(jsonl_path: Path) -> None:
-    try:
-        from repocapsule.qc import score_jsonl_to_csv
+    if score_jsonl_to_csv is None:
+        print("Post-QC skipped: optional QC extras are not installed.")
+        return
 
+    try:
         qc_csv = score_jsonl_to_csv(
             str(jsonl_path),
             lm_model_id="Qwen/Qwen2.5-1.5B",
