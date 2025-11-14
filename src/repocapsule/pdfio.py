@@ -118,6 +118,18 @@ def extract_pdf_records(
     """Turn a PDF (bytes) into RepoCapsule JSONL records with metadata."""
     policy = policy or ChunkPolicy(mode="doc")
     reader = PdfReader(BytesIO(data))
+    ctx_seed = RepoContext(
+        repo_full_name=repo_full_name,
+        repo_url=repo_url,
+        license_id=license_id,
+    ).as_meta_seed()
+
+    def _with_context_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
+        if ctx_seed:
+            merged = dict(ctx_seed)
+            merged.update(extra)
+            return merged
+        return extra
 
     if reader.is_encrypted:
         if not password:
@@ -155,7 +167,7 @@ def extract_pdf_records(
                     license_id=license_id,
                     chunk_id=i,
                     n_chunks=n,
-                    extra_meta={"kind": "pdf", "page": i, "n_pages": n, "pdf_meta": pdf_meta or None},
+                    extra_meta=_with_context_extra({"kind": "pdf", "page": i, "n_pages": n, "pdf_meta": pdf_meta or None}),
                 )
             )
     else:
@@ -172,7 +184,7 @@ def extract_pdf_records(
                     license_id=license_id,
                     chunk_id=i,
                     n_chunks=n,
-                    extra_meta={"kind": "pdf", "pdf_meta": pdf_meta or None},
+                    extra_meta=_with_context_extra({"kind": "pdf", "pdf_meta": pdf_meta or None}),
                     tokens=ch.get("n_tokens"),
                 )
             )
