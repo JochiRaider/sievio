@@ -2,16 +2,17 @@
 # SPDX-License-Identifier: MIT
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Dict, List, Set
+from typing import Iterable, Optional, Sequence, Dict, List, Set, Tuple
 from html.parser import HTMLParser
 from urllib.parse import urlparse, unquote, urljoin
 import urllib.parse, urllib.request, urllib.error
 import posixpath, re, time, io
-
+from dataclasses import dataclass
 
 from .interfaces import Source, FileItem
 from . import safe_http
 from .config import PdfSourceConfig
+from .pipeline import process_items_parallel
 
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 
@@ -19,6 +20,12 @@ __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 _USER_AGENT = "repocapsule/0.1 (+https://github.com)"
 _CHUNK = 1024 * 1024  # 1 MiB
 _ALLOWED_SCHEMES = {"http", "https"}
+
+
+@dataclass(frozen=True)
+class _PdfDownloadTask:
+    index: int
+    url: str
 
 def _ensure_http_url(url: str) -> str:
     parsed = urlparse(url)
@@ -191,45 +198,80 @@ class WebPdfListSource(Source):
                 attempt += 1
         raise RuntimeError(f"failed to download {url}: {last_err}")
 
+    def _build_file_item(
+        self,
+        url: str,
+        data: bytes,
+        headers: Dict[str, str],
+        used_names: Set[str],
+    ) -> Optional[FileItem]:
+        cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
+        name = _sanitize_name(cd_name or _name_from_url(url))
+        if not name.lower().endswith(".pdf"):
+            name = f"{name}.pdf"
+
+        sniff_head = bytes.fromhex(headers.get("_X-SNIFF", "")) if headers.get("_X-SNIFF") else data[:8]
+        if self.require_pdf and not _looks_like_pdf(sniff_head):
+            if not _looks_like_pdf(data[:8]):
+                return None
+
+        orig = name
+        n = 1
+        while name in used_names:
+            stem, dot, ext = orig.rpartition(".")
+            if stem:
+                name = f"{stem}__{n}{dot}{ext}" if dot else f"{stem}__{n}"
+            else:
+                name = f"{orig}__{n}"
+            n += 1
+        used_names.add(name)
+
+        if self.add_prefix:
+            name = f"{self.add_prefix}/{name}"
+
+        return FileItem(path=name, data=data, size=len(data))
+
     def iter_files(self) -> Iterable[FileItem]:
-        used_names: set[str] = set()
-        # Serial by design: the pipeline owns concurrency. Avoid nested thread pools (oversubscription / deadlock hazard).
-        for u in self.urls:
-            try:
-                data, headers = self._download(u)
-            except Exception:
-                continue
-
-            # Decide on filename: Content-Disposition > URL path
-            cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
-            name = _sanitize_name(cd_name or _name_from_url(u))
-            # Ensure .pdf extension
-            if not name.lower().endswith(".pdf"):
-                name = f"{name}.pdf"
-
-            # PDF sniff (strict if require_pdf)
-            sniff_head = bytes.fromhex(headers.get("_X-SNIFF", "")) if headers.get("_X-SNIFF") else data[:8]
-            if self.require_pdf and not _looks_like_pdf(sniff_head):
-                # Some servers mislabel; add a lenient fallback: allow if body still looks like PDF
-                if not _looks_like_pdf(data[:8]):
+        used_names: Set[str] = set()
+        if len(self.urls) <= 1:
+            for idx, u in enumerate(self.urls):
+                try:
+                    data, headers = self._download(u)
+                except Exception:
                     continue
+                item = self._build_file_item(u, data, headers, used_names)
+                if item:
+                    yield item
+            return
 
-            # Deduplicate filenames
-            orig = name
-            n = 1
-            while name in used_names:
-                stem, dot, ext = orig.rpartition(".")
-                if stem:
-                    name = f"{stem}__{n}{dot}{ext}" if dot else f"{stem}__{n}"
-                else:
-                    name = f"{orig}__{n}"
-                n += 1
-            used_names.add(name)
+        results: Dict[int, FileItem] = {}
 
-            if self.add_prefix:
-                name = f"{self.add_prefix}/{name}"
+        def _worker(task: _PdfDownloadTask) -> Tuple[_PdfDownloadTask, List[tuple[str, bytes, Dict[str, str]]]]:
+            data, headers = self._download(task.url)
+            return task, [(task.url, data, headers)]
 
-            yield FileItem(path=name, data=data, size=len(data))
+        def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, Dict[str, str]]]) -> None:
+            for url, data, headers in payloads:
+                item = self._build_file_item(url, data, headers, used_names)
+                if item:
+                    results[task.index] = item
+
+        max_workers = min(4, len(self.urls))
+        window = max_workers * 4
+        process_items_parallel(
+            (_PdfDownloadTask(idx, url) for idx, url in enumerate(self.urls)),
+            _worker,
+            _writer,
+            max_workers=max_workers,
+            window=window,
+            fail_fast=False,
+            executor_kind="thread",
+        )
+
+        for idx in range(len(self.urls)):
+            item = results.get(idx)
+            if item:
+                yield item
 
 # ----------------------------
 #  WebPagePdfSource
