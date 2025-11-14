@@ -34,15 +34,17 @@ def configure_logging(
     fmt: Optional[str] = None,
     datefmt: Optional[str] = None,
     propagate: bool = False,
+    logger_name: Optional[str] = None,
 ) -> logging.Logger:
-    """Attach a StreamHandler to the package logger (idempotent-ish).
+    """Attach a StreamHandler to the package (or named) logger (idempotent-ish).
 
     - `level` can be an int or a logging level name (e.g., "INFO").
     - `stream` defaults to `sys.stderr`.
     - If a StreamHandler is already present, we keep it and only adjust level.
     - `propagate=False` means the package logger won't bubble up to root.
+    - `logger_name` targets a specific logger; defaults to the package logger.
     """
-    logger = get_logger(PACKAGE_LOGGER_NAME)
+    logger = get_logger(logger_name or PACKAGE_LOGGER_NAME)
 
     if isinstance(level, str):
         level = getattr(logging, level.upper(), logging.INFO)

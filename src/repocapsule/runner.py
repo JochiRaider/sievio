@@ -290,7 +290,7 @@ def convert_local_dir(
     )
     cfg.sources = replace(cfg.sources, sources=tuple(sources))
     cfg.sinks = sink_result.sink_config
-    cfg.metadata = dict(cfg.metadata, **sink_result.metadata)
+    cfg.metadata = cfg.metadata.merged(sink_result.metadata)
     return convert(cfg)
 
 
@@ -326,5 +326,5 @@ def convert_github(
     )
     cfg.sources = replace(cfg.sources, sources=tuple(sources))
     cfg.sinks = sink_result.sink_config
-    cfg.metadata = dict(cfg.metadata, **sink_result.metadata)
+    cfg.metadata = cfg.metadata.merged(sink_result.metadata)
     return convert(cfg)
