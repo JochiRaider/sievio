@@ -217,6 +217,15 @@ def handle_evtx(
     recovery scans for embedded EVTX file headers within the blob and
     attempts to parse from those offsets.
     """
+    context_meta = ctx.as_meta_seed() if ctx else None
+
+    def _with_context(extra: Dict[str, Any]) -> Dict[str, Any]:
+        if context_meta:
+            merged = dict(context_meta)
+            merged.update(extra)
+            return merged
+        return extra
+
     use_recovery = allow_recovery
     if use_recovery is None:
         use_recovery = _env_wants_recovery()
@@ -237,7 +246,7 @@ def handle_evtx(
                     repo_url=(ctx.repo_url if ctx else None),
                     license_id=(ctx.license_id if ctx else None),
                     lang="WindowsEventLog",
-                    extra_meta={
+                    extra_meta=_with_context({
                         "kind": "evtx",
                         "provider": j.get("provider"),
                         "event_id": j.get("event_id"),
@@ -247,7 +256,7 @@ def handle_evtx(
                         "event_record_id": j.get("event_record_id"),
                         "timestamp": j.get("timestamp"),
                         "recovered": False,
-                    },
+                    }),
                 )
     except Exception:
         parsed_any = False
@@ -263,7 +272,7 @@ def handle_evtx(
                 repo_url=(ctx.repo_url if ctx else None),
                 license_id=(ctx.license_id if ctx else None),
                 lang="WindowsEventLog",
-                extra_meta={
+                extra_meta=_with_context({
                     "kind": "evtx",
                     "provider": j.get("provider"),
                     "event_id": j.get("event_id"),
@@ -274,5 +283,5 @@ def handle_evtx(
                     "timestamp": j.get("timestamp"),
                     "recovered": True,
                     "recovery_strategy": "python-evtx-carve",
-                },
+                }),
             )
