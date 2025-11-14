@@ -12,6 +12,7 @@ from . import safe_http
 from .interfaces import FileItem, RepoContext, Source
 from .licenses import detect_license_in_zip, apply_license_to_context
 from .log import get_logger
+from .naming import normalize_extensions
 
 __all__ = [
     "RepoSpec",
@@ -410,8 +411,8 @@ class GitHubZipSource(Source):
         self._subpath = spec.subpath.strip("/").replace("\\", "/") if spec.subpath else None
         self._zip_path: str | None = None
         self._download_timeout = download_timeout
-        self.include_exts = _norm_exts(getattr(config, "include_exts", None))
-        self.exclude_exts = _norm_exts(getattr(config, "exclude_exts", None))
+        self.include_exts = normalize_extensions(getattr(config, "include_exts", None))
+        self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
 
     def __enter__(self) -> "GitHubZipSource":
         if self._download_timeout is None:
@@ -455,15 +456,3 @@ class GitHubZipSource(Source):
             yield FileItem(path=rel_norm, data=data, size=len(data))
 
 
-def _norm_exts(exts: Optional[Iterable[str]]) -> Optional[set[str]]:
-    if not exts:
-        return None
-    out: set[str] = set()
-    for e in exts:
-        if not e:
-            continue
-        cleaned = e.strip().lower()
-        if not cleaned:
-            continue
-        out.add(cleaned if cleaned.startswith(".") else f".{cleaned}")
-    return out or None
