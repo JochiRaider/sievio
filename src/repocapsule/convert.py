@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Callable, Dict, List, Optional, Sequence, Tuple, Iterable
+from typing import Callable, Dict, List, Optional, Sequence, Tuple, Iterable, Iterator
 
 import logging
 
 from .config import RepocapsuleConfig
-from .chunk import ChunkPolicy, chunk_text
+from .chunk import ChunkPolicy, chunk_text, iter_chunk_dicts
 from .decode import decode_bytes
 from .factories import UnsupportedBinary
 from .interfaces import RepoContext, Record
@@ -17,6 +17,8 @@ from .records import build_record
 __all__ = [
     "make_records_for_file",
     "make_records_from_bytes",
+    "iter_records_for_file",
+    "iter_records_from_bytes",
 ]
 
 log = logging.getLogger(__name__)
@@ -65,6 +67,7 @@ def make_records_for_file(
 ) -> List[Dict[str, object]]:
     cfg = config
     extractor_recs: List[Dict[str, object]] = []
+    context_meta = (context.as_meta_seed() or None) if context else None
     if cfg.pipeline.extractors:
         for extractor in cfg.pipeline.extractors:
             try:
@@ -100,19 +103,89 @@ def make_records_for_file(
                 n_chunks=n,
                 lang=chunk.get("lang") if cfg.chunk.attach_language_metadata else None,
                 tokens=chunk.get("n_tokens"),
+                extra_meta=context_meta,
             )
         )
+    if extractor_recs and context_meta:
+        for rec in extractor_recs:
+            meta = rec.get("meta")
+            if isinstance(meta, dict):
+                for key, value in context_meta.items():
+                    meta.setdefault(key, value)
     if extractor_recs:
         records.extend(extractor_recs)
     return records
 
-def make_records_from_bytes(
+
+def iter_records_for_file(
+    *,
+    text: str,
+    rel_path: str,
+    config: RepocapsuleConfig,
+    context: Optional[RepoContext],
+    encoding: str,
+    had_replacement: bool,
+) -> Iterator[Dict[str, object]]:
+    cfg = config
+    extractor_recs: List[Dict[str, object]] = []
+    context_meta = (context.as_meta_seed() or None) if context else None
+    if cfg.pipeline.extractors:
+        for extractor in cfg.pipeline.extractors:
+            try:
+                out = extractor.extract(text=text, path=rel_path, context=context)
+            except Exception as exc:
+                log.warning("Extractor %s failed for %s: %s", getattr(extractor, "name", extractor), rel_path, exc)
+                continue
+            if not out:
+                continue
+            extractor_recs.extend(dict(rec) for rec in out)
+
+    mode, fmt = _infer_mode_and_fmt(rel_path)
+    chunk_dicts = list(
+        iter_chunk_dicts(
+            text,
+            mode=mode,
+            fmt=fmt,
+            policy=cfg.chunk.policy,
+            tokenizer_name=cfg.chunk.tokenizer_name,
+        )
+    )
+    total_chunks = len(chunk_dicts)
+
+    for idx, chunk in enumerate(chunk_dicts, start=1):
+        yield build_record(
+            text=chunk.get("text", ""),
+            rel_path=rel_path,
+            repo_full_name=(context.repo_full_name if context else None),
+            repo_url=(context.repo_url if context else None),
+            license_id=(context.license_id if context else None),
+            encoding=encoding,
+            had_replacement=had_replacement,
+            chunk_id=idx,
+            n_chunks=total_chunks,
+            lang=chunk.get("lang") if cfg.chunk.attach_language_metadata else None,
+            tokens=chunk.get("n_tokens"),
+            extra_meta=context_meta,
+        )
+
+    if extractor_recs and context_meta:
+        for rec in extractor_recs:
+            meta = rec.get("meta")
+            if isinstance(meta, dict):
+                for key, value in context_meta.items():
+                    meta.setdefault(key, value)
+
+    for rec in extractor_recs:
+        yield rec
+
+
+def iter_records_from_bytes(
     data: bytes,
     rel_path: str,
     *,
     config: RepocapsuleConfig,
     context: Optional[RepoContext],
-) -> List[Dict[str, object]]:
+) -> Iterator[Dict[str, object]]:
     cfg = config
     handlers = list(cfg.pipeline.bytes_handlers)
     for sniff, handler in handlers:
@@ -123,8 +196,8 @@ def make_records_from_bytes(
                 log.info("Skipping unsupported binary for %s: %s", rel_path, e)
                 records = None
             if records:
-                # preserve streaming if handler yields
-                return list(records) if isinstance(records, list) else list(records)
+                yield from records
+                return
 
     max_bytes = cfg.decode.max_bytes_per_file
     if max_bytes is not None and len(data) > max_bytes:
@@ -136,11 +209,28 @@ def make_records_from_bytes(
         strip_controls=cfg.decode.strip_controls,
         fix_mojibake=cfg.decode.fix_mojibake,
     )
-    return make_records_for_file(
+    yield from iter_records_for_file(
         text=dec.text,
         rel_path=rel_path,
         config=cfg,
         context=context,
         encoding=dec.encoding,
         had_replacement=dec.had_replacement,
+    )
+
+
+def make_records_from_bytes(
+    data: bytes,
+    rel_path: str,
+    *,
+    config: RepocapsuleConfig,
+    context: Optional[RepoContext],
+) -> List[Dict[str, object]]:
+    return list(
+        iter_records_from_bytes(
+            data,
+            rel_path,
+            config=config,
+            context=context,
+        )
     )

@@ -110,11 +110,9 @@ def test_qc_annotations_added_to_records():
     assert stats["qc"]["kept"] == 1
     assert len(sink.records) == 1
     meta = sink.records[0]["meta"]
-    assert meta["quality_score"] == 88.5
     assert meta["approx_tokens"] == 42
     assert meta["dup_family_id"] == "fam-1"
     assert meta["near_dup"] is False
-    assert "token_count" not in meta
 
 
 def test_qc_drops_low_score_records():

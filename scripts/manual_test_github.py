@@ -1,7 +1,7 @@
 # manual_test_github.py
 # SPDX-License-Identifier: MIT
 """
-RepoCapsule - manual smoke test (updated for current API).
+RepoCapsule - manual smoke test
 
 Run this from your workspace root (no install required). The script:
 - Validates the GitHub URL up front
@@ -30,9 +30,10 @@ from repocapsule.chunk import ChunkPolicy
 from repocapsule.factories import make_output_paths_for_github
 
 try:
-    from repocapsule.qc import JSONLQualityScorer
+    from repocapsule.qc import JSONLQualityScorer, score_jsonl_to_csv
 except Exception:
     JSONLQualityScorer = None  # type: ignore[assignment]
+    score_jsonl_to_csv = None  # type: ignore[assignment]
 
 # Optional extractor for KQL blocks inside Markdown
 try:
@@ -46,9 +47,9 @@ except Exception:
 
 # Example GitHub repo to test:
 # URL = "https://github.com/pallets/flask/tree/main/docs"
-URL = "https://github.com/JochiRaider/URL_Research_Tool"
+# URL = "https://github.com/JochiRaider/URL_Research_Tool"
 # URL = "https://github.com/chinapandaman/PyPDFForm"
-# URL = "https://github.com/SystemsApproach/book"
+URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
 
 # Output directory for artifacts (portable path under the repo root):
@@ -60,7 +61,7 @@ ENABLE_KQL_MD_EXTRACTOR = False
 
 # Inline QC (requires optional torch/transformers/tiktoken extras)
 ENABLE_INLINE_QC = True
-QC_MIN_SCORE = 60.0
+QC_MIN_SCORE = 40.0
 QC_DROP_NEAR_DUPS = False
 QC_WRITE_CSV = True
 QC_CSV_SUFFIX = "_quality.csv"
@@ -69,7 +70,7 @@ QC_CSV_SUFFIX = "_quality.csv"
 ENABLE_POST_QC = False
 
 # Chunking policy: tweak as needed
-POLICY = ChunkPolicy(mode="auto")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
+POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
 
 # Write prompt text too?
 ALSO_PROMPT_TEXT = True
@@ -109,7 +110,7 @@ def _plan_output_paths(url: str, out_dir: Path, *, ref_hint: str | None, with_pr
 def _build_config(extractors: Sequence[object]) -> RepocapsuleConfig:
     cfg = RepocapsuleConfig()
     cfg.chunk.policy = POLICY
-    # cfg.sources.github.include_exts = {".rst"}
+    cfg.sources.github.include_exts = {".rst"}
     cfg.pipeline.extractors = tuple(extractors)
     cfg.sources.github.per_file_cap = int(MAX_FILE_MB) * 1024 * 1024
     if ENABLE_INLINE_QC:
@@ -170,9 +171,11 @@ def main() -> None:
 
 
 def _run_post_qc(jsonl_path: Path) -> None:
-    try:
-        from repocapsule.qc import score_jsonl_to_csv
+    if score_jsonl_to_csv is None:
+        print("Post-QC skipped: optional QC extras are not installed.")
+        return
 
+    try:
         qc_csv = score_jsonl_to_csv(
             str(jsonl_path),
             lm_model_id="Qwen/Qwen2.5-1.5B",

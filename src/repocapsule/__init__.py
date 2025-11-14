@@ -73,7 +73,6 @@ from .records import (
 
 # Converters
 from .convert import make_records_for_file, make_records_from_bytes
-from .export import annotate_exact_token_counts
 
 # Web PDF sources
 from .sources_webpdf import WebPdfListSource, WebPagePdfSource
@@ -90,7 +89,7 @@ from .runner import (
 from .sinks import JSONLSink, PromptTextSink, NoopSink
 from .evtxio import handle_evtx,sniff_evtx
 from .licenses import detect_license_in_tree, detect_license_in_zip
-from .pipeline import run_pipeline, PipelineStats
+from .pipeline import run_pipeline, PipelineStats, PipelineEngine
 from .interfaces import FileItem, RepoContext, Source, Sink, Extractor
 from .config import RepocapsuleConfig
 
@@ -118,7 +117,6 @@ __all__ = [
     "sha256_text", "build_record",
     # convert
     "make_records_for_file", "make_records_from_bytes", 
-    "annotate_exact_token_counts",
     # web sources
     "WebPdfListSource", "WebPagePdfSource",  
     # runner / sinks
@@ -126,7 +124,7 @@ __all__ = [
     "JSONLSink", "PromptTextSink", "NoopSink",
     "LocalDirSource", "GitHubZipSource",
     # pipeline
-    "run_pipeline", "PipelineStats",
+    "run_pipeline", "PipelineStats", "PipelineEngine",
     # interfaces
     "FileItem", "RepoContext", "Source", "Sink", "Extractor",
     # naming

@@ -4,10 +4,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Iterator, Optional, Sequence
+from typing import Iterable, Iterator, Optional, Sequence, Set
 import os
 
 from .interfaces import FileItem, RepoContext, Source
+from .naming import normalize_extensions
 
 __all__ = [
     "DEFAULT_SKIP_DIRS",
@@ -16,6 +17,7 @@ __all__ = [
     "GitignoreMatcher",
     "iter_repo_files",
     "collect_repo_files",
+    "PatternFileSource",
 ]
 
 # Common junk/build/metadata directories we always skip unless explicitly allowed
@@ -291,6 +293,16 @@ def collect_repo_files(*args, **kwargs) -> list[Path]:
     return list(iter_repo_files(*args, **kwargs))
 
 
+def _is_hidden_rel(rel: Path) -> bool:
+    parts = rel.parts if isinstance(rel, Path) else Path(rel).parts
+    for part in parts:
+        if part in (".", ".."):
+            continue
+        if part.startswith("."):
+            return True
+    return False
+
+
 class LocalDirSource(Source):
     """Iterates files from a local repo directory with early filters (hidden/ext/size)."""
 
@@ -298,8 +310,8 @@ class LocalDirSource(Source):
         self.root = Path(root)
         self._cfg = config
         self.context = context
-        self.include_exts = _norm_exts(config.include_exts)
-        self.exclude_exts = _norm_exts(config.exclude_exts)
+        self.include_exts = normalize_extensions(config.include_exts)
+        self.exclude_exts = normalize_extensions(config.exclude_exts)
 
     def __enter__(self) -> "LocalDirSource":
         return self
@@ -327,13 +339,63 @@ class LocalDirSource(Source):
             yield FileItem(path=rel, data=data, size=size)
 
 
-def _norm_exts(exts: Optional[set[str]]) -> Optional[set[str]]:
-    if not exts:
-        return None
-    out: set[str] = set()
-    for e in exts:
-        if not e:
-            continue
-        e = e.strip().lower()
-        out.add(e if e.startswith(".") else f".{e}")
-    return out or None
+class PatternFileSource(Source):
+    """
+    Source that yields FileItems for files matching glob patterns relative to a root.
+    """
+
+    def __init__(
+        self,
+        root: str | Path,
+        patterns: Sequence[str],
+        *,
+        config,
+        context: Optional[RepoContext] = None,
+    ) -> None:
+        if not patterns:
+            raise ValueError("patterns must contain at least one glob expression")
+        self.root = Path(root)
+        self.patterns = list(patterns)
+        self._cfg = config
+        self.context = context
+        self.include_exts = normalize_extensions(getattr(config, "include_exts", None))
+        self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
+
+    def iter_files(self) -> Iterable[FileItem]:
+        cfg = self._cfg
+        skip_hidden = getattr(cfg, "skip_hidden", True)
+        max_file_bytes = getattr(cfg, "max_file_bytes", None)
+        seen: Set[Path] = set()
+        for pattern in self.patterns:
+            for path in self.root.glob(pattern):
+                if not path.is_file():
+                    continue
+                try:
+                    rel_path = path.relative_to(self.root)
+                except ValueError:
+                    rel_path = Path(path.name)
+                if rel_path in seen:
+                    continue
+                seen.add(rel_path)
+                if skip_hidden and _is_hidden_rel(rel_path):
+                    continue
+                ext = path.suffix.lower()
+                if self.include_exts is not None and ext not in self.include_exts:
+                    continue
+                if self.exclude_exts is not None and ext in self.exclude_exts:
+                    continue
+                try:
+                    stat = path.stat()
+                    size = stat.st_size
+                except Exception:
+                    continue
+                if max_file_bytes is not None and size > max_file_bytes:
+                    continue
+                try:
+                    data = path.read_bytes()
+                except Exception:
+                    continue
+                rel_str = str(rel_path).replace("\\", "/")
+                yield FileItem(path=rel_str, data=data, size=len(data))
+
+

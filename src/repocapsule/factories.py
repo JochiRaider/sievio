@@ -21,7 +21,8 @@ from typing import (
 )
 
 from .interfaces import RepoContext, Record, Sink
-from .sinks import JSONLSink, PromptTextSink
+from .sinks import JSONLSink, GzipJSONLSink, PromptTextSink
+from .fs import PatternFileSource
 
 if TYPE_CHECKING:  # pragma: no cover - type-only imports
     from .chunk import ChunkPolicy
@@ -48,6 +49,7 @@ __all__ = [
     "make_local_dir_source",
     "make_output_paths_for_github",
     "make_output_paths_for_pdf",
+    "make_jsonl_text_source",
     "make_qc_scorer",
     "make_repo_context_from_git",
 ]
@@ -101,21 +103,25 @@ def build_default_sinks(
     """
     if basename and jsonl_path:
         raise ValueError("Provide either basename or jsonl_path, not both")
-    if not basename and not jsonl_path:
-        raise ValueError("A basename or jsonl_path is required")
 
     if jsonl_path is None:
-        jsonl_path = cfg.output_dir / f"{basename}.jsonl"
+        base = basename or (cfg.jsonl_basename or None)
+        if not base:
+            raise ValueError("A basename or jsonl_path is required")
+        suffix = ".jsonl.gz" if cfg.compress_jsonl else ".jsonl"
+        jsonl_path = cfg.output_dir / f"{base}{suffix}"
     jsonl_path = Path(jsonl_path)
     jsonl_str = str(jsonl_path)
 
-    sinks: list[Sink] = [JSONLSink(jsonl_str)]
+    use_gzip = cfg.compress_jsonl or jsonl_str.endswith(".gz")
+    sink_class = GzipJSONLSink if use_gzip else JSONLSink
+    sinks: list[Sink] = [sink_class(jsonl_str)]
 
     prompt_target: Optional[str]
     if prompt_path is not None:
         prompt_target = str(Path(prompt_path))
     elif cfg.prompt.include_prompt_file:
-        prompt_target = str(jsonl_path.with_suffix(".prompt.txt"))
+        prompt_target = str(_default_prompt_path(jsonl_path))
     else:
         prompt_target = None
 
@@ -130,12 +136,46 @@ def build_default_sinks(
         primary_jsonl_name=jsonl_str,
     )
     metadata = {"primary_jsonl": jsonl_str}
+    if prompt_target:
+        metadata["prompt_path"] = prompt_target
     return SinkFactoryResult(
         jsonl_path=jsonl_str,
         sinks=sink_cfg.sinks,
         sink_config=sink_cfg,
         metadata=metadata,
     )
+
+
+def _default_prompt_path(jsonl_path: Path) -> Path:
+    name = jsonl_path.name
+    if name.endswith(".jsonl.gz"):
+        base = name[:-len(".jsonl.gz")]
+    else:
+        base = jsonl_path.stem
+    prompt_name = f"{base}.prompt.txt"
+    return jsonl_path.parent / prompt_name
+
+
+def make_jsonl_text_source(
+    paths: Sequence[str | Path],
+    *,
+    context: Optional[RepoContext] = None,
+    text_key: str = "text",
+):
+    from .jsonl_source import JSONLTextSource
+
+    norm_paths = [Path(p) for p in paths]
+    return JSONLTextSource(paths=tuple(norm_paths), context=context, text_key=text_key)
+
+
+def make_pattern_file_source(
+    root: str | Path,
+    patterns: Sequence[str],
+    *,
+    config: "LocalDirSourceConfig",
+    context: Optional[RepoContext] = None,
+) -> PatternFileSource:
+    return PatternFileSource(root, patterns, config=config, context=context)
 
 
 # ---------------------------------------------------------------------------
@@ -159,20 +199,23 @@ def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
     )
 
 
-def make_qc_scorer(qc_cfg: Optional["QCConfig"]) -> Optional["JSONLQualityScorer"]:
+def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) -> Optional["JSONLQualityScorer"]:
     """
     Instantiate a JSONLQualityScorer when QC is enabled and extras are present.
     """
     if qc_cfg is None or not getattr(qc_cfg, "enabled", False):
         return None
     existing = getattr(qc_cfg, "scorer", None)
-    if existing is not None:
+    if existing is not None and not new_instance:
         return existing
     try:
         from .qc import JSONLQualityScorer  # optional extra
     except Exception:
         return None
-    return JSONLQualityScorer()
+    scorer = JSONLQualityScorer()
+    if not new_instance:
+        qc_cfg.scorer = scorer
+    return scorer
 
 
 # ---------------------------------------------------------------------------

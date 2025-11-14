@@ -3,13 +3,13 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import Optional, Dict, Any
-import os, json
+import os, json, gzip
 
 from .interfaces import RepoContext, Record
 
 
-class JSONLSink:
-    """Simple streaming JSONL sink (one record per line)."""
+class _BaseJSONLSink:
+    """Shared logic for JSONL sinks."""
 
     def __init__(self, out_path: str | os.PathLike[str]):
         self._path = Path(out_path)
@@ -20,7 +20,7 @@ class JSONLSink:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name = f"{self._path.name}.tmp"
         self._tmp_path = self._path.parent / tmp_name
-        self._fp = open(self._tmp_path, "w", encoding="utf-8", newline="")
+        self._fp = self._open_handle(self._tmp_path)
 
     def write(self, record: Dict[str, Any]) -> None:
         assert self._fp is not None
@@ -43,6 +43,23 @@ class JSONLSink:
 
     def __exit__(self, exc_type, exc, tb) -> None:
         self.close()
+
+    def _open_handle(self, path: Path):
+        raise NotImplementedError
+
+
+class JSONLSink(_BaseJSONLSink):
+    """Simple streaming JSONL sink (one record per line)."""
+
+    def _open_handle(self, path: Path):
+        return open(path, "w", encoding="utf-8", newline="")
+
+
+class GzipJSONLSink(_BaseJSONLSink):
+    """Streaming JSONL sink that gzip-compresses its output."""
+
+    def _open_handle(self, path: Path):
+        return gzip.open(path, "wt", encoding="utf-8", newline="")
 
 class PromptTextSink:
     """Writes human-readable prompt text (format as you prefer)."""
@@ -103,4 +120,4 @@ class NoopSink:
         pass
 
 
-__all__ = ["JSONLSink", "PromptTextSink", "NoopSink"]
+__all__ = ["JSONLSink", "GzipJSONLSink", "PromptTextSink", "NoopSink"]

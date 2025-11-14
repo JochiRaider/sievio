@@ -6,6 +6,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import (
     Any,
+    Dict,
     Iterable,
     Mapping,
     Optional,
@@ -51,6 +52,26 @@ class RepoContext:
     commit_sha: Optional[str] = None         # archive commit or ref resolved
     # Free-form bag for future metadata (timestamps, labels, etc.)
     extra: Optional[Mapping[str, Any]] = None
+
+    def as_meta_seed(self) -> Dict[str, Any]:
+        """Return a dict of metadata fields that should seed every record."""
+        meta: Dict[str, Any] = {}
+        if self.repo_url:
+            meta.setdefault("source", self.repo_url)
+            meta.setdefault("repo_url", self.repo_url)
+        if self.repo_full_name:
+            meta.setdefault("repo", self.repo_full_name)
+            meta.setdefault("repo_full_name", self.repo_full_name)
+        if self.license_id:
+            meta.setdefault("license", self.license_id)
+        if self.commit_sha:
+            meta.setdefault("commit_sha", self.commit_sha)
+        if self.extra:
+            for key, value in self.extra.items():
+                if value is None:
+                    continue
+                meta.setdefault(str(key), value)
+        return meta
 
 
 # A JSONL record shape is intentionally loose: dict-like with string keys.
@@ -129,6 +150,19 @@ class Sink(Protocol):
         """Flush and free resources. Must not raise on repeated calls."""
 
 
+@runtime_checkable
+class QualityScorer(Protocol):
+    """
+    Minimal contract for quality scorers used in inline or post-processing modes.
+    """
+
+    def score_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        """Return per-record QC metrics."""
+
+    def score_jsonl_path(self, path: str) -> Iterable[Dict[str, Any]]:
+        """Iterate QC rows for every record within a JSONL file."""
+
+
 __all__ = [
     "FileItem",
     "RepoContext",
@@ -136,4 +170,5 @@ __all__ = [
     "Source",
     "Extractor",
     "Sink",
+    "QualityScorer",
 ]

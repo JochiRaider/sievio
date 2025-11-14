@@ -34,15 +34,19 @@ def configure_logging(
     fmt: Optional[str] = None,
     datefmt: Optional[str] = None,
     propagate: bool = False,
+    logger_name: str = PACKAGE_LOGGER_NAME,
 ) -> logging.Logger:
-    """Attach a StreamHandler to the package logger (idempotent-ish).
+    """Attach a StreamHandler to a repocapsule logger (idempotent-ish).
 
     - `level` can be an int or a logging level name (e.g., "INFO").
     - `stream` defaults to `sys.stderr`.
     - If a StreamHandler is already present, we keep it and only adjust level.
-    - `propagate=False` means the package logger won't bubble up to root.
+    - Set `propagate=True` if you want records to flow into your application's
+      existing logging tree; otherwise repocapsule logs stay self-contained.
+    - `logger_name` defaults to the package logger but can be changed when
+      embedding repocapsule inside a larger service.
     """
-    logger = get_logger(PACKAGE_LOGGER_NAME)
+    logger = get_logger(logger_name or PACKAGE_LOGGER_NAME)
 
     if isinstance(level, str):
         level = getattr(logging, level.upper(), logging.INFO)

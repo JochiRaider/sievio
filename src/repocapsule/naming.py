@@ -3,7 +3,14 @@
 from __future__ import annotations
 import re, unicodedata
 from urllib.parse import urlparse
-from typing import Optional
+from typing import Iterable, Optional, Set
+
+__all__ = [
+    "build_output_basename",
+    "build_output_basename_github",
+    "build_output_basename_pdf",
+    "normalize_extensions",
+]
 
 _WINDOWS_FORBIDDEN = r'<>:"/\\|?*'
 _SEPS_RX = re.compile(r"[^\w\-]+", flags=re.ASCII)
@@ -103,3 +110,21 @@ def build_output_basename(*,
         )
     else:
         raise ValueError(f"unknown kind for build_output_basename: {kind!r}")
+
+
+def normalize_extensions(exts: Optional[Iterable[str]]) -> Optional[Set[str]]:
+    """
+    Normalize an iterable of extension strings into lowercase values that always
+    start with ".". Returns None when the input is falsy after cleaning.
+    """
+    if not exts:
+        return None
+    out: Set[str] = set()
+    for ext in exts:
+        if not ext:
+            continue
+        cleaned = ext.strip().lower()
+        if not cleaned:
+            continue
+        out.add(cleaned if cleaned.startswith(".") else f".{cleaned}")
+    return out or None

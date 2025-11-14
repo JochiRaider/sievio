@@ -4,7 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional, Tuple, Callable, Dict, Any
+from typing import List, Optional, Tuple, Callable, Dict, Any, Iterator
 import re
 import math
 
@@ -580,7 +580,7 @@ def _take_tail_chars_for_overlap(text: str, approx_tokens: int, mode: str) -> st
     return text[-approx_chars:]
 
 
-def _pack_blocks(
+def iter_packed_blocks(
     blocks: List[Block],
     *,
     target_tokens: int,
@@ -588,34 +588,36 @@ def _pack_blocks(
     min_tokens: int,
     tokenizer,
     mode,
-) -> List[Tuple[str, int, int, int]]:
+) -> Iterator[Tuple[str, int, int, int]]:
     """
     Pack block list into chunks near target_tokens with optional overlap.
-    Returns list of (chunk_text, start_pos, end_pos, n_tokens).
+    Yields (chunk_text, start_pos, end_pos, n_tokens) as soon as each chunk is ready.
     """
-    chunks: List[Tuple[str, int, int, int]] = []
     cur_buf: List[str] = []
     cur_start: Optional[int] = None
     cur_len_tok = 0
     cur_mode = mode
 
-    def flush():
+    def flush() -> Optional[Tuple[str, int, int, int]]:
         nonlocal cur_buf, cur_start, cur_len_tok, cur_mode
         if not cur_buf:
-            return
+            return None
         chunk_text = "".join(cur_buf)
         start = cur_start if cur_start is not None else 0
         end = start + len(chunk_text)
-        chunks.append((chunk_text, start, end, cur_len_tok))
+        chunk_info = (chunk_text, start, end, cur_len_tok)
         cur_buf = []
         cur_start = None
         cur_len_tok = 0
+        return chunk_info
 
     heading_flush_tokens = max(1, min_tokens // 2)
 
     for block in blocks:
         if cur_buf and block.kind == "heading" and cur_len_tok >= heading_flush_tokens:
-            flush()
+            flushed = flush()
+            if flushed:
+                yield flushed
 
         b_tokens = block.tokens
         if not cur_buf:
@@ -624,7 +626,9 @@ def _pack_blocks(
             cur_len_tok = block.tokens
             # if a single block is oversized, flush as its own chunk
             if cur_len_tok >= target_tokens and cur_len_tok >= min_tokens:
-                flush()
+                flushed = flush()
+                if flushed:
+                    yield flushed
             continue
 
         # If adding would exceed target, decide whether overshoot is better than undershoot
@@ -635,28 +639,38 @@ def _pack_blocks(
                 # take the block, then flush (closer to target overall)
                 cur_buf.append(block.text)
                 cur_len_tok += b_tokens
-                flush()
+                flushed = flush()
+                if flushed:
+                    yield flushed
                 continue
             # Overlap: add an approximate tail from current chunk to start next one
             if overlap_tokens > 0:
                 cur_text = "".join(cur_buf)
                 tail = _take_tail_chars_for_overlap(cur_text, overlap_tokens, cur_mode)
                 prev_end = (cur_start or 0) + len(cur_text)
-                flush()
+                flushed = flush()
+                if flushed:
+                    yield flushed
                 # seed next with tail and set origin to (prev_end - tail_len)
                 cur_buf = [tail, block.text]
                 cur_start = max(0, prev_end - len(tail))
                 cur_len_tok = count_tokens(tail, tokenizer, cur_mode) + b_tokens
                 # oversize single? flush again
                 if cur_len_tok >= target_tokens and cur_len_tok >= min_tokens:
-                    flush()
+                    flushed = flush()
+                    if flushed:
+                        yield flushed
             else:
-                flush()
+                flushed = flush()
+                if flushed:
+                    yield flushed
                 cur_buf = [block.text]
                 cur_start = block.start
                 cur_len_tok = block.tokens
                 if cur_len_tok >= target_tokens and cur_len_tok >= min_tokens:
-                    flush()
+                    flushed = flush()
+                    if flushed:
+                        yield flushed
         else:
             # keep accumulating
             cur_buf.append(block.text)
@@ -664,9 +678,9 @@ def _pack_blocks(
 
     # final flush
     if cur_buf:
-        flush()
-
-    return chunks
+        flushed = flush()
+        if flushed:
+            yield flushed
 
 
 def _split_code_lines(text: str, tokenizer) -> List[Block]:
@@ -707,22 +721,16 @@ def _split_code_lines(text: str, tokenizer) -> List[Block]:
     return blocks
 
 
-def chunk_text(
+def iter_chunk_dicts(
     text: str,
     *,
     mode: str = "doc",
     fmt: Optional[str] = None,
     policy: Optional[ChunkPolicy] = None,
     tokenizer_name: Optional[str] = None,
-) -> List[dict]:
+) -> Iterator[dict]:
     """
-    High-level chunker. Returns a list of dicts:
-      { "text": str, "n_tokens": int, "start": int, "end": int }
-
-    - mode="doc": uses split_doc_blocks(fmt) with optional semantic refinement then packs blocks
-    - mode="code": uses simple line-based blocks then packs
-
-    Set `fmt` to "markdown" / "restructuredtext" for docs.
+    Streaming chunk generator. Yields dicts with the same shape as chunk_text().
     """
     pol = policy or ChunkPolicy(mode=mode)
     tok = _get_tokenizer(tokenizer_name)
@@ -735,7 +743,7 @@ def chunk_text(
     else:
         blocks = _split_code_lines(text, tok)
 
-    packed = _pack_blocks(
+    packed = iter_packed_blocks(
         blocks,
         target_tokens=pol.target_tokens,
         overlap_tokens=pol.overlap_tokens,
@@ -744,17 +752,38 @@ def chunk_text(
         mode=mode,
     )
 
-    out = []
     for chunk_text_s, start, end, tok_count in packed:
-        out.append(
-            {
-                "text": chunk_text_s,
-                "n_tokens": tok_count,
-                "start": start,
-                "end": end,
-            }
+        yield {
+            "text": chunk_text_s,
+            "n_tokens": tok_count,
+            "start": start,
+            "end": end,
+        }
+
+
+def chunk_text(
+    text: str,
+    *,
+    mode: str = "doc",
+    fmt: Optional[str] = None,
+    policy: Optional[ChunkPolicy] = None,
+    tokenizer_name: Optional[str] = None,
+) -> List[dict]:
+    """
+    High-level chunker. Returns a list of dicts:
+      { "text": str, "n_tokens": int, "start": int, "end": int }
+
+    Set `fmt` to "markdown" / "restructuredtext" for docs.
+    """
+    return list(
+        iter_chunk_dicts(
+            text,
+            mode=mode,
+            fmt=fmt,
+            policy=policy,
+            tokenizer_name=tokenizer_name,
         )
-    return out
+    )
 
 
 # -------------

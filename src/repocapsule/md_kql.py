@@ -347,9 +347,15 @@ class KqlFromMarkdownExtractor:
             return None
 
         cat = derive_category_from_rel(path)
+        context_meta = (context.as_meta_seed() or None) if context else None
         out: List[Record] = []
         n = len(blocks)
         for i, b in enumerate(blocks, start=1):
+            extra_meta = {"kind": "kql", "title": getattr(b, "title", None), "category": cat}
+            if context_meta:
+                merged = dict(context_meta)
+                merged.update(extra_meta)
+                extra_meta = merged
             rec = build_record(
                 text=b.text,
                 rel_path=path,
@@ -359,7 +365,7 @@ class KqlFromMarkdownExtractor:
                 chunk_id=i,
                 n_chunks=n,
                 lang="KQL",
-                extra_meta={"kind": "kql", "title": getattr(b, "title", None), "category": cat},
+                extra_meta=extra_meta,
             )
             out.append(rec)
         return out

@@ -235,23 +235,28 @@ def build_record(
     bcount = len(text.encode("utf-8", "strict"))
     approx_tokens = tokens if tokens is not None else count_tokens(text, None, "code" if kind == "code" else "doc")
 
+    chunk_id_val = int(chunk_id) if chunk_id is not None else 1
+    n_chunks_val = int(n_chunks) if n_chunks is not None else 1
+
+    meta = {
+        "source": repo_url or (f"https://github.com/{repo_full_name}" if repo_full_name else None),
+        "repo": repo_full_name,
+        "path": rp,
+        "license": license_id,
+        "lang": lang,
+        "chunk_id": chunk_id_val,
+        "encoding": encoding,
+        "had_replacement": bool(had_replacement),
+        "sha256": sha256_text(text),
+        "tokens": approx_tokens,  
+        "approx_tokens": approx_tokens,
+        "bytes": bcount,
+    }
+    meta["n_chunks"] = n_chunks_val
+
     record = {
         "text": text,
-        "meta": {
-            "source": repo_url or (f"https://github.com/{repo_full_name}" if repo_full_name else None),
-            "repo": repo_full_name,
-            "path": rp,
-            "license": license_id,
-            "lang": lang,
-            "chunk_id": int(chunk_id or 1),
-            "n_chunks": int(n_chunks or 1),
-            "encoding": encoding,
-            "had_replacement": bool(had_replacement),
-            "sha256": sha256_text(text),
-            "tokens": approx_tokens,  # retained for backward compatibility (approximate)
-            "approx_tokens": approx_tokens,
-            "bytes": bcount,
-        },
+        "meta": meta,
     }
 
     # Drop None fields for cleanliness
