@@ -17,6 +17,7 @@ __all__ = [
     "GitignoreMatcher",
     "iter_repo_files",
     "collect_repo_files",
+    "read_file_prefix",
     "PatternFileSource",
 ]
 
@@ -44,6 +45,44 @@ DEFAULT_SKIP_FILES: set[str] = {
     ".DS_Store",
     "Thumbs.db",
 }
+
+
+def read_file_prefix(
+    path: Path,
+    max_bytes: int | None,
+    *,
+    chunk_size: int = 1024 * 1024,
+    file_size: int | None = None,
+) -> tuple[bytes, int]:
+    """
+    Read up to `max_bytes` from `path` and return (data, original_size).
+
+    When `max_bytes` is None the entire file is read using a chunked loop to
+    avoid transient spikes. The returned `file_size` reflects the on-disk size
+    (via `stat`) regardless of the truncated prefix length.
+    """
+    if chunk_size <= 0:
+        raise ValueError("chunk_size must be positive")
+    if file_size is None:
+        file_size = path.stat().st_size
+    limit = max_bytes if max_bytes is not None else None
+    buf = bytearray()
+    with path.open("rb") as fh:
+        if limit is None:
+            while True:
+                chunk = fh.read(chunk_size)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+        else:
+            remaining = max(0, limit)
+            while remaining > 0:
+                chunk = fh.read(min(chunk_size, remaining))
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                remaining -= len(chunk)
+    return bytes(buf), int(file_size)
 
 
 @dataclass(frozen=True)
@@ -331,12 +370,30 @@ class LocalDirSource(Source):
             max_file_bytes=cfg.max_file_bytes,
         ):
             try:
-                size = path.stat().st_size
-                data = path.read_bytes()
+                stat = path.stat()
+                size = stat.st_size
+            except Exception:
+                continue
+            prefix_limit = getattr(cfg, "read_prefix_bytes", None)
+            limit_for_read: int | None
+            if prefix_limit is None:
+                limit_for_read = None
+            else:
+                large_only = getattr(cfg, "read_prefix_for_large_files_only", True)
+                limit_for_read = None if (large_only and size <= prefix_limit) else prefix_limit
+            try:
+                data, original_size = read_file_prefix(path, limit_for_read, file_size=size)
             except Exception:
                 continue
             rel = str(path.relative_to(self.root)).replace("\\", "/")
-            yield FileItem(path=rel, data=data, size=size)
+            yield FileItem(
+                path=rel,
+                data=data,
+                size=original_size,
+                origin_path=str(path.resolve()),
+                stream_hint="file",
+                streamable=True,
+            )
 
 
 class PatternFileSource(Source):
@@ -391,11 +448,25 @@ class PatternFileSource(Source):
                     continue
                 if max_file_bytes is not None and size > max_file_bytes:
                     continue
+                prefix_limit = getattr(cfg, "read_prefix_bytes", None)
+                large_only = getattr(cfg, "read_prefix_for_large_files_only", True)
+                limit_for_read: int | None
+                if prefix_limit is None or (large_only and size <= prefix_limit):
+                    limit_for_read = None
+                else:
+                    limit_for_read = prefix_limit
                 try:
-                    data = path.read_bytes()
+                    data, original_size = read_file_prefix(path, limit_for_read, file_size=size)
                 except Exception:
                     continue
                 rel_str = str(rel_path).replace("\\", "/")
-                yield FileItem(path=rel_str, data=data, size=len(data))
+                yield FileItem(
+                    path=rel_str,
+                    data=data,
+                    size=original_size,
+                    origin_path=str(path.resolve()),
+                    stream_hint="file",
+                    streamable=True,
+                )
 
 

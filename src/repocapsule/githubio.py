@@ -105,7 +105,13 @@ def _build_request(url: str, *, accept: Optional[str] = None) -> urllib.request.
     return urllib.request.Request(url, headers=headers)
 
 
-def github_api_get(path: str, *, accept: Optional[str] = None, timeout: int = 30) -> Tuple[int, Dict[str, Any], bytes]:
+def github_api_get(
+    path: str,
+    *,
+    accept: Optional[str] = None,
+    timeout: int = 30,
+    client: Optional[safe_http.SafeHttpClient] = None,
+) -> Tuple[int, Dict[str, Any], bytes]:
     """GET `path` (starting with '/') from the GitHub API.
 
     Returns (status, headers_dict, body_bytes). Does not raise on HTTPError; it
@@ -115,8 +121,9 @@ def github_api_get(path: str, *, accept: Optional[str] = None, timeout: int = 30
         path = "/" + path
     url = _API_BASE + path
     req = _build_request(url, accept=accept)
+    http_client = client or safe_http.get_global_http_client()
     try:
-        with safe_http.SAFE_HTTP_CLIENT.open(req, timeout=timeout) as resp:
+        with http_client.open_with_retries(req, timeout=timeout, retries=2) as resp:
             body = resp.read()
             headers = {k: v for k, v in resp.headers.items()}
             return resp.status, headers, body
@@ -147,9 +154,9 @@ def _rate_limit_note(headers: Dict[str, Any]) -> str:
 # Repo info / license API
 # -----------------------
 
-def get_repo_info(spec: RepoSpec) -> Dict[str, Any]:
+def get_repo_info(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] = None) -> Dict[str, Any]:
     """Return repo metadata dict: {default_branch, license_spdx?, license_name?}."""
-    status, headers, body = github_api_get(f"/repos/{spec.owner}/{spec.repo}")
+    status, headers, body = github_api_get(f"/repos/{spec.owner}/{spec.repo}", client=client)
     if status != 200:
         note = _rate_limit_note(headers)
         raise RuntimeError(f"GitHub /repos request failed: HTTP {status}{note}: {body[:256]!r}")
@@ -166,6 +173,7 @@ def get_repo_info(spec: RepoSpec) -> Dict[str, Any]:
     status, headers, body = github_api_get(
         f"/repos/{spec.owner}/{spec.repo}/license",
         accept="application/vnd.github+json",
+        client=client,
     )
     if status == 200:
         licobj = json.loads(body.decode("utf-8", "replace"))
@@ -184,9 +192,9 @@ def get_repo_info(spec: RepoSpec) -> Dict[str, Any]:
     return out
 
 
-def get_repo_license_spdx(spec: RepoSpec) -> Optional[str]:
+def get_repo_license_spdx(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] = None) -> Optional[str]:
     try:
-        info = get_repo_info(spec)
+        info = get_repo_info(spec, client=client)
     except Exception:
         return None
     return info.get("license_spdx")
@@ -205,17 +213,18 @@ def download_zipball_to_temp(
     ref: Optional[str] = None,
     timeout: float = _DEF_ZIP_TIMEOUT,
     chunk_size: int = 1024 * 1024,                  # 1 MiB
-    max_zip_bytes: int = 3 * 1024 * 1024 * 1024     # 3 GiB hard cap
+    max_zip_bytes: int = 3 * 1024 * 1024 * 1024,    # 3 GiB hard cap
+    client: Optional[safe_http.SafeHttpClient] = None,
 ) -> str:
     """Download a repository zipball to a temp file and return its path.
 
     Streamed to disk in chunks to avoid loading the whole archive into RAM.
     """
-    # Resolve ref
+    http_client = client or safe_http.get_global_http_client()
     ref_used = ref or spec.ref
     if not ref_used:
         try:
-            info = get_repo_info(spec)
+            info = get_repo_info(spec, client=http_client)
             ref_used = info.get("default_branch") or "main"
         except Exception:
             ref_used = "main"
@@ -224,7 +233,7 @@ def download_zipball_to_temp(
     req = _build_request(url, accept="application/vnd.github+json")
 
     try:
-        with safe_http.SAFE_HTTP_CLIENT.open(req, timeout=timeout) as resp:
+        with http_client.open_with_retries(req, timeout=timeout, retries=2) as resp:
             if resp.status >= 400:
                 body = resp.read()
                 note = _rate_limit_note({k: v for k, v in resp.headers.items()})
@@ -300,8 +309,8 @@ def iter_zip_members(
     max_total_uncompressed: int = 2 * 1024 * 1024 * 1024,  # 2 GiB cap across all files
     max_members: int = 200_000,
     max_compression_ratio: float = 100.0,                   # file_size / compress_size
-) -> Iterator[Tuple[str, bytes]]:
-    """Yield (relative_path, data_bytes) for each regular file in the zipball.
+) -> Iterator[Tuple[str, bytes, int]]:
+    """Yield (relative_path, data_bytes, original_size) for files in the zipball.
 
     Zip-bomb defenses:
       - Reject if estimated uncompressed sum (ZipInfo.file_size) exceeds `max_total_uncompressed`
@@ -385,7 +394,7 @@ def iter_zip_members(
             if total > max_total_uncompressed:
                 raise RuntimeError("Total uncompressed bytes exceeded safety limit")
 
-            yield rel, data
+            yield rel, data, file_sz
 
 
 class GitHubZipSource(Source):
@@ -401,6 +410,7 @@ class GitHubZipSource(Source):
         config,
         context: Optional[RepoContext] = None,
         download_timeout: Optional[float] = None,
+        http_client: Optional[safe_http.SafeHttpClient] = None,
     ) -> None:
         spec = parse_github_url(url)
         if not spec:
@@ -411,14 +421,20 @@ class GitHubZipSource(Source):
         self._subpath = spec.subpath.strip("/").replace("\\", "/") if spec.subpath else None
         self._zip_path: str | None = None
         self._download_timeout = download_timeout
+        self._http_client = http_client
         self.include_exts = normalize_extensions(getattr(config, "include_exts", None))
         self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
 
     def __enter__(self) -> "GitHubZipSource":
+        client = self._http_client or safe_http.get_global_http_client()
         if self._download_timeout is None:
-            self._zip_path = download_zipball_to_temp(self.spec)
+            self._zip_path = download_zipball_to_temp(self.spec, client=client)
         else:
-            self._zip_path = download_zipball_to_temp(self.spec, timeout=self._download_timeout)
+            self._zip_path = download_zipball_to_temp(
+                self.spec,
+                timeout=self._download_timeout,
+                client=client,
+            )
         if self._zip_path:
             license_id, meta = detect_license_in_zip(self._zip_path, self._subpath)
             if license_id and (self.context is None or not self.context.license_id):
@@ -436,7 +452,7 @@ class GitHubZipSource(Source):
     def iter_files(self) -> Iterable[FileItem]:
         assert self._zip_path, "GitHubZipSource must be entered before use"
         cfg = self._cfg
-        for rel_path, data in iter_zip_members(
+        for rel_path, data, original_size in iter_zip_members(
             self._zip_path,
             max_bytes_per_file=cfg.per_file_cap,
             max_total_uncompressed=cfg.max_total_uncompressed,
@@ -453,6 +469,10 @@ class GitHubZipSource(Source):
                 continue
             if self.exclude_exts is not None and ext in self.exclude_exts:
                 continue
-            yield FileItem(path=rel_norm, data=data, size=len(data))
-
-
+            yield FileItem(
+                path=rel_norm,
+                data=data,
+                size=original_size or len(data),
+                stream_hint="zip-member",
+                streamable=False,
+            )

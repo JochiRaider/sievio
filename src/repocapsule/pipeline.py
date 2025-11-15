@@ -8,13 +8,13 @@ from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, FIRST_CO
 from dataclasses import dataclass, field
 from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callable, TypeVar
 from pathlib import Path
+import os
 
-from .config import RepocapsuleConfig
+from .config import QCMode, RepocapsuleConfig
 from .interfaces import Source, Sink, RepoContext, Record
-from .convert import iter_records_from_bytes
+from .convert import DefaultExtractor
 from .log import get_logger
-from .qc_utils import update_dup_family_counts, top_dup_families
-from .qc_controller import InlineQCController
+from .qc_controller import InlineQCController, QCSummaryTracker
 
 
 log = get_logger(__name__)
@@ -36,12 +36,14 @@ class _ProcessFileCallable:
         item = work.item
         ctx = work.ctx
         rel = getattr(item, "path", None) or getattr(item, "rel_path", None)
-        data = getattr(item, "data", None)
-        if rel is None or data is None:
-            raise ValueError("FileItem missing 'path' or 'data'")
-        recs_iter = iter_records_from_bytes(
-            data,
-            rel,
+        if rel is None:
+            raise ValueError("FileItem missing 'path'")
+        extractor = getattr(self.config.pipeline, "file_extractor", None)
+        if extractor is None:
+            extractor = DefaultExtractor()
+            self.config.pipeline.file_extractor = extractor
+        recs_iter = extractor.extract(
+            item,
             config=self.config,
             context=ctx,
         )
@@ -53,7 +55,7 @@ class _ProcessFileCallable:
 # Stats
 # ---------------------------------------------------------------------------
 
-@dataclass
+@dataclass(slots=True)
 class PipelineStats:
     files: int = 0
     bytes: int = 0
@@ -61,16 +63,7 @@ class PipelineStats:
     sink_errors: int = 0
     source_errors: int = 0
     by_ext: Dict[str, int] = field(default_factory=dict)
-    qc_scored: int = 0
-    qc_kept: int = 0
-    qc_dropped_low_score: int = 0
-    qc_dropped_near_dup: int = 0
-    qc_errors: int = 0
-    qc_candidates_low_score: int = 0
-    qc_candidates_near_dup: int = 0
-    qc_enabled: bool = False
-    qc_mode: str = "inline"
-    qc_dup_families: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    qc: QCSummaryTracker = field(default_factory=QCSummaryTracker)
 
     def as_dict(self) -> Dict[str, object]:
         # Keep a simple, stable shape for external reporting/JSONL footers.
@@ -82,25 +75,11 @@ class PipelineStats:
             "source_errors": int(self.source_errors),
             "by_ext": dict(self.by_ext),
         }
-        data["qc"] = {
-            "enabled": bool(self.qc_enabled),
-            "mode": self.qc_mode,
-            "scored": int(self.qc_scored),
-            "kept": int(self.qc_kept),
-            "dropped_low_score": int(self.qc_dropped_low_score),
-            "dropped_near_dup": int(self.qc_dropped_near_dup),
-            "errors": int(self.qc_errors),
-            "candidates_low_score": int(self.qc_candidates_low_score),
-            "candidates_near_dup": int(self.qc_candidates_near_dup),
-            "top_dup_families": top_dup_families(self.qc_dup_families),
-        }
+        data["qc"] = self.qc.as_dict()
         return data
 
-    def record_dup_family(self, family_id: Optional[str], path: Optional[str]) -> None:
-        update_dup_family_counts(self.qc_dup_families, family_id, path)
-
     def qc_top_dup_families(self) -> List[Dict[str, Any]]:
-        return top_dup_families(self.qc_dup_families)
+        return self.qc.top_dup_families()
 
 
 
@@ -115,6 +94,8 @@ def process_items_parallel(
     on_submit_error: Optional[Callable[[T, BaseException], None]] = None,
     on_worker_error: Optional[Callable[[BaseException], None]] = None,
     executor_kind: str = "thread",
+    initializer: Optional[Callable[[], Any]] = None,
+    initargs: tuple[Any, ...] = (),
 ) -> None:
     """
     Execute work items in a bounded ThreadPoolExecutor and stream results.
@@ -137,18 +118,32 @@ def process_items_parallel(
         If True, re-raise errors from submission/worker execution immediately.
     on_submit_error / on_worker_error:
         Optional callbacks for bookkeeping/logging when failures occur.
+    executor_kind:
+        "thread" (default) or "process". Process executors require picklable work
+        items and callables.
+    initializer / initargs:
+        Optional initializer invoked once per process when using a process executor.
+        Ignored for thread executors. The initializer must be picklable and any
+        required state should be stored in module-level globals.
     """
     if max_workers < 1:
         raise ValueError("process_items_parallel requires max_workers >= 1")
     window = max(window, max_workers)
     kind = (executor_kind or "thread").strip().lower()
+    initargs = tuple(initargs or ())
+    extra_kwargs: Dict[str, Any] = {}
     if kind == "process":
         executor_cls = ProcessPoolExecutor
+        if initializer is not None:
+            extra_kwargs["initializer"] = initializer
+            extra_kwargs["initargs"] = initargs
     else:
         executor_cls = ThreadPoolExecutor
         kind = "thread"
+        if initializer is not None:
+            log.debug("Initializer ignored for thread executors in process_items_parallel.")
     log.debug("process_items_parallel using %s executor (max_workers=%d)", kind, max_workers)
-    with executor_cls(max_workers=max_workers) as pool:
+    with executor_cls(max_workers=max_workers, **extra_kwargs) as pool:
         pending: List[Future[Tuple[Any, Iterable[Record]]]] = []
 
         def _drain(block: bool = False) -> None:
@@ -234,6 +229,21 @@ def _ext_key(path: str) -> str:
         return ""
 
 
+def _resolve_pipeline_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str, bool]:
+    """
+    Normalize pipeline concurrency knobs (workers/window/executor-kind/fail-fast).
+    """
+    pc = cfg.pipeline
+    max_workers = pc.max_workers or (os.cpu_count() or 1)
+    max_workers = max(1, max_workers)
+    window = pc.submit_window or (max_workers * 4)
+    kind = (pc.executor_kind or "thread").strip().lower()
+    if kind not in {"thread", "process"}:
+        kind = "thread"
+    fail_fast = bool(pc.fail_fast)
+    return max_workers, window, kind, fail_fast
+
+
 # ---------------------------------------------------------------------------
 # Engine
 # ---------------------------------------------------------------------------
@@ -256,17 +266,20 @@ class PipelineEngine:
         stats = self.stats
         qc_cfg = cfg.qc
 
-        stats.qc_enabled = bool(qc_cfg.enabled)
-        stats.qc_mode = qc_cfg.mode
+        tracker = stats.qc
+        tracker.enabled = bool(qc_cfg.enabled)
+        tracker.mode = qc_cfg.mode
+        tracker.min_score = qc_cfg.min_score
+        tracker.drop_near_dups = bool(qc_cfg.drop_near_dups)
 
-        advisory_mode = qc_cfg.mode == "advisory"
+        advisory_mode = qc_cfg.mode == QCMode.ADVISORY
         qc_active = bool(
             qc_cfg.enabled
-            and qc_cfg.mode == "inline"
+            and qc_cfg.mode == QCMode.INLINE
             and getattr(qc_cfg, "scorer", None)
         )
 
-        if qc_cfg.enabled and qc_cfg.mode == "inline" and not qc_active:
+        if qc_cfg.enabled and qc_cfg.mode == QCMode.INLINE and not qc_active:
             self.log.warning("QC enabled but no scorer is configured; skipping inline annotations.")
 
         self.qc_controller = None
@@ -438,6 +451,9 @@ class PipelineEngine:
         processor: _ProcessFileCallable,
         sinks: Sequence[Sink],
         window: int,
+        max_workers: int,
+        executor_kind: str,
+        fail_fast: bool,
     ) -> None:
         cfg = self.config
         stats = self.stats
@@ -463,21 +479,21 @@ class PipelineEngine:
             _items_with_stats(),
             processor,
             _write_records,
-            max_workers=cfg.pipeline.max_workers,
+            max_workers=max_workers,
             window=window,
-            fail_fast=cfg.pipeline.fail_fast,
+            fail_fast=fail_fast,
             on_submit_error=_on_submit_error,
             on_worker_error=_on_worker_error,
-            executor_kind=cfg.pipeline.executor_kind,
+            executor_kind=executor_kind,
         )
 
     def _log_qc_summary(self) -> None:
         cfg = self.config
-        stats = self.stats
-        if not cfg.qc.enabled:
+        tracker = self.stats.qc
+        if not tracker.enabled:
             return
         min_score_str = (
-            f"{cfg.qc.min_score:.1f}" if cfg.qc.min_score is not None else "off"
+            f"{tracker.min_score:.1f}" if tracker.min_score is not None else "off"
         )
         self.log.info(
             "QC summary (min_score=%s, drop_near_dups=%s)\n"
@@ -489,16 +505,16 @@ class PipelineEngine:
             "  candidates_near_dup: %d\n"
             "  errors: %d",
             min_score_str,
-            "on" if cfg.qc.drop_near_dups else "off",
-            stats.qc_scored,
-            stats.qc_kept,
-            stats.qc_dropped_low_score,
-            stats.qc_dropped_near_dup,
-            stats.qc_candidates_low_score,
-            stats.qc_candidates_near_dup,
-            stats.qc_errors,
+            "on" if tracker.drop_near_dups else "off",
+            tracker.scored,
+            tracker.kept,
+            tracker.dropped_low_score,
+            tracker.dropped_near_dup,
+            tracker.candidates_low_score,
+            tracker.candidates_near_dup,
+            tracker.errors,
         )
-        top = stats.qc_top_dup_families()
+        top = tracker.top_dup_families()
         if top:
             lines = [
                 f"    - {entry['dup_family_id']}: count={entry['count']} examples={entry.get('examples', [])}"
@@ -508,7 +524,7 @@ class PipelineEngine:
         else:
             self.log.info("Largest duplicate families: none")
 
-    def run(self) -> Dict[str, int]:
+    def run(self) -> PipelineStats:
         cfg = self.config
         self.stats = PipelineStats()
         stats = self.stats
@@ -527,26 +543,29 @@ class PipelineEngine:
             processor = self._make_processor(materialize=materialize_results)
             source_items = self._iter_source_items(open_sources)
 
-            max_workers = cfg.pipeline.max_workers
+            max_workers, window, executor_kind, fail_fast = _resolve_pipeline_concurrency(cfg)
+
             if max_workers <= 1:
                 for work in source_items:
                     self._process_serial(
                         work,
                         processor=processor,
                         sinks=open_sinks,
-                        fail_fast=cfg.pipeline.fail_fast,
+                        fail_fast=fail_fast,
                     )
             else:
-                window = cfg.pipeline.submit_window or (4 * max_workers)
                 self._process_parallel(
                     source_items,
                     processor=processor,
                     sinks=open_sinks,
                     window=window,
+                    max_workers=max_workers,
+                    executor_kind=executor_kind,
+                    fail_fast=fail_fast,
                 )
 
         self._log_qc_summary()
-        return stats.as_dict()
+        return stats
 
 # ---------------------------------------------------------------------------
 # Public API
@@ -555,6 +574,7 @@ class PipelineEngine:
 def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
     """Run the end-to-end pipeline described by ``config``."""
     engine = PipelineEngine(config=config)
-    return engine.run()
+    stats = engine.run()
+    return stats.as_dict()
 
 __all__ = ["run_pipeline", "PipelineStats", "PipelineEngine"]

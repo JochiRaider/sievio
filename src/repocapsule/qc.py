@@ -10,6 +10,7 @@ import os
 from collections import deque
 from typing import Any, Dict, Iterable, Optional, Sequence
 
+from .records import is_summary_record
 from .qc_utils import (
     TEXTY_LC,
     MinHashLSH,
@@ -182,8 +183,7 @@ class JSONLQualityScorer:
                     rec = json.loads(line)
                 except Exception:
                     continue
-                meta = rec.get("meta") if isinstance(rec, dict) else None
-                if isinstance(meta, dict) and meta.get("kind") == "qc_summary":
+                if is_summary_record(rec):
                     continue
                 try:
                     rows.append(self.score_record(rec))
@@ -272,5 +272,4 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_csv = args.out or (str(os.path.splitext(str(args.jsonl))[0]) + "_quality.csv")
     write_csv(rows, out_csv)
     return 0
-
 

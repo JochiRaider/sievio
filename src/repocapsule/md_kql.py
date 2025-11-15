@@ -351,7 +351,7 @@ class KqlFromMarkdownExtractor:
         out: List[Record] = []
         n = len(blocks)
         for i, b in enumerate(blocks, start=1):
-            extra_meta = {"kind": "kql", "title": getattr(b, "title", None), "category": cat}
+            extra_meta = {"subkind": "kql", "title": getattr(b, "title", None), "category": cat}
             if context_meta:
                 merged = dict(context_meta)
                 merged.update(extra_meta)

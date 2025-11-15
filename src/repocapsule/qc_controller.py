@@ -5,16 +5,18 @@ Helpers for inline QC execution and summary building.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+from .config import QCMode
 from .interfaces import QualityScorer, Record
+from .records import ensure_meta_dict, merge_meta_defaults
 from .qc_utils import update_dup_family_counts, top_dup_families
 
 
-@dataclass
+@dataclass(slots=True)
 class QCSummaryTracker:
     enabled: bool = False
-    mode: str = "inline"
+    mode: str = QCMode.INLINE
     min_score: Optional[float] = None
     drop_near_dups: bool = False
     scored: int = 0
@@ -25,6 +27,7 @@ class QCSummaryTracker:
     candidates_low_score: int = 0
     candidates_near_dup: int = 0
     dup_families: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    top_dup_snapshot: List[Dict[str, Any]] = field(default_factory=list)
 
     def observe(self, qc_result: Dict[str, Any], *, apply_gates: bool = True) -> bool:
         """Update counters based on a QC row, returning True if it should be kept."""
@@ -33,6 +36,8 @@ class QCSummaryTracker:
         path = qc_result.get("path")
         if family_id:
             update_dup_family_counts(self.dup_families, family_id, path)
+            if self.top_dup_snapshot:
+                self.top_dup_snapshot.clear()
 
         low_score = self._is_low_score(qc_result)
         near_dup = bool(qc_result.get("near_dup"))
@@ -61,6 +66,8 @@ class QCSummaryTracker:
         return {
             "enabled": bool(self.enabled),
             "mode": self.mode,
+            "min_score": self.min_score,
+            "drop_near_dups": bool(self.drop_near_dups),
             "scored": int(self.scored),
             "kept": int(self.kept),
             "dropped_low_score": int(self.dropped_low_score),
@@ -68,7 +75,7 @@ class QCSummaryTracker:
             "errors": int(self.errors),
             "candidates_low_score": int(self.candidates_low_score),
             "candidates_near_dup": int(self.candidates_near_dup),
-            "top_dup_families": top_dup_families(self.dup_families),
+            "top_dup_families": self.top_dup_families(),
         }
 
     def _is_low_score(self, qc_result: Dict[str, Any]) -> bool:
@@ -81,6 +88,32 @@ class QCSummaryTracker:
             return float(score_value) < float(self.min_score)
         except Exception:
             return False
+
+    def top_dup_families(self) -> List[Dict[str, Any]]:
+        if self.top_dup_snapshot:
+            return [dict(entry) for entry in self.top_dup_snapshot]
+        return top_dup_families(self.dup_families)
+
+    @classmethod
+    def from_summary_dict(cls, data: Mapping[str, Any]) -> "QCSummaryTracker":
+        tracker = cls()
+        tracker.enabled = bool(data.get("enabled"))
+        mode = data.get("mode")
+        if isinstance(mode, str) and mode:
+            tracker.mode = mode
+        tracker.scored = int(data.get("scored") or 0)
+        tracker.kept = int(data.get("kept") or 0)
+        tracker.dropped_low_score = int(data.get("dropped_low_score") or 0)
+        tracker.dropped_near_dup = int(data.get("dropped_near_dup") or 0)
+        tracker.errors = int(data.get("errors") or 0)
+        tracker.candidates_low_score = int(data.get("candidates_low_score") or 0)
+        tracker.candidates_near_dup = int(data.get("candidates_near_dup") or 0)
+        tracker.drop_near_dups = bool(data.get("drop_near_dups", tracker.drop_near_dups))
+        tracker.min_score = data.get("min_score", tracker.min_score)
+        top = data.get("top_dup_families") or []
+        if isinstance(top, list):
+            tracker.top_dup_snapshot = [dict(entry) for entry in top if isinstance(entry, dict)]
+        return tracker
 
 
 class InlineQCController:
@@ -102,21 +135,21 @@ class InlineQCController:
         self.scorer = scorer
         self.logger = logger
         self.enforce_drops = enforce_drops
-        dup_families = getattr(stats, "qc_dup_families", None)
-        self.summary = QCSummaryTracker(
-            enabled=True,
-            mode=config.mode,
-            min_score=config.min_score,
-            drop_near_dups=bool(config.drop_near_dups),
-            dup_families=dup_families if isinstance(dup_families, dict) else {},
-        )
+        tracker = getattr(stats, "qc", None)
+        if not isinstance(tracker, QCSummaryTracker):
+            tracker = QCSummaryTracker()
+            stats.qc = tracker  # type: ignore[attr-defined]
+        tracker.enabled = True
+        tracker.mode = config.mode
+        tracker.min_score = config.min_score
+        tracker.drop_near_dups = bool(config.drop_near_dups)
+        self.summary = tracker
 
     def should_keep(self, record: Record) -> bool:
         try:
             qc_result = self.scorer.score_record(record)
         except Exception as exc:
             self.summary.record_error()
-            self._sync_stats()
             if getattr(self.cfg, "fail_on_error", False):
                 raise
             if self.logger:
@@ -126,36 +159,20 @@ class InlineQCController:
 
         keep = self.summary.observe(qc_result, apply_gates=self.enforce_drops)
         self._merge_qc_meta(record, qc_result)
-        self._sync_stats()
         return keep
 
     def summary_dict(self) -> Dict[str, Any]:
         return self.summary.as_dict()
 
-    def _sync_stats(self) -> None:
-        self.stats.qc_scored = self.summary.scored
-        self.stats.qc_kept = self.summary.kept
-        self.stats.qc_dropped_low_score = self.summary.dropped_low_score
-        self.stats.qc_dropped_near_dup = self.summary.dropped_near_dup
-        self.stats.qc_errors = self.summary.errors
-        self.stats.qc_candidates_low_score = self.summary.candidates_low_score
-        self.stats.qc_candidates_near_dup = self.summary.candidates_near_dup
-
     def _merge_qc_meta(self, record: Record, qc_result: Dict[str, Any]) -> None:
         if not isinstance(record, dict):
             return
-        meta = record.get("meta")
-        if not isinstance(meta, dict):
-            meta = {}
-            record["meta"] = meta
+        meta = ensure_meta_dict(record)
         tokens_est = qc_result.get("tokens")
         if tokens_est is not None:
             meta["approx_tokens"] = tokens_est
             meta.setdefault("tokens", tokens_est)
-        for key, value in qc_result.items():
-            if key in meta or value is None:
-                continue
-            meta[key] = value
+        merge_meta_defaults(record, qc_result)
 
 
 def summarize_qc_rows(

@@ -8,8 +8,8 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin
 
 from .chunk import ChunkPolicy
-from .factories import make_bytes_handlers, make_http_client, make_qc_scorer
-from .interfaces import Extractor, RepoContext, Source, Record
+from .factories import make_bytes_handlers, make_qc_scorer
+from .interfaces import Extractor, FileExtractor, RepoContext, Source, Record
 from .log import configure_logging, PACKAGE_LOGGER_NAME
 from .safe_http import SafeHttpClient, set_global_http_client
 
@@ -23,6 +23,39 @@ def _default_bytes_handlers() -> Sequence[Tuple[Sniff, BytesHandler]]:
     return tuple(make_bytes_handlers())
 
 # ---------------------------------------------------------------------------
+# QC mode helpers
+# ---------------------------------------------------------------------------
+
+
+class QCMode:
+    INLINE = "inline"
+    POST = "post"
+    ADVISORY = "advisory"
+    OFF = "off"
+    ALL = {INLINE, POST, ADVISORY}
+    WITH_OFF = ALL | {OFF}
+
+    @classmethod
+    def normalize(cls, value: Optional[str]) -> str:
+        mode = (value or cls.INLINE).strip().lower()
+        if mode not in cls.WITH_OFF:
+            raise ValueError(f"Invalid QC mode: {value!r}. Expected one of {sorted(cls.WITH_OFF)}")
+        return mode
+
+    @classmethod
+    def is_inline(cls, mode: str) -> bool:
+        return mode == cls.INLINE
+
+    @classmethod
+    def is_post(cls, mode: str) -> bool:
+        return mode == cls.POST
+
+    @classmethod
+    def is_advisory(cls, mode: str) -> bool:
+        return mode == cls.ADVISORY
+
+
+# ---------------------------------------------------------------------------
 # Source configs
 # ---------------------------------------------------------------------------
 
@@ -34,6 +67,8 @@ class LocalDirSourceConfig:
     follow_symlinks: bool = False
     respect_gitignore: bool = True
     max_file_bytes: Optional[int] = 200 * 1024 * 1024
+    read_prefix_bytes: Optional[int] = None
+    read_prefix_for_large_files_only: bool = True
 
 
 @dataclass(slots=True)
@@ -49,12 +84,13 @@ class GitHubSourceConfig:
 @dataclass(slots=True)
 class PdfSourceConfig:
     timeout: int = 60
-    max_pdf_bytes: int = 200 * 1024 * 1024
+    max_pdf_bytes: int = 200 * 1024 * 1024  # Streaming cap; responses exceeding it are aborted.
     max_links: int = 200
     require_pdf: bool = True
     include_ambiguous: bool = False
     retries: int = 1
     user_agent: str = "repocapsule/0.1 (+https://github.com)"
+    client: Optional[SafeHttpClient] = None
 
 
 @dataclass(slots=True)
@@ -74,7 +110,7 @@ class DecodeConfig:
     normalize: Optional[str] = "NFC"
     strip_controls: bool = True
     fix_mojibake: bool = True
-    max_bytes_per_file: Optional[int] = None
+    max_bytes_per_file: Optional[int] = None  # Bytes passed to the decoder per file (soft cap).
 
 
 @dataclass(slots=True)
@@ -86,7 +122,16 @@ class ChunkConfig:
 
 @dataclass(slots=True)
 class PipelineConfig:
+    """
+    Controls pipeline concurrency and processing behavior.
+
+    max_workers = 0 → auto (os.cpu_count or 1)
+    submit_window = None → defaults to max_workers * 4
+    executor_kind ∈ {"thread", "process"}
+    """
+
     extractors: Sequence[Extractor] = field(default_factory=tuple)
+    file_extractor: Optional[FileExtractor] = None
     bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(
         default_factory=_default_bytes_handlers
     )
@@ -127,6 +172,19 @@ class HttpConfig:
     max_redirects: int = 5
     allowed_redirect_suffixes: Tuple[str, ...] = ("github.com",)
     client: Optional[SafeHttpClient] = None
+    as_global: bool = True
+
+    def build_client(self) -> SafeHttpClient:
+        """Construct (or reuse) the SafeHttpClient for this config without mutating globals."""
+        if self.client is not None:
+            return self.client
+        client = SafeHttpClient(
+            timeout=self.timeout,
+            max_redirects=self.max_redirects,
+            allowed_redirect_suffixes=self.allowed_redirect_suffixes,
+        )
+        self.client = client
+        return client
 
 
 # ---------------------------------------------------------------------------
@@ -142,8 +200,16 @@ class QCConfig:
     fail_on_error: bool = False
     min_score: Optional[float] = 60.0
     drop_near_dups: bool = False
-    mode: str = "inline"
+    mode: str = QCMode.INLINE
     parallel_post: bool = False
+    post_executor_kind: Optional[str] = None
+    post_max_workers: Optional[int] = None
+    post_submit_window: Optional[int] = None
+
+    def normalize_mode(self) -> str:
+        normalized = QCMode.normalize(self.mode)
+        self.mode = normalized
+        return normalized
 
 
 @dataclass(slots=True)
@@ -249,47 +315,73 @@ class RepocapsuleConfig:
 
     def prepare(self) -> None:
         self.logging.apply()
-        client = make_http_client(self.http)
-        self.http.client = client
-        set_global_http_client(client)
-        if not self.pipeline.bytes_handlers:
-            self.pipeline.bytes_handlers = tuple(make_bytes_handlers())
-        if self.qc.enabled and not self.qc.scorer:
-            scorer = make_qc_scorer(self.qc)
-            if scorer is None:
-                raise RuntimeError("QC extras not installed; disable QC or install optional deps.")
-            self.qc.scorer = scorer
-        if self.qc.enabled and self.qc.scorer is None:
-            raise RuntimeError("QC extras not installed; disable QC or install optional deps.")
-        mode = (self.qc.mode or "inline").lower()
-        allowed_modes = {"inline", "post", "off", "advisory"}
-        if mode not in allowed_modes:
-            raise ValueError(f"Invalid qc.mode {self.qc.mode!r}; expected one of {sorted(allowed_modes)}")
-        if mode == "off":
-            self.qc.enabled = False
-        self.qc.mode = mode
+        self._prepare_http()
+        self._prepare_sources()
+        self._prepare_sinks()
+        self._prepare_pipeline()
+        self._prepare_qc()
         self.validate()
 
-    def validate(self) -> None:
-        meta = self.metadata
-        p_jsonl = meta.primary_jsonl
-        prompt = meta.prompt_path
-        if p_jsonl and prompt:
-            try:
-                if Path(p_jsonl).resolve() == Path(prompt).resolve():
-                    raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
-            except Exception:
-                if p_jsonl == prompt:
-                    raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
+    def _prepare_http(self) -> None:
+        client = self.http.build_client()
+        self.http.client = client
+        if self.http.as_global:
+            set_global_http_client(client)
 
-        if self.qc.enabled and self.qc.mode not in {"inline", "post", "advisory"}:
+    def _prepare_sources(self) -> None:
+        # Placeholder for future normalization of source configs.
+        return None
+
+    def _prepare_sinks(self) -> None:
+        # Placeholder for future sink/output preparation logic.
+        return None
+
+    def _prepare_pipeline(self) -> None:
+        if not self.pipeline.bytes_handlers:
+            self.pipeline.bytes_handlers = tuple(make_bytes_handlers())
+        if self.pipeline.file_extractor is None:
+            from .convert import DefaultExtractor  # local import to avoid cycle
+
+            self.pipeline.file_extractor = DefaultExtractor()
+
+    def _prepare_qc(self) -> None:
+        qc_cfg = self.qc
+        if qc_cfg.enabled and not qc_cfg.scorer:
+            scorer = make_qc_scorer(qc_cfg)
+            if scorer is None:
+                raise RuntimeError(
+                    "QC extras not installed; disable QC or install optional deps."
+                )
+            qc_cfg.scorer = scorer
+        if qc_cfg.enabled and qc_cfg.scorer is None:
+            raise RuntimeError("QC extras not installed; disable QC or install optional deps.")
+        mode = qc_cfg.normalize_mode()
+        if mode == QCMode.OFF:
+            qc_cfg.enabled = False
+
+    def validate(self) -> None:
+        self._validate_paths()
+        if self.qc.enabled and self.qc.mode not in QCMode.ALL:
             raise ValueError("QC enabled but mode is set to 'off'; disable QC or change mode.")
 
-        if self.qc.enabled and self.qc.mode in {"inline", "advisory"} and not self.qc.scorer:
+        if self.qc.enabled and self.qc.mode in {QCMode.INLINE, QCMode.ADVISORY} and not self.qc.scorer:
             raise ValueError("QC mode requires a scorer; ensure qc.scorer is configured or extras installed.")
 
         if self.pipeline.executor_kind not in {"thread", "process"}:
             raise ValueError("pipeline.executor_kind must be 'thread' or 'process'.")
+
+    def _validate_paths(self) -> None:
+        meta = self.metadata
+        p_jsonl = meta.primary_jsonl
+        prompt = meta.prompt_path
+        if not (p_jsonl and prompt):
+            return
+        try:
+            if Path(p_jsonl).resolve() == Path(prompt).resolve():
+                raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
+        except Exception:
+            if p_jsonl == prompt:
+                raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
 
     # -------------------------
     # Serialization helpers
@@ -316,7 +408,7 @@ class RepocapsuleConfig:
 _SKIP_FIELDS: Dict[Type[Any], set[str]] = {
     SourceConfig: {"sources"},
     SinkConfig: {"sinks"},
-    PipelineConfig: {"extractors", "bytes_handlers"},
+    PipelineConfig: {"extractors", "bytes_handlers", "file_extractor"},
     HttpConfig: {"client"},
     QCConfig: {"scorer"},
 }

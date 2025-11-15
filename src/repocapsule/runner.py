@@ -3,13 +3,13 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, replace, asdict
 from pathlib import Path
 from typing import Optional, Dict, Any, Sequence, Mapping, List, Iterator, Iterable, Tuple
 import json
 import os
 
-from .config import RepocapsuleConfig
+from .config import QCConfig, QCMode, RepocapsuleConfig
 from .factories import (
     SinkFactoryResult,
     build_default_sinks,
@@ -22,10 +22,11 @@ from .factories import (
 )
 from .interfaces import RepoContext
 from .licenses import detect_license_in_tree, apply_license_to_context
-from .pipeline import run_pipeline, process_items_parallel, PipelineEngine
+from .pipeline import process_items_parallel, PipelineEngine
 from .githubio import get_repo_info, parse_github_url
 from .log import get_logger
-from .qc_controller import summarize_qc_rows
+from .qc_controller import QCSummaryTracker, summarize_qc_rows
+from .records import RunSummaryMeta, is_summary_record
 
 try:  
     from .qc import JSONLQualityScorer, score_jsonl_to_csv, write_csv
@@ -45,16 +46,13 @@ class RunSummary:
     metadata: Dict[str, Any]
 
     def to_record(self) -> Dict[str, Any]:
-        return {
-            "text": "",
-            "meta": {
-                "kind": "run_summary",
-                "config": self.config,
-                "stats": self.stats,
-                "qc_summary": self.qc_summary,
-                "metadata": self.metadata,
-            },
-        }
+        meta = RunSummaryMeta(
+            config=self.config,
+            stats=self.stats,
+            qc_summary=self.qc_summary,
+            metadata=self.metadata,
+        )
+        return {"text": "", "meta": meta.to_dict()}
 
 
 # ---------- One generic entry point ----------
@@ -64,8 +62,8 @@ def convert(config: RepocapsuleConfig | PipelineEngine) -> Dict[str, int]:
     before delegating to the pipeline.
     """
     if isinstance(config, PipelineEngine):
-        cfg = config.config
-        stats = config.run()
+        engine = config
+        cfg = engine.config
     else:
         cfg = config
         cfg.prepare()
@@ -73,9 +71,12 @@ def convert(config: RepocapsuleConfig | PipelineEngine) -> Dict[str, int]:
             raise ValueError("RepocapsuleConfig.sources.sources must contain at least one Source")
         if not cfg.sinks.sinks:
             raise ValueError("RepocapsuleConfig.sinks.sinks must contain at least one Sink")
-        stats = run_pipeline(config=cfg)
+        engine = PipelineEngine(config=cfg)
 
-    log.info("convert complete: %s", stats)
+    stats_obj = engine.run()
+    stats_dict = stats_obj.as_dict()
+
+    log.info("convert complete: %s", stats_dict)
 
     jsonl_path = cfg.sinks.primary_jsonl_name or cfg.metadata.primary_jsonl
     qc_summary: Optional[Dict[str, Any]] = None
@@ -84,13 +85,13 @@ def convert(config: RepocapsuleConfig | PipelineEngine) -> Dict[str, int]:
         if JSONLQualityScorer is None:
             raise RuntimeError("QC extras are not installed; disable config.qc.enabled or install optional dependencies.")
         mode = cfg.qc.mode
-        if mode == "inline":
-            qc_summary = dict(stats.get("qc") or {})
+        if mode == QCMode.INLINE:
+            qc_summary = stats_obj.qc.as_dict()
         else:
             qc_summary = _run_post_qc(jsonl_path, cfg)
-            stats["qc"] = qc_summary
+            stats_obj.qc = QCSummaryTracker.from_summary_dict(qc_summary)
 
-        if cfg.qc.write_csv and mode == "inline":
+        if cfg.qc.write_csv and mode == QCMode.INLINE:
             out_csv = _derive_csv_path(jsonl_path, cfg.qc.csv_suffix)
             if out_csv:
                 scorer_for_csv = cfg.qc.scorer
@@ -105,16 +106,17 @@ def convert(config: RepocapsuleConfig | PipelineEngine) -> Dict[str, int]:
                         raise RuntimeError("QC CSV helpers unavailable; reinstall optional dependencies.")
                     score_jsonl_to_csv(str(jsonl_path), out_csv)
 
-    qc_summary = qc_summary or stats.get("qc")
+    qc_summary = qc_summary or stats_obj.qc.as_dict()
     if jsonl_path:
+        stats_dict = stats_obj.as_dict()
         summary_record = RunSummary(
             config=cfg.to_dict(),
-            stats=dict(stats),
+            stats=stats_dict,
             qc_summary=qc_summary if isinstance(qc_summary, dict) else None,
             metadata=cfg.metadata.to_dict(),
         )
         _append_run_summary(jsonl_path, summary_record)
-    return stats
+    return stats_obj.as_dict()
 
 
 def _run_post_qc(jsonl_path: Optional[str], config: RepocapsuleConfig) -> Dict[str, Any]:
@@ -202,6 +204,18 @@ def _score_jsonl_sequential(shards: List[_JsonlShard], scorer) -> List[Dict[str,
     return rows
 
 
+def _resolve_qc_post_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str]:
+    qc = cfg.qc
+    pc = cfg.pipeline
+    max_workers = qc.post_max_workers or pc.max_workers or (os.cpu_count() or 1)
+    max_workers = max(1, max_workers)
+    window = qc.post_submit_window or (max_workers * 2)
+    kind = (qc.post_executor_kind or pc.executor_kind or "thread").strip().lower()
+    if kind not in {"thread", "process"}:
+        kind = "thread"
+    return max_workers, window, kind
+
+
 def _score_jsonl_parallel(
     shards: List[_JsonlShard],
     qc_cfg,
@@ -226,27 +240,42 @@ def _score_jsonl_parallel(
 
     shard_results: Dict[int, List[Dict[str, Any]]] = {}
 
-    def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
-        scorer = _scorer_factory()
-        return shard.index, _score_lines(shard.lines, scorer)
-
     def _writer(shard: _JsonlShard, shard_rows: Iterable[List[Dict[str, Any]]]) -> None:
         for rows in shard_rows:
             if rows:
                 shard_results[shard.index] = rows
 
-    max_workers = max(1, config.pipeline.max_workers or os.cpu_count() or 1)
-    window = max_workers * 2
+    max_workers, window, executor_kind = _resolve_qc_post_concurrency(config)
+
     try:
-        process_items_parallel(
-            shards,
-            _worker,
-            _writer,
-            max_workers=max_workers,
-            window=window,
-            fail_fast=True,
-            executor_kind="thread",
-        )
+        if executor_kind == "process":
+            payload_cfg = replace(qc_cfg, scorer=None)
+            qc_payload = asdict(payload_cfg)
+            process_items_parallel(
+                shards,
+                _qc_parallel_worker,
+                _writer,
+                max_workers=max_workers,
+                window=window,
+                fail_fast=True,
+                executor_kind=executor_kind,
+                initializer=_qc_worker_initializer,
+                initargs=(qc_payload,),
+            )
+        else:
+            def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+                scorer = _scorer_factory()
+                return shard.index, _score_lines(shard.lines, scorer)
+
+            process_items_parallel(
+                shards,
+                _worker,
+                _writer,
+                max_workers=max_workers,
+                window=window,
+                fail_fast=True,
+                executor_kind=executor_kind,
+            )
     except Exception as exc:
         log.warning("Parallel QC scoring failed (%s); falling back to sequential mode.", exc)
         return None
@@ -435,12 +464,14 @@ def make_github_profile(
         repo_url=f"https://github.com/{spec.owner}/{spec.repo}",
         extra={"source": "github"},
     )
+    http_client = cfg.http.build_client()
     sources = [
         make_github_zip_source(
             url,
             config=cfg.sources.github,
             context=ctx,
             download_timeout=cfg.http.timeout,
+            http_client=http_client,
         )
     ]
     sink_result = build_default_sinks(
@@ -455,6 +486,26 @@ def make_github_profile(
 class _JsonlShard:
     index: int
     lines: List[str]
+
+
+_QC_WORKER_SCORER: Optional[Any] = None
+
+
+def _qc_worker_initializer(qc_cfg_payload: Dict[str, Any]) -> None:
+    """Initializer for process-based QC scoring workers."""
+    global _QC_WORKER_SCORER
+    qc_cfg = QCConfig(**qc_cfg_payload)
+    scorer = make_qc_scorer(qc_cfg, new_instance=True)
+    if scorer is None:
+        raise RuntimeError("QC worker failed to initialize scorer (missing optional dependencies?).")
+    _QC_WORKER_SCORER = scorer
+
+
+def _qc_parallel_worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+    """Process-pool worker that reuses a scorer initialized per process."""
+    if _QC_WORKER_SCORER is None:
+        raise RuntimeError("QC worker scorer not initialized")
+    return shard.index, _score_lines(shard.lines, _QC_WORKER_SCORER)
 
 
 def _iter_jsonl_shards(path: str, shard_size: int = 500) -> Iterator[_JsonlShard]:
@@ -473,15 +524,6 @@ def _iter_jsonl_shards(path: str, shard_size: int = 500) -> Iterator[_JsonlShard
         yield _JsonlShard(idx, chunk)
 
 
-def _is_summary_record(record: Dict[str, Any]) -> bool:
-    meta = record.get("meta")
-    if isinstance(meta, dict):
-        kind = meta.get("kind")
-        if kind in {"run_summary", "qc_summary"}:
-            return True
-    return False
-
-
 def _score_lines(lines: List[str], scorer) -> List[Dict[str, Any]]:
     rows: List[Dict[str, Any]] = []
     for line in lines:
@@ -491,7 +533,7 @@ def _score_lines(lines: List[str], scorer) -> List[Dict[str, Any]]:
             continue
         if not isinstance(record, dict):
             continue
-        if _is_summary_record(record):
+        if is_summary_record(record):
             continue
         try:
             rows.append(scorer.score_record(record))

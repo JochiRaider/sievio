@@ -7,6 +7,7 @@ import http.client
 import ipaddress
 import socket
 import ssl
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -259,6 +260,43 @@ class SafeHttpClient:
             redirects_followed=0,
         )
 
+    def open_with_retries(
+        self,
+        request: RequestLike,
+        *,
+        data: Optional[bytes] = None,
+        timeout: Optional[float] = None,
+        retries: int = 0,
+        backoff_base: float = 1.0,
+        backoff_factor: float = 2.0,
+        only_get_like: bool = True,
+    ) -> SafeHttpResponse:
+        """
+        Retry wrapper around ``open`` with exponential backoff (GET-like methods only by default).
+        """
+        req_obj = request
+        if isinstance(request, str):
+            req_obj = urllib.request.Request(request)
+        method = (req_obj.get_method() or "GET").upper()
+        if only_get_like and method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
+            return self.open(req_obj, data=data, timeout=timeout)
+
+        last_error: Optional[Exception] = None
+        attempts = max(0, int(retries)) + 1
+        for attempt in range(attempts):
+            try:
+                return self.open(req_obj, data=data, timeout=timeout)
+            except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+                last_error = exc
+                if attempt >= attempts - 1:
+                    raise
+                sleep_for = backoff_base * (backoff_factor ** attempt)
+                if sleep_for > 0:
+                    time.sleep(sleep_for)
+                continue
+        # This should be unreachable
+        raise urllib.error.URLError(last_error or "unknown error")  # pragma: no cover
+
     # core
     def _request(
         self,
@@ -337,10 +375,18 @@ class SafeHttpClient:
 
 
 # safe_http.py – allow config overrides when instantiating the shared client
-SAFE_HTTP_CLIENT = SafeHttpClient(allowed_redirect_suffixes=("github.com",))
+SAFE_HTTP_CLIENT: Optional[SafeHttpClient] = None
 
 
-def set_global_http_client(client: SafeHttpClient) -> None:
-    """Override the module-level SAFE_HTTP_CLIENT (used by all network helpers)."""
+def get_global_http_client() -> SafeHttpClient:
+    """Return the process-wide SafeHttpClient, creating a default one if unset."""
+    global SAFE_HTTP_CLIENT
+    if SAFE_HTTP_CLIENT is None:
+        SAFE_HTTP_CLIENT = SafeHttpClient(allowed_redirect_suffixes=("github.com",))
+    return SAFE_HTTP_CLIENT
+
+
+def set_global_http_client(client: Optional[SafeHttpClient]) -> None:
+    """Override (or clear) the module-level SAFE_HTTP_CLIENT used by helpers."""
     global SAFE_HTTP_CLIENT
     SAFE_HTTP_CLIENT = client

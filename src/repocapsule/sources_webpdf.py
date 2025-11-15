@@ -6,7 +6,7 @@ from typing import Iterable, Optional, Sequence, Dict, List, Set, Tuple
 from html.parser import HTMLParser
 from urllib.parse import urlparse, unquote, urljoin
 import urllib.parse, urllib.request, urllib.error
-import posixpath, re, time, io
+import posixpath, re, io
 from dataclasses import dataclass
 
 from .interfaces import Source, FileItem
@@ -122,6 +122,7 @@ class WebPdfListSource(Source):
         add_prefix: Optional[str] = None,
         retries: Optional[int] = None,
         config: Optional[PdfSourceConfig] = None,
+        client: Optional[safe_http.SafeHttpClient] = None,
     ) -> None:
         cfg = config or PdfSourceConfig()
         self._pdf_config = cfg
@@ -132,6 +133,12 @@ class WebPdfListSource(Source):
         self.add_prefix = add_prefix.strip().strip("/").replace("\\", "/") if add_prefix else None
         self.retries = max(0, int(retries if retries is not None else cfg.retries))
         self._user_agent = cfg.user_agent or _USER_AGENT
+        resolved_client = client or cfg.client
+        if resolved_client is None:
+            resolved_client = safe_http.get_global_http_client()
+        if cfg.client is None:
+            cfg.client = resolved_client
+        self._client = resolved_client
 
     def _request(self, url: str) -> urllib.request.Request:
         safe_url = _ensure_http_url(url)
@@ -144,59 +151,82 @@ class WebPdfListSource(Source):
             method="GET",
         )
 
-    def _download(self, url: str) -> tuple[bytes, Dict[str, str]]:
+    def _download(self, url: str) -> tuple[bytes, Dict[str, str], int]:
         """Stream a URL into bytes with size cap; return (data, headers)."""
-        attempt = 0
-        last_err: Optional[Exception] = None
-        while attempt <= self.retries:
-            try:
-                with safe_http.SAFE_HTTP_CLIENT.open(self._request(url), timeout=self.timeout) as resp:
-                    if resp.status >= 400:
-                        raise urllib.error.HTTPError(url, resp.status, resp.reason, resp.headers, None)
-                    headers = {k: v for k, v in resp.headers.items()}
-                    # Content-Length guard if present
-                    cl = headers.get("Content-Length")
-                    if cl:
-                        try:
-                            if int(cl) > self.max_pdf_bytes:
-                                raise RuntimeError(f"Content-Length {cl} exceeds cap {self.max_pdf_bytes}")
-                        except Exception:
-                            # If bad header, ignore and rely on streaming cap
-                            pass
+        try:
+            with self._client.open_with_retries(
+                self._request(url),
+                timeout=self.timeout,
+                retries=self.retries,
+                backoff_base=1.0,
+                backoff_factor=2.0,
+            ) as resp:
+                if resp.status >= 400:
+                    raise urllib.error.HTTPError(url, resp.status, resp.reason, resp.headers, None)
+                headers = {k: v for k, v in resp.headers.items()}
+                # Content-Length guard if present
+                cl = headers.get("Content-Length")
+                if cl:
+                    try:
+                        if int(cl) > self.max_pdf_bytes:
+                            raise RuntimeError(f"Content-Length {cl} exceeds cap {self.max_pdf_bytes}")
+                    except Exception:
+                        # If bad header, ignore and rely on streaming cap
+                        pass
 
-                    # Stream with cap; also capture a small head for sniffing
-                    buf = io.BytesIO()
-                    head = b""
-                    first = True
-                    remaining = self.max_pdf_bytes
-                    while True:
-                        to_read = min(_CHUNK, remaining)
-                        if to_read <= 0:
-                            break
-                        chunk = resp.read(to_read)
-                        if not chunk:
-                            break
-                        if first:
-                            head = chunk[:8]
-                            first = False
-                        buf.write(chunk)
-                        remaining -= len(chunk)
-                    data = buf.getvalue()
-                    if len(data) == 0:
-                        raise RuntimeError("empty response")
-                    if len(data) > self.max_pdf_bytes:
-                        # If we exactly hit the cap, treat as too large (likely truncated)
-                        raise RuntimeError("download reached size cap (truncated)")
-                    # Attach a small sniff header in case the caller wants it
-                    headers["_X-SNIFF"] = head[:8].hex()
-                    return data, headers
-            except Exception as e:
-                last_err = e
-                if attempt >= self.retries:
-                    break
-                time.sleep(2 ** attempt)
-                attempt += 1
-        raise RuntimeError(f"failed to download {url}: {last_err}")
+                # Stream with cap; also capture a small head for sniffing
+                buf = io.BytesIO()
+                head = b""
+                first = True
+                remaining = self.max_pdf_bytes
+                while True:
+                    to_read = min(_CHUNK, remaining)
+                    if to_read <= 0:
+                        break
+                    chunk = resp.read(to_read)
+                    if not chunk:
+                        break
+                    if first:
+                        head = chunk[:8]
+                        first = False
+                    buf.write(chunk)
+                    remaining -= len(chunk)
+                data = buf.getvalue()
+                if len(data) == 0:
+                    raise RuntimeError("empty response")
+                if len(data) > self.max_pdf_bytes:
+                    # If we exactly hit the cap, treat as too large (likely truncated)
+                    raise RuntimeError("download reached size cap (truncated)")
+                # Attach a small sniff header in case the caller wants it
+                headers["_X-SNIFF"] = head[:8].hex()
+                declared = headers.get("Content-Length")
+                original_size = len(data)
+                if declared is not None:
+                    try:
+                        declared_size = int(declared)
+                        if declared_size >= len(data):
+                            original_size = declared_size
+                    except ValueError:
+                        pass
+                return data, headers, original_size
+        except Exception as exc:
+            raise RuntimeError(f"failed to download {url}: {exc}") from exc
+
+    def _normalize_download_result(
+        self,
+        result,
+    ) -> tuple[bytes, Dict[str, str], int]:
+        if isinstance(result, tuple):
+            if len(result) == 3:
+                data, headers, file_size = result
+            elif len(result) == 2:
+                data, headers = result
+                file_size = len(data)
+            else:
+                raise ValueError("unexpected download result shape")
+        else:
+            raise TypeError("download result must be tuple")
+        return data, dict(headers), int(file_size)
 
     def _build_file_item(
         self,
@@ -204,6 +234,7 @@ class WebPdfListSource(Source):
         data: bytes,
         headers: Dict[str, str],
         used_names: Set[str],
+        file_bytes: int,
     ) -> Optional[FileItem]:
         cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
         name = _sanitize_name(cd_name or _name_from_url(url))
@@ -229,30 +260,39 @@ class WebPdfListSource(Source):
         if self.add_prefix:
             name = f"{self.add_prefix}/{name}"
 
-        return FileItem(path=name, data=data, size=len(data))
+        return FileItem(
+            path=name,
+            data=data,
+            size=file_bytes,
+            origin_path=url,
+            stream_hint="http",
+            streamable=False,
+        )
 
     def iter_files(self) -> Iterable[FileItem]:
         used_names: Set[str] = set()
         if len(self.urls) <= 1:
             for idx, u in enumerate(self.urls):
                 try:
-                    data, headers = self._download(u)
+                    result = self._download(u)
+                    data, headers, file_size = self._normalize_download_result(result)
                 except Exception:
                     continue
-                item = self._build_file_item(u, data, headers, used_names)
+                item = self._build_file_item(u, data, headers, used_names, file_size)
                 if item:
                     yield item
             return
 
         results: Dict[int, FileItem] = {}
 
-        def _worker(task: _PdfDownloadTask) -> Tuple[_PdfDownloadTask, List[tuple[str, bytes, Dict[str, str]]]]:
-            data, headers = self._download(task.url)
-            return task, [(task.url, data, headers)]
+        def _worker(task: _PdfDownloadTask) -> Tuple[_PdfDownloadTask, List[tuple[str, bytes, Dict[str, str], int]]]:
+            result = self._download(task.url)
+            data, headers, file_size = self._normalize_download_result(result)
+            return task, [(task.url, data, headers, file_size)]
 
-        def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, Dict[str, str]]]) -> None:
-            for url, data, headers in payloads:
-                item = self._build_file_item(url, data, headers, used_names)
+        def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, Dict[str, str], int]]) -> None:
+            for url, data, headers, file_size in payloads:
+                item = self._build_file_item(url, data, headers, used_names, file_size)
                 if item:
                     results[task.index] = item
 
@@ -330,6 +370,7 @@ class WebPagePdfSource(Source):
         add_prefix: Optional[str] = None,
         retries: Optional[int] = None,
         config: Optional[PdfSourceConfig] = None,
+        client: Optional[safe_http.SafeHttpClient] = None,
     ) -> None:
         cfg = config or PdfSourceConfig()
         self._pdf_config = cfg
@@ -344,6 +385,12 @@ class WebPagePdfSource(Source):
         self.add_prefix = add_prefix
         self.retries = max(0, int(retries if retries is not None else cfg.retries))
         self._user_agent = cfg.user_agent or _USER_AGENT
+        resolved_client = client or cfg.client
+        if resolved_client is None:
+            resolved_client = safe_http.get_global_http_client()
+        if cfg.client is None:
+            cfg.client = resolved_client
+        self._client = resolved_client
 
     def _req(self, url: str) -> urllib.request.Request:
         safe_url = _ensure_http_url(url)
@@ -354,7 +401,13 @@ class WebPagePdfSource(Source):
         )
 
     def _fetch_html(self) -> str:
-        with safe_http.SAFE_HTTP_CLIENT.open(self._req(self.page_url), timeout=self.timeout) as r:
+        with self._client.open_with_retries(
+            self._req(self.page_url),
+            timeout=self.timeout,
+            retries=self.retries,
+            backoff_base=1.0,
+            backoff_factor=2.0,
+        ) as r:
             if r.status >= 400:
                 raise urllib.error.HTTPError(self.page_url, r.status, r.reason, r.headers, None)
             raw = r.read(5 * 1024 * 1024)  # 5 MiB cap
@@ -417,6 +470,7 @@ class WebPagePdfSource(Source):
             add_prefix=self.add_prefix,
             retries=self.retries,
             config=self._pdf_config,
+            client=self._client,
         )
         # Delegate actual downloads to the list source
         yield from inner.iter_files()

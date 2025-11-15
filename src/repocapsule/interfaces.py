@@ -5,14 +5,19 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from typing import (
+    IO,
     Any,
     Dict,
     Iterable,
     Mapping,
     Optional,
     Protocol,
+    TYPE_CHECKING,
     runtime_checkable,
 )
+
+if TYPE_CHECKING:  # pragma: no cover - type checking only
+    from .config import RepocapsuleConfig
 
 
 # -----------------------------------------------------------------------------
@@ -30,13 +35,23 @@ class FileItem:
         Repository-relative path using forward slashes, e.g. "src/main.py".
     data:
         Raw file bytes as obtained from the source (zip entry, filesystem, etc.).
-        Decoding to text is performed later by the pipeline/decoder.
+        Decoding to text is performed later by the pipeline/decoder. Data may be
+        a truncated prefix when only part of a large file was read.
     size:
-        Size in bytes (redundant with len(data) but convenient for logging).
+        Original size in bytes on disk / source (may differ from len(data)).
+    origin_path:
+        Absolute/local path or synthetic identifier for reopening when possible.
+    stream_hint:
+        Optional tag describing how to reopen (e.g., "file", "zip-member").
+    streamable:
+        True when a streaming path exists (e.g., local filesystem files).
     """
     path: str
     data: bytes
     size: int | None = None
+    origin_path: str | None = None
+    stream_hint: str | None = None
+    streamable: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,6 +147,44 @@ class Extractor(Protocol):
 
 
 @runtime_checkable
+class FileExtractor(Protocol):
+    """
+    File-level extractor that consumes FileItem objects and yields records.
+    """
+
+    def extract(
+        self,
+        item: FileItem,
+        *,
+        config: "RepocapsuleConfig",
+        context: Optional[RepoContext] = None,
+    ) -> Iterable[Record]:
+        ...
+
+
+@runtime_checkable
+class StreamingExtractor(Protocol):
+    """
+    Optional extension for extractors that can consume byte streams.
+
+    Streaming extractors can avoid materializing the full file payload when
+    running inside a thread-friendly pipeline that can reopen the underlying
+    source (e.g., local files).
+    """
+
+    name: Optional[str]  # type: ignore[assignment]
+
+    def extract_stream(
+        self,
+        *,
+        stream: IO[bytes],
+        path: str,
+        context: Optional[RepoContext] = None,
+    ) -> Optional[Iterable[Record]]:
+        ...
+
+
+@runtime_checkable
 class Sink(Protocol):
     """
     A destination for records (e.g., JSONL writer, prompt-text writer, Parquet).
@@ -169,6 +222,8 @@ __all__ = [
     "Record",
     "Source",
     "Extractor",
+    "FileExtractor",
+    "StreamingExtractor",
     "Sink",
     "QualityScorer",
 ]

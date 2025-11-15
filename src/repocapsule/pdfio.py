@@ -168,7 +168,7 @@ def extract_pdf_records(
                     license_id=license_id,
                     chunk_id=i,
                     n_chunks=n,
-                    extra_meta=_with_context_extra({"kind": "pdf", "page": i, "n_pages": n, "pdf_meta": pdf_meta or None}),
+                    extra_meta=_with_context_extra({"subkind": "pdf", "page": i, "n_pages": n, "pdf_meta": pdf_meta or None}),
                 )
             )
     else:
@@ -185,7 +185,7 @@ def extract_pdf_records(
                     license_id=license_id,
                     chunk_id=i,
                     n_chunks=n,
-                    extra_meta=_with_context_extra({"kind": "pdf", "pdf_meta": pdf_meta or None}),
+                    extra_meta=_with_context_extra({"subkind": "pdf", "pdf_meta": pdf_meta or None}),
                     tokens=ch.get("n_tokens"),
                 )
             )

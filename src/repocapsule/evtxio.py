@@ -247,7 +247,7 @@ def handle_evtx(
                     license_id=(ctx.license_id if ctx else None),
                     lang="WindowsEventLog",
                     extra_meta=_with_context({
-                        "kind": "evtx",
+                        "subkind": "evtx",
                         "provider": j.get("provider"),
                         "event_id": j.get("event_id"),
                         "level": j.get("level"),
@@ -273,7 +273,7 @@ def handle_evtx(
                 license_id=(ctx.license_id if ctx else None),
                 lang="WindowsEventLog",
                 extra_meta=_with_context({
-                    "kind": "evtx",
+                    "subkind": "evtx",
                     "provider": j.get("provider"),
                     "event_id": j.get("event_id"),
                     "level": j.get("level"),

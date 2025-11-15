@@ -3,9 +3,9 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Dict, Optional, Tuple
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple
 import hashlib
 
 from .chunk import count_tokens
@@ -20,6 +20,12 @@ __all__ = [
     "is_code_file",
     "sha256_text",
     "build_record",
+    "RecordMeta",
+    "RunSummaryMeta",
+    "QCSummaryMeta",
+    "ensure_meta_dict",
+    "merge_meta_defaults",
+    "is_summary_record",
 ]
 
 # -----------------------
@@ -163,6 +169,155 @@ def sha256_text(text: str) -> str:
 
 
 # -----------------------
+# Metadata helpers
+# -----------------------
+
+RECORD_META_SCHEMA_VERSION = "1"
+SUMMARY_META_SCHEMA_VERSION = "1"
+
+
+def _meta_to_dict(obj: Any) -> Dict[str, Any]:
+    """Flatten dataclass fields plus extras, skipping None values."""
+    out: Dict[str, Any] = {}
+    if obj is None:
+        return out
+    for f in fields(obj):
+        name = f.name
+        if name == "extra":
+            continue
+        value = getattr(obj, name)
+        if value is not None:
+            out[name] = value
+    extra = getattr(obj, "extra", None)
+    if isinstance(extra, dict):
+        for key, value in extra.items():
+            if value is None or key in out:
+                continue
+            out[key] = value
+    return out
+
+
+@dataclass(slots=True)
+class RecordMeta:
+    """
+    Metadata for normal content records (code/docs/logs/etc).
+
+    `kind` reflects the coarse file type: 'code' or 'doc'.
+    `file_bytes` captures the original source size, while `bytes` reflects the
+    processed chunk length (UTF-8). `truncated_bytes` represents bytes omitted
+    from the source due to prefix/decoder caps and is repeated across chunks.
+    """
+
+    kind: str = "code"
+    source: Optional[str] = None
+    repo: Optional[str] = None
+    path: Optional[str] = None
+    license: Optional[str] = None
+    lang: Optional[str] = None
+    chunk_id: int = 1
+    n_chunks: int = 1
+    encoding: str = "utf-8"
+    had_replacement: bool = False
+    sha256: Optional[str] = None
+    approx_tokens: Optional[int] = None
+    tokens: Optional[int] = None
+    bytes: Optional[int] = None
+    file_bytes: Optional[int] = None
+    truncated_bytes: Optional[int] = None
+    schema_version: str = RECORD_META_SCHEMA_VERSION
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return _meta_to_dict(self)
+
+    @classmethod
+    def from_seed(
+        cls,
+        seed: Optional[Mapping[str, Any]] = None,
+        *,
+        kind: Optional[str] = None,
+        **overrides: Any,
+    ) -> "RecordMeta":
+        seed = seed or {}
+        data = dict(seed)
+        if kind is not None:
+            data["kind"] = kind
+        data.update(overrides)
+        field_names = {f.name for f in fields(cls)}
+        extra: Dict[str, Any] = {}
+        for key in list(data.keys()):
+            if key not in field_names:
+                value = data.pop(key)
+                if value is not None:
+                    extra.setdefault(key, value)
+        base_extra = data.get("extra")
+        if isinstance(base_extra, dict):
+            merged_extra = dict(base_extra)
+            for key, value in extra.items():
+                merged_extra.setdefault(key, value)
+        else:
+            merged_extra = extra
+        data["extra"] = merged_extra
+        data.setdefault("schema_version", RECORD_META_SCHEMA_VERSION)
+        return cls(**data)
+
+
+@dataclass(slots=True)
+class RunSummaryMeta:
+    kind: str = "run_summary"
+    schema_version: str = SUMMARY_META_SCHEMA_VERSION
+    config: Dict[str, Any] = field(default_factory=dict)
+    stats: Dict[str, Any] = field(default_factory=dict)
+    qc_summary: Optional[Dict[str, Any]] = None
+    metadata: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return _meta_to_dict(self)
+
+
+@dataclass(slots=True)
+class QCSummaryMeta:
+    kind: str = "qc_summary"
+    schema_version: str = SUMMARY_META_SCHEMA_VERSION
+    summary: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return _meta_to_dict(self)
+
+
+def ensure_meta_dict(record: MutableMapping[str, Any]) -> Dict[str, Any]:
+    """Return record['meta'] as a dict, creating an empty one if needed."""
+    meta = record.get("meta")
+    if not isinstance(meta, dict):
+        meta = {}
+        record["meta"] = meta
+    return meta
+
+
+def merge_meta_defaults(record: MutableMapping[str, Any], defaults: Mapping[str, Any]) -> Dict[str, Any]:
+    """
+    Ensure a record has a meta dict and fill in default values without clobbering existing entries.
+    """
+    meta = ensure_meta_dict(record)
+    for key, value in defaults.items():
+        if key in meta or value is None:
+            continue
+        meta[key] = value
+    return meta
+
+
+def is_summary_record(record: Mapping[str, Any]) -> bool:
+    """Return True if the record appears to be a summary entry."""
+    meta = record.get("meta") if isinstance(record, Mapping) else None
+    if not isinstance(meta, dict):
+        return False
+    kind = meta.get("kind")
+    return kind in {"run_summary", "qc_summary"}
+
+
+# -----------------------
 # Record assembly
 # -----------------------
 
@@ -181,6 +336,9 @@ def build_record(
     extra_meta: Optional[Dict[str, object]] = None,
     langcfg: LanguageConfig | None = None,
     tokens: Optional[int] = None,
+    meta: Optional[RecordMeta | Mapping[str, Any]] = None,
+    file_bytes: Optional[int] = None,
+    truncated_bytes: Optional[int] = None,
 ) -> Dict[str, object]:
     """Create a canonical JSONL record matching the requested schema.
 
@@ -199,7 +357,9 @@ def build_record(
         "had_replacement": false,
         "sha256": "....",
         "tokens": 1234,
-        "bytes": 5678
+        "bytes": 5678,
+        "file_bytes": 10240,
+        "truncated_bytes": 4600
       }
     }
     """
@@ -233,40 +393,49 @@ def build_record(
 
     # Compute byte length and token estimate (approximate by default)
     bcount = len(text.encode("utf-8", "strict"))
-    approx_tokens = tokens if tokens is not None else count_tokens(text, None, "code" if kind == "code" else "doc")
+    approx_tokens = count_tokens(text, None, "code" if kind == "code" else "doc")
+    token_value = tokens if tokens is not None else approx_tokens
 
     chunk_id_val = int(chunk_id) if chunk_id is not None else 1
     n_chunks_val = int(n_chunks) if n_chunks is not None else 1
 
-    meta = {
-        "source": repo_url or (f"https://github.com/{repo_full_name}" if repo_full_name else None),
-        "repo": repo_full_name,
-        "path": rp,
-        "license": license_id,
-        "lang": lang,
-        "chunk_id": chunk_id_val,
-        "encoding": encoding,
-        "had_replacement": bool(had_replacement),
-        "sha256": sha256_text(text),
-        "tokens": approx_tokens,  
-        "approx_tokens": approx_tokens,
-        "bytes": bcount,
-    }
-    meta["n_chunks"] = n_chunks_val
+    source_url = repo_url or (f"https://github.com/{repo_full_name}" if repo_full_name else None)
+
+    seed: Optional[Mapping[str, Any]]
+    if isinstance(meta, RecordMeta):
+        seed = meta.to_dict()
+    else:
+        seed = meta
+
+    meta_obj = RecordMeta.from_seed(
+        seed,
+        kind=kind,
+        source=source_url,
+        repo=repo_full_name,
+        path=rp,
+        license=license_id,
+        lang=lang,
+        chunk_id=chunk_id_val,
+        n_chunks=n_chunks_val,
+        encoding=encoding,
+        had_replacement=bool(had_replacement),
+        sha256=sha256_text(text),
+        approx_tokens=approx_tokens,
+        tokens=token_value,
+        bytes=bcount,
+        file_bytes=file_bytes,
+        truncated_bytes=truncated_bytes,
+    )
+
+    if extra_meta:
+        record_fields = {f.name for f in fields(RecordMeta)}
+        for key, value in extra_meta.items():
+            if key in record_fields or value is None:
+                continue
+            meta_obj.extra.setdefault(key, value)
 
     record = {
         "text": text,
-        "meta": meta,
+        "meta": meta_obj.to_dict(),
     }
-
-    # Drop None fields for cleanliness
-    record["meta"] = {k: v for k, v in record["meta"].items() if v is not None}
-
-    # Extra metadata (non-conflicting only)
-    if extra_meta:
-        for k2, v2 in extra_meta.items():
-            if k2 in record["meta"]:
-                continue
-            record["meta"][k2] = v2
-
     return record

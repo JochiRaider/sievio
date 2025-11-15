@@ -188,15 +188,7 @@ def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
     """
     if http_cfg is None:
         raise ValueError("http_cfg is required")
-    if http_cfg.client is not None:
-        return http_cfg.client
-    from .safe_http import SafeHttpClient  # local import to avoid cycles
-
-    return SafeHttpClient(
-        timeout=http_cfg.timeout,
-        max_redirects=http_cfg.max_redirects,
-        allowed_redirect_suffixes=http_cfg.allowed_redirect_suffixes,
-    )
+    return http_cfg.build_client()
 
 
 def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) -> Optional["JSONLQualityScorer"]:
@@ -351,6 +343,7 @@ def make_github_zip_source(
     config: "GitHubSourceConfig",
     context: Optional[RepoContext],
     download_timeout: Optional[float],
+    http_client: Optional["SafeHttpClient"] = None,
 ):
     """
     Build a GitHubZipSource for ``url`` with the provided config/context.
@@ -364,6 +357,7 @@ def make_github_zip_source(
         config=config,
         context=context,
         download_timeout=download_timeout,
+        http_client=http_client,
     )
 
 
