@@ -25,6 +25,7 @@ from .qc_utils import (
     repetition_rate,
     simhash64,
     target_band,
+    open_jsonl_maybe_gz,
 )
 
 __all__ = ["JSONLQualityScorer", "score_jsonl_to_csv", "write_csv", "main"]
@@ -46,6 +47,7 @@ class JSONLQualityScorer:
         minhash_jaccard_thresh: float = 0.82,
         enable_gopher: bool = True,
         gopher_weight: float = 0.10,
+        heuristics: object | None = None,
     ):
         self.lm: Optional[PerplexityModel] = None
         if lm_model_id:
@@ -73,6 +75,7 @@ class JSONLQualityScorer:
         self.enable_gopher = bool(enable_gopher)
         self.gopher_weight = float(gopher_weight)
         self.sim_seen: deque[tuple[int, str]] = deque(maxlen=128)
+        self.heuristics = heuristics
 
     def score_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
         text = rec.get("text", "")
@@ -82,12 +85,12 @@ class JSONLQualityScorer:
         doc_id = str(meta.get("sha256") or hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest())
 
         N = int(meta.get("tokens") or approx_tokens(text))
-        Tlo, Thi = target_band(lang_l)
+        Tlo, Thi = target_band(lang_l, heuristics=self.heuristics)
         length_ok = 1.0 if Tlo <= N <= Thi else max(0.0, 1.0 - abs(N - ((Tlo + Thi) // 2)) / max(1, Thi))
 
         ascii_r = ascii_ratio(text)
-        rep = repetition_rate(text)
-        comp = code_complexity(text)
+        rep = repetition_rate(text, heuristics=self.heuristics)
+        comp = code_complexity(text, heuristics=self.heuristics)
         p_ok = parse_ok(text, lang)
 
         sh = simhash64(text)
@@ -173,8 +176,9 @@ class JSONLQualityScorer:
             self.lsh.reset()
 
     def score_jsonl_path(self, jsonl_path: str) -> list[Dict[str, Any]]:
+        """Score a JSONL file, supporting both plain and gzip-compressed JSONL (*.jsonl.gz)."""
         rows: list[Dict[str, Any]] = []
-        with open(jsonl_path, "r", encoding="utf-8") as f:
+        with open_jsonl_maybe_gz(jsonl_path) as f:
             for line in f:
                 line = line.strip()
                 if not line:
@@ -272,4 +276,3 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     out_csv = args.out or (str(os.path.splitext(str(args.jsonl))[0]) + "_quality.csv")
     write_csv(rows, out_csv)
     return 0
-

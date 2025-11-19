@@ -6,7 +6,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Optional
 from dataclasses import dataclass
-import logging, re, unicodedata as _ud
+import re, unicodedata as _ud
+
+from .log import get_logger
 
 __all__ = [
     "decode_bytes",            # public API
@@ -19,7 +21,7 @@ class DecodedText:
     encoding: str
     had_replacement: bool
 
-log = logging.getLogger(__name__)
+log = get_logger(__name__)
 
 # -----------------------------------------
 # Encoding helpers: BOM + UTF-16/32 heuristics

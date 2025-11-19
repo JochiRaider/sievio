@@ -1,0 +1,112 @@
+# manual_test_github.toml
+# Base configuration for manual_test_github.py
+#
+# This file encodes the stable, serializable knobs for the GitHub manual smoke test.
+# The Python script stitches in runtime-only objects such as:
+# - the ChunkPolicy instance
+# - optional Extractors (e.g., KqlFromMarkdownExtractor)
+#
+# Paths are interpreted relative to the working directory unless otherwise noted.
+
+# ---------------------------------------------------------------------------
+# Source configuration (GitHub zipball)
+# ---------------------------------------------------------------------------
+
+[sources.github]
+# Cap bytes per file inside the GitHub archive (50 MiB, down from the 200 MiB default).
+per_file_cap = 52428800
+
+# Only keep .rst files from the repo in this manual test (mirrors cfg.sources.github.include_exts = {".rst"}).
+include_exts = [".rst"]
+
+# Other GitHubSourceConfig fields (max_total_uncompressed, max_members, etc.)
+# are left at their library defaults.
+
+# ---------------------------------------------------------------------------
+# Pipeline concurrency / behavior
+# ---------------------------------------------------------------------------
+
+[pipeline]
+# Use threads for the main pipeline (suitable for mixed I/O and light CPU work).
+executor_kind = "thread"
+# max_workers = 0 → auto; submit_window = null → derived from max_workers.
+# We rely on those defaults here.
+
+# ---------------------------------------------------------------------------
+# Quality control (QC)
+# ---------------------------------------------------------------------------
+
+[qc]
+# Master on/off switch for QC (ENABLE_QC = True).
+enabled = true
+
+# "inline", "advisory", "post", or "off" (QC_MODE = QCMode.INLINE).
+mode = "inline"
+
+# Minimum score; below this records are dropped in inline mode (QC_MIN_SCORE = 40.0).
+min_score = 40.0
+
+# Keep near-duplicate records for this manual test (QC_DROP_NEAR_DUPS = False).
+drop_near_dups = false
+
+# Write a CSV summary of QC results alongside the JSONL (QC_WRITE_CSV / QC_CSV_SUFFIX).
+write_csv = true
+csv_suffix = "_quality.csv"
+
+# Fail the run if QC itself errors? For a manual smoke test we keep this off.
+fail_on_error = false
+
+# Post-QC knobs are left at defaults; parallel_post only matters when mode="post".
+parallel_post = false
+
+# ---------------------------------------------------------------------------
+# Sinks: where output goes
+# ---------------------------------------------------------------------------
+
+[sinks]
+# Default base directory used when a JSONL path is not supplied explicitly.
+# In this manual script we pass explicit jsonl/prompt paths, so this is primarily
+# metadata / documentation.
+output_dir = "out"
+compress_jsonl = false
+jsonl_basename = "data"
+
+[sinks.prompt]
+heading_fmt = "### {path} [chunk {chunk}]"
+include_prompt_file = true
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+[logging]
+level = "INFO"
+propagate = false
+fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+logger_name = "repocapsule"
+
+# ---------------------------------------------------------------------------
+# HTTP / web fetching defaults
+# ---------------------------------------------------------------------------
+
+[http]
+# These match the library defaults but are shown here for clarity.
+timeout = 60.0
+max_redirects = 5
+allowed_redirect_suffixes = ["github.com"]
+as_global = true
+
+# ---------------------------------------------------------------------------
+# Metadata (optional; mostly filled in by helpers)
+# ---------------------------------------------------------------------------
+
+[metadata]
+# These will be overridden by the runner helpers based on the actual output paths,
+# but you can pre-populate them if desired.
+primary_jsonl = "out/data.jsonl"
+prompt_path   = "out/data.prompt.txt"
+repo_url      = "https://github.com/SystemsApproach/book"
+
+[metadata.extra]
+run_label = "manual-test-github"
+notes    = "Manual GitHub smoke test using manual_test_github.py."

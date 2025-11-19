@@ -9,9 +9,10 @@ from dataclasses import dataclass, field
 from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callable, TypeVar
 from pathlib import Path
 import os
+import pickle
 
-from .config import QCMode, RepocapsuleConfig
-from .interfaces import Source, Sink, RepoContext, Record
+from .config import QCMode, RepocapsuleConfig, FileProcessingConfig
+from .interfaces import Source, Sink, RepoContext, Record, FileExtractor
 from .convert import DefaultExtractor
 from .log import get_logger
 from .qc_controller import InlineQCController, QCSummaryTracker
@@ -29,7 +30,8 @@ class _WorkItem:
 
 @dataclass
 class _ProcessFileCallable:
-    config: RepocapsuleConfig
+    config: FileProcessingConfig
+    file_extractor: FileExtractor
     materialize: bool = False
 
     def __call__(self, work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
@@ -38,11 +40,7 @@ class _ProcessFileCallable:
         rel = getattr(item, "path", None) or getattr(item, "rel_path", None)
         if rel is None:
             raise ValueError("FileItem missing 'path'")
-        extractor = getattr(self.config.pipeline, "file_extractor", None)
-        if extractor is None:
-            extractor = DefaultExtractor()
-            self.config.pipeline.file_extractor = extractor
-        recs_iter = extractor.extract(
+        recs_iter = self.file_extractor.extract(
             item,
             config=self.config,
             context=ctx,
@@ -55,6 +53,7 @@ class _ProcessFileCallable:
 # Stats
 # ---------------------------------------------------------------------------
 
+# Convention: hot-path dataclasses use slots=True to reduce per-instance overhead.
 @dataclass(slots=True)
 class PipelineStats:
     files: int = 0
@@ -98,7 +97,12 @@ def process_items_parallel(
     initargs: tuple[Any, ...] = (),
 ) -> None:
     """
-    Execute work items in a bounded ThreadPoolExecutor and stream results.
+    Central concurrency helper used throughout the package.
+
+    It is the internal parallelism primitive for:
+    - pipeline processing (PipelineEngine._process_parallel)
+    - post-QC shard scoring (runner.py)
+    - web PDF fetching (sources_webpdf.py)
 
     Parameters
     ----------
@@ -110,7 +114,7 @@ def process_items_parallel(
     write_records:
         Callable invoked in the main thread with each completed result.
     max_workers:
-        ThreadPoolExecutor worker count (must be >= 1).
+        Worker count for the selected executor (must be >= 1).
     window:
         Bounded in-flight submission count. Acts as backpressure so sources do
         not outrun processing. Automatically clamped to >= max_workers.
@@ -229,6 +233,70 @@ def _ext_key(path: str) -> str:
         return ""
 
 
+def _has_heavy_binary_handlers(cfg: RepocapsuleConfig) -> bool:
+    """Return True if the pipeline is configured with PDF/EVTX handlers."""
+    try:
+        handlers = cfg.pipeline.bytes_handlers
+    except Exception:
+        return False
+
+    for _sniff, handler in handlers:
+        name = getattr(handler, "__name__", "").lower()
+        mod = getattr(handler, "__module__", "").lower()
+        if name in {"handle_pdf", "handle_evtx"}:
+            return True
+        if "pdfio" in mod or "evtxio" in mod:
+            return True
+    return False
+
+
+def _has_heavy_sources(cfg: RepocapsuleConfig) -> bool:
+    """
+    Heuristic: consider the workload heavy when configured sources strongly suggest PDF/EVTX ingestion.
+    """
+    try:
+        src_cfg = cfg.sources
+    except Exception:
+        return False
+
+    try:
+        for src in src_cfg.sources:
+            cls_name = type(src).__name__.lower()
+            if "pdf" in cls_name or "evtx" in cls_name:
+                return True
+    except Exception:
+        pass
+
+    local_cfg = getattr(src_cfg, "local", None)
+    if local_cfg and getattr(local_cfg, "include_exts", None):
+        exts = {e.lower() for e in local_cfg.include_exts}
+        if ".pdf" in exts or ".evtx" in exts:
+            return True
+
+    gh_cfg = getattr(src_cfg, "github", None)
+    if gh_cfg and getattr(gh_cfg, "include_exts", None):
+        exts = {e.lower() for e in gh_cfg.include_exts}
+        if ".pdf" in exts or ".evtx" in exts:
+            return True
+
+    return False
+
+
+def _infer_executor_kind(cfg: RepocapsuleConfig) -> str:
+    """
+    Decide between 'thread' and 'process' for executor_kind='auto'.
+
+    Default to threads for typical text/code workloads; switch to processes when both
+    heavy binary handlers (pdfio/evtxio) and sources indicating PDF/EVTX ingestion are present.
+    """
+    heavy_handlers = _has_heavy_binary_handlers(cfg)
+    heavy_sources = _has_heavy_sources(cfg)
+
+    if heavy_handlers and heavy_sources:
+        return "process"
+    return "thread"
+
+
 def _resolve_pipeline_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str, bool]:
     """
     Normalize pipeline concurrency knobs (workers/window/executor-kind/fail-fast).
@@ -237,11 +305,28 @@ def _resolve_pipeline_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str
     max_workers = pc.max_workers or (os.cpu_count() or 1)
     max_workers = max(1, max_workers)
     window = pc.submit_window or (max_workers * 4)
-    kind = (pc.executor_kind or "thread").strip().lower()
+    raw_kind = (pc.executor_kind or "auto").strip().lower()
+    if raw_kind == "auto":
+        kind = _infer_executor_kind(cfg)
+    else:
+        kind = raw_kind
+
     if kind not in {"thread", "process"}:
         kind = "thread"
     fail_fast = bool(pc.fail_fast)
     return max_workers, window, kind, fail_fast
+
+
+def _build_file_processing_config(cfg: RepocapsuleConfig) -> FileProcessingConfig:
+    """
+    Create a sanitized config containing only per-file knobs for worker processes.
+    """
+
+    return FileProcessingConfig(
+        decode=cfg.decode,
+        chunk=cfg.chunk,
+        pipeline=cfg.pipeline,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -267,20 +352,24 @@ class PipelineEngine:
         qc_cfg = cfg.qc
 
         tracker = stats.qc
-        tracker.enabled = bool(qc_cfg.enabled)
+        inline_or_advisory = qc_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}
+        tracker.enabled = bool(qc_cfg.enabled and inline_or_advisory)
         tracker.mode = qc_cfg.mode
         tracker.min_score = qc_cfg.min_score
         tracker.drop_near_dups = bool(qc_cfg.drop_near_dups)
 
+        inline_mode = qc_cfg.mode == QCMode.INLINE
         advisory_mode = qc_cfg.mode == QCMode.ADVISORY
         qc_active = bool(
-            qc_cfg.enabled
-            and qc_cfg.mode == QCMode.INLINE
+            tracker.enabled
             and getattr(qc_cfg, "scorer", None)
         )
 
-        if qc_cfg.enabled and qc_cfg.mode == QCMode.INLINE and not qc_active:
-            self.log.warning("QC enabled but no scorer is configured; skipping inline annotations.")
+        if tracker.enabled and not qc_active:
+            raise RuntimeError(
+                "Invariant violation: inline/advisory QC enabled without a scorer. "
+                "This should have been rejected during configuration."
+            )
 
         self.qc_controller = None
         if qc_active:
@@ -289,7 +378,7 @@ class PipelineEngine:
                 stats=stats,
                 scorer=qc_cfg.scorer,  # type: ignore[arg-type]
                 logger=self.log,
-                enforce_drops=not advisory_mode,
+                enforce_drops=inline_mode,
             )
 
     def _increment_file_stats(self, item: Any) -> None:
@@ -307,7 +396,17 @@ class PipelineEngine:
         stats.by_ext[ext] = stats.by_ext.get(ext, 0) + 1
 
     def _make_processor(self, *, materialize: bool) -> _ProcessFileCallable:
-        return _ProcessFileCallable(config=self.config, materialize=materialize)
+        cfg = self.config
+        extractor = cfg.pipeline.file_extractor
+        if extractor is None:
+            extractor = DefaultExtractor()
+            cfg.pipeline.file_extractor = extractor
+        file_cfg = _build_file_processing_config(cfg)
+        return _ProcessFileCallable(
+            config=file_cfg,
+            file_extractor=extractor,
+            materialize=materialize,
+        )
 
     def _write_records(
         self,
@@ -455,9 +554,19 @@ class PipelineEngine:
         executor_kind: str,
         fail_fast: bool,
     ) -> None:
+        # Thin wrapper that adapts pipeline bookkeeping to process_items_parallel.
         cfg = self.config
         stats = self.stats
         log = self.log
+
+        def _log_pickling_hint(exc: BaseException) -> None:
+            if executor_kind != "process":
+                return
+            if isinstance(exc, (pickle.PicklingError, TypeError)):
+                log.warning(
+                    "Process executor failed to serialize worker arguments; "
+                    "set pipeline.executor_kind='thread' or ensure extractors/config are picklable."
+                )
 
         def _items_with_stats() -> Iterable[_WorkItem]:
             for work in items:
@@ -469,10 +578,12 @@ class PipelineEngine:
 
         def _on_submit_error(work: _WorkItem, exc: BaseException) -> None:
             log.warning("Scheduling failed for %s: %s", getattr(work.item, "path", "<unknown>"), exc)
+            _log_pickling_hint(exc)
             stats.source_errors += 1
 
         def _on_worker_error(exc: BaseException) -> None:
             log.warning("Worker failed: %s", exc)
+            _log_pickling_hint(exc)
             stats.source_errors += 1
 
         process_items_parallel(
@@ -573,7 +684,7 @@ class PipelineEngine:
 
 def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
     """Run the end-to-end pipeline described by ``config``."""
-    engine = PipelineEngine(config=config)
+    engine = PipelineEngine(config=config.prepared())
     stats = engine.run()
     return stats.as_dict()
 

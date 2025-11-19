@@ -31,6 +31,7 @@ if TYPE_CHECKING:  # pragma: no cover - type-only imports
         HttpConfig,
         LocalDirSourceConfig,
         QCConfig,
+        PdfSourceConfig,
         SinkConfig,
     )
     from .qc import JSONLQualityScorer
@@ -47,6 +48,7 @@ __all__ = [
     "make_github_zip_source",
     "make_http_client",
     "make_local_dir_source",
+    "make_web_pdf_source",
     "make_output_paths_for_github",
     "make_output_paths_for_pdf",
     "make_jsonl_text_source",
@@ -204,7 +206,7 @@ def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) 
         from .qc import JSONLQualityScorer  # optional extra
     except Exception:
         return None
-    scorer = JSONLQualityScorer()
+    scorer = JSONLQualityScorer(heuristics=getattr(qc_cfg, "heuristics", None))
     if not new_instance:
         qc_cfg.scorer = scorer
     return scorer
@@ -358,6 +360,28 @@ def make_github_zip_source(
         context=context,
         download_timeout=download_timeout,
         http_client=http_client,
+    )
+
+
+def make_web_pdf_source(
+    urls: Sequence[str | Path],
+    *,
+    config: "PdfSourceConfig",
+    http_client: Optional["SafeHttpClient"] = None,
+):
+    """
+    Build a WebPdfListSource from a sequence of URLs and a PdfSourceConfig.
+
+    The http_client parameter, if provided, is passed through directly and avoids using the
+    global SafeHttpClient fallback.
+    """
+    from .sources_webpdf import WebPdfListSource  # local import to avoid cycles
+
+    norm_urls = [str(u) for u in urls]
+    return WebPdfListSource(
+        norm_urls,
+        config=config,
+        client=http_client,
     )
 
 

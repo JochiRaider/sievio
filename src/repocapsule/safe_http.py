@@ -14,9 +14,14 @@ import urllib.request
 from dataclasses import dataclass
 from typing import Dict, Mapping, Optional, Sequence, Union
 
-import logging
+from .log import get_logger
 
-log = logging.getLogger(__name__)
+# Note:
+#   SAFE_HTTP_CLIENT and the get/set helpers below are provided as a convenience for simple scripts
+#   and the CLI. Library callers and tests should prefer constructing SafeHttpClient instances
+#   explicitly (e.g., via HttpConfig.build_client) and passing them into factories/sources.
+
+log = get_logger(__name__)
 
 RequestLike = Union[str, urllib.request.Request]
 
@@ -379,7 +384,12 @@ SAFE_HTTP_CLIENT: Optional[SafeHttpClient] = None
 
 
 def get_global_http_client() -> SafeHttpClient:
-    """Return the process-wide SafeHttpClient, creating a default one if unset."""
+    """
+    Return the process-wide SafeHttpClient, creating a default one if unset.
+
+    Primarily intended for CLI-style use. Library code should prefer injecting a client explicitly
+    rather than relying on this mutable global.
+    """
     global SAFE_HTTP_CLIENT
     if SAFE_HTTP_CLIENT is None:
         SAFE_HTTP_CLIENT = SafeHttpClient(allowed_redirect_suffixes=("github.com",))
@@ -387,6 +397,11 @@ def get_global_http_client() -> SafeHttpClient:
 
 
 def set_global_http_client(client: Optional[SafeHttpClient]) -> None:
-    """Override (or clear) the module-level SAFE_HTTP_CLIENT used by helpers."""
+    """
+    Override (or clear) the module-level SAFE_HTTP_CLIENT used by helpers.
+
+    This is a convenience for one-shot tools and the CLI. Long-lived applications and tests should
+    avoid mutating global state and instead pass SafeHttpClient instances directly where needed.
+    """
     global SAFE_HTTP_CLIENT
     SAFE_HTTP_CLIENT = client

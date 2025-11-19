@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, Mapping
 import os, json, gzip
 
 from .interfaces import RepoContext, Record
@@ -11,16 +11,21 @@ from .interfaces import RepoContext, Record
 class _BaseJSONLSink:
     """Shared logic for JSONL sinks."""
 
-    def __init__(self, out_path: str | os.PathLike[str]):
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
         self._path = Path(out_path)
         self._fp = None
         self._tmp_path: Optional[Path] = None
+        self._header_record: Optional[Mapping[str, Any]] = dict(header_record) if header_record else None
+        self._header_written = False
 
     def open(self, context: Optional[RepoContext] = None) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name = f"{self._path.name}.tmp"
         self._tmp_path = self._path.parent / tmp_name
         self._fp = self._open_handle(self._tmp_path)
+        if self._header_record and not self._header_written:
+            self.write(dict(self._header_record))
+            self._header_written = True
 
     def write(self, record: Dict[str, Any]) -> None:
         assert self._fp is not None
@@ -47,9 +52,16 @@ class _BaseJSONLSink:
     def _open_handle(self, path: Path):
         raise NotImplementedError
 
+    def set_header_record(self, record: Optional[Mapping[str, Any]]) -> None:
+        self._header_record = dict(record) if record else None
+        self._header_written = False
+
 
 class JSONLSink(_BaseJSONLSink):
     """Simple streaming JSONL sink (one record per line)."""
+
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+        super().__init__(out_path, header_record=header_record)
 
     def _open_handle(self, path: Path):
         return open(path, "w", encoding="utf-8", newline="")
@@ -57,6 +69,9 @@ class JSONLSink(_BaseJSONLSink):
 
 class GzipJSONLSink(_BaseJSONLSink):
     """Streaming JSONL sink that gzip-compresses its output."""
+
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+        super().__init__(out_path, header_record=header_record)
 
     def _open_handle(self, path: Path):
         return gzip.open(path, "wt", encoding="utf-8", newline="")

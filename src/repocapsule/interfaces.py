@@ -17,7 +17,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
-    from .config import RepocapsuleConfig
+    from .config import RepocapsuleConfig, FileProcessingConfig
 
 
 # -----------------------------------------------------------------------------
@@ -156,7 +156,7 @@ class FileExtractor(Protocol):
         self,
         item: FileItem,
         *,
-        config: "RepocapsuleConfig",
+        config: "RepocapsuleConfig | FileProcessingConfig",
         context: Optional[RepoContext] = None,
     ) -> Iterable[Record]:
         ...
@@ -169,7 +169,9 @@ class StreamingExtractor(Protocol):
 
     Streaming extractors can avoid materializing the full file payload when
     running inside a thread-friendly pipeline that can reopen the underlying
-    source (e.g., local files).
+    source (e.g., local files). The default pipeline only attempts this path
+    when executor_kind == "thread" and the FileItem is marked streamable with
+    a valid origin_path.
     """
 
     name: Optional[str]  # type: ignore[assignment]

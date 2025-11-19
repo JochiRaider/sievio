@@ -22,6 +22,7 @@ __all__ = [
     "get_repo_license_spdx",
     "download_zipball_to_temp",
     "iter_zip_members",
+    "detect_license_for_github_repo",
 ]
 
 log = get_logger(__name__)
@@ -275,6 +276,41 @@ def download_zipball_to_temp(
                 raise
     except urllib.error.URLError as e:
         raise RuntimeError(f"Network error downloading zipball: {e}")
+
+
+def detect_license_for_github_repo(
+    spec: RepoSpec,
+    *,
+    ref: Optional[str] = None,
+    timeout: float = _DEF_ZIP_TIMEOUT,
+    client: Optional[safe_http.SafeHttpClient] = None,
+) -> Optional[str]:
+    """
+    Best-effort license detection by downloading a zipball and scanning it.
+
+    Returns the detected license_id (e.g., "MIT", "CC-BY-4.0") or None.
+    """
+    zip_path: Optional[str] = None
+    try:
+        zip_path = download_zipball_to_temp(
+            spec,
+            ref=ref,
+            timeout=timeout,
+            client=client,
+        )
+        if not zip_path:
+            return None
+        license_id, _meta = detect_license_in_zip(zip_path, spec.subpath)
+        return license_id
+    except Exception as exc:
+        log.debug("GitHub license detection failed for %s: %s", spec.full_name, exc)
+        return None
+    finally:
+        if zip_path:
+            try:
+                os.remove(zip_path)
+            except OSError as exc:
+                log.debug("temp zip cleanup failed for %s: %s", zip_path, exc)
 
 
 # -------------------

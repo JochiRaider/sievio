@@ -6,7 +6,6 @@ from urllib.parse import urlparse
 from typing import Iterable, Optional, Set
 
 __all__ = [
-    "build_output_basename",
     "build_output_basename_github",
     "build_output_basename_pdf",
     "normalize_extensions",
@@ -80,37 +79,6 @@ def build_output_basename_pdf(*,
     spdx    = _normalize_spdx(license_spdx)
     base = "__".join([host_s, title_s, spdx])
     return base[:maxlen]
-
-# Back-compat single entry-point mirroring older scripts:
-def build_output_basename(*,
-    kind: str,
-    owner: Optional[str] = None,
-    repo: Optional[str] = None,
-    ref: Optional[str] = None,
-    license_spdx: Optional[str] = None,
-    include_commit: Optional[str] = None,
-    url: Optional[str] = None,
-    title: Optional[str] = None,
-    maxlen: int = 120,
-) -> str:
-    """
-    Unified builder:
-      kind="github" -> use owner/repo/ref/license[+commit]
-      kind="pdf"    -> use url/title/license
-    """
-    k = (kind or "").lower()
-    if k == "github":
-        return build_output_basename_github(
-            owner=owner, repo=repo, ref=ref,
-            license_spdx=license_spdx, include_commit=include_commit, maxlen=maxlen
-        )
-    elif k == "pdf":
-        return build_output_basename_pdf(
-            url=url, title=title, license_spdx=license_spdx, maxlen=maxlen
-        )
-    else:
-        raise ValueError(f"unknown kind for build_output_basename: {kind!r}")
-
 
 def normalize_extensions(exts: Optional[Iterable[str]]) -> Optional[Set[str]]:
     """

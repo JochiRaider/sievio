@@ -9,7 +9,7 @@ from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from .config import QCMode
 from .interfaces import QualityScorer, Record
-from .records import ensure_meta_dict, merge_meta_defaults
+from .records import ensure_meta_dict, merge_meta_defaults, best_effort_record_path
 from .qc_utils import update_dup_family_counts, top_dup_families
 
 
@@ -153,8 +153,13 @@ class InlineQCController:
             if getattr(self.cfg, "fail_on_error", False):
                 raise
             if self.logger:
-                path = _record_path(record)
-                self.logger.warning("QC scoring failed for %s: %s", path, exc)
+                path = best_effort_record_path(record)
+                self.logger.warning(
+                    "QC scoring failed for %s (mode=%s): %s",
+                    path,
+                    getattr(self.cfg, "mode", None),
+                    exc,
+                )
             return True
 
         keep = self.summary.observe(qc_result, apply_gates=self.enforce_drops)
@@ -165,6 +170,14 @@ class InlineQCController:
         return self.summary.as_dict()
 
     def _merge_qc_meta(self, record: Record, qc_result: Dict[str, Any]) -> None:
+        """
+        Attach QC-derived metadata to the record's ``meta`` dict.
+
+        If the scorer provides a ``tokens`` estimate we surface it as both
+        ``approx_tokens`` (always) and as ``tokens`` when the record does not
+        already carry an explicit count. Remaining QC keys (e.g., ``qc_score``,
+        ``qc_decision``, ``near_dup``) are merged via :func:`merge_meta_defaults`.
+        """
         if not isinstance(record, dict):
             return
         meta = ensure_meta_dict(record)
@@ -196,13 +209,3 @@ def summarize_qc_rows(
     for row in rows:
         tracker.observe(row, apply_gates=apply_gates)
     return tracker.as_dict()
-
-
-def _record_path(record: Record) -> str:
-    if isinstance(record, dict):
-        meta = record.get("meta")
-        if isinstance(meta, dict) and meta.get("path"):
-            return str(meta.get("path"))
-        if record.get("path"):
-            return str(record.get("path"))
-    return "<unknown>"

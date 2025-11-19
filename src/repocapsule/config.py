@@ -2,16 +2,26 @@
 from __future__ import annotations
 
 import json
+try:  # pragma: no cover - optional dependency
+    import tomllib  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover
+    try:
+        import tomli as tomllib  # type: ignore[assignment]
+    except Exception:  # pragma: no cover
+        tomllib = None  # type: ignore[assignment]
 from collections.abc import Sequence as ABCSequence
 from dataclasses import dataclass, field, replace, is_dataclass, fields
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints
 
 from .chunk import ChunkPolicy
 from .factories import make_bytes_handlers, make_qc_scorer
-from .interfaces import Extractor, FileExtractor, RepoContext, Source, Record
-from .log import configure_logging, PACKAGE_LOGGER_NAME
+from .interfaces import Extractor, FileExtractor, RepoContext, Source, Sink, Record, QualityScorer
+from .log import configure_logging, PACKAGE_LOGGER_NAME, get_logger
 from .safe_http import SafeHttpClient, set_global_http_client
+from .records import build_run_header_record
+
+log = get_logger(__name__)
 
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
@@ -28,6 +38,19 @@ def _default_bytes_handlers() -> Sequence[Tuple[Sniff, BytesHandler]]:
 
 
 class QCMode:
+    """
+    Supported quality-control modes.
+
+    OFF:
+        Disable QC entirely (no scoring, no annotations).
+    INLINE:
+        Score records during extraction and enforce gating (records may be dropped).
+    ADVISORY:
+        Score records inline but never drop them; annotations are for review only.
+    POST:
+        Run QC after the pipeline completes (no inline annotations or gating).
+    """
+
     INLINE = "inline"
     POST = "post"
     ADVISORY = "advisory"
@@ -83,6 +106,13 @@ class GitHubSourceConfig:
 
 @dataclass(slots=True)
 class PdfSourceConfig:
+    """
+    Settings for web PDF fetching; download_* controls concurrency for WebPdfListSource/WebPagePdfSource only.
+
+    download_executor_kind:
+        "thread" only; "process" is currently not supported for web downloads and will
+        fall back to "thread" with a warning.
+    """
     timeout: int = 60
     max_pdf_bytes: int = 200 * 1024 * 1024  # Streaming cap; responses exceeding it are aborted.
     max_links: int = 200
@@ -91,6 +121,9 @@ class PdfSourceConfig:
     retries: int = 1
     user_agent: str = "repocapsule/0.1 (+https://github.com)"
     client: Optional[SafeHttpClient] = None
+    download_max_workers: int = 4  # 0 or negative → auto based on URL count
+    download_submit_window: Optional[int] = None
+    download_executor_kind: str = "thread"
 
 
 @dataclass(slots=True)
@@ -127,7 +160,16 @@ class PipelineConfig:
 
     max_workers = 0 → auto (os.cpu_count or 1)
     submit_window = None → defaults to max_workers * 4
-    executor_kind ∈ {"thread", "process"}
+    executor_kind ∈ {"thread", "process", "auto"}
+      - "thread": good for I/O-heavy or small text/code workloads.
+      - "process": recommended for CPU-bound handlers such as PDF (pdfio) or EVTX (evtxio).
+      - "auto": let the pipeline choose based on configured sources/handlers (defaults to
+        threads for mostly text/code; switches to processes when PDF/EVTX-heavy).
+
+    Where this applies:
+    - main extraction pipeline (file decoding/chunking/sink writes)
+    - defaults for post-QC when QCConfig.parallel_post is True and no QC overrides are set
+    Does not control web PDF fetch concurrency (see PdfSourceConfig.download_*).
     """
 
     extractors: Sequence[Extractor] = field(default_factory=tuple)
@@ -138,7 +180,18 @@ class PipelineConfig:
     max_workers: int = 0
     submit_window: Optional[int] = None
     fail_fast: bool = False
-    executor_kind: str = "thread"
+    executor_kind: str = "auto"
+
+
+@dataclass(slots=True, frozen=True)
+class FileProcessingConfig:
+    """
+    Lightweight view used by worker processes that only need per-file settings.
+    """
+
+    decode: DecodeConfig
+    chunk: ChunkConfig
+    pipeline: PipelineConfig
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +206,7 @@ class PromptConfig:
 
 @dataclass(slots=True)
 class SinkConfig:
-    sinks: Sequence = field(default_factory=tuple)
+    sinks: Sequence[Sink] = field(default_factory=tuple)
     context: Optional[RepoContext] = None
     output_dir: Path = Path(".")
     primary_jsonl_name: Optional[str] = None
@@ -168,6 +221,16 @@ class SinkConfig:
 
 @dataclass(slots=True)
 class HttpConfig:
+    """
+    HTTP client settings used by higher-level helpers and factories.
+
+    - ``client`` can hold a pre-built SafeHttpClient instance. When set, it will be reused by
+      ``build_client()`` and passed to factories.
+    - ``as_global`` controls whether ``RepocapsuleConfig.prepared()`` installs this client as the
+      module-wide default via ``set_global_http_client``. For CLI-style one-shot runs, leaving this
+      True is convenient. For tests or long-lived processes, prefer ``as_global=False`` and pass the
+      client explicitly.
+    """
     timeout: float = 60.0
     max_redirects: int = 5
     allowed_redirect_suffixes: Tuple[str, ...] = ("github.com",)
@@ -192,7 +255,52 @@ class HttpConfig:
 # ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
+class QCHeuristics:
+    """
+    Tunable thresholds/weights used by quality scoring. Defaults match existing hard-coded behavior.
+    """
+
+    target_code_min: int = 2000
+    target_code_max: int = 4000
+    target_log_min: int = 1000
+    target_log_max: int = 2000
+    target_text_min: int = 1500
+    target_text_max: int = 2000
+    target_other_min: int = 1000
+    target_other_max: int = 3000
+
+    repetition_k: int = 16
+
+    code_short_line_threshold: int = 60
+    code_punct_weight: float = 0.5
+    code_short_line_weight: float = 0.5
+
+
+@dataclass(slots=True)
 class QCConfig:
+    """
+    Configuration for quality scoring and gating.
+
+    Set ``enabled=True`` and pick a ``mode`` from :class:`QCMode`:
+
+    - ``INLINE``: score records during extraction and drop those failing thresholds.
+    - ``ADVISORY``: score inline but never drop; adds QC metadata for review.
+    - ``POST``: skip inline scoring; run QC by re-reading the JSONL output.
+    - ``OFF``: disable QC entirely.
+
+    Semantics:
+    - enabled=False → QC is off regardless of mode.
+    - enabled=True with mode in {"inline", "advisory"} → requires a scorer and QC extras; validated at config prep.
+    - enabled=True with mode="post" → scorer optional; if QC extras are missing, QC is skipped with a warning.
+    Concurrency:
+    - ``parallel_post`` enables post-QC scoring via process_items_parallel.
+    - ``post_*`` knobs override pipeline concurrency for post-QC; when None, they inherit from PipelineConfig.
+
+    heuristics:
+    Advanced tuning of QC heuristics (length bands, repetition window, code complexity weights). Most
+    users can ignore this unless they need to align scoring with specialized corpora.
+    """
+
     enabled: bool = False
     write_csv: bool = False
     csv_suffix: str = "_quality.csv"
@@ -205,11 +313,48 @@ class QCConfig:
     post_executor_kind: Optional[str] = None
     post_max_workers: Optional[int] = None
     post_submit_window: Optional[int] = None
+    heuristics: "QCHeuristics" = field(default_factory=QCHeuristics)
 
     def normalize_mode(self) -> str:
         normalized = QCMode.normalize(self.mode)
         self.mode = normalized
         return normalized
+
+    def validate(self) -> None:
+        mode = self.normalize_mode()
+        if self.enabled and mode == QCMode.OFF:
+            raise ValueError("QC enabled but mode is 'off'; disable qc.enabled or choose an active mode.")
+        if self.enabled and mode in {QCMode.INLINE, QCMode.ADVISORY} and self.scorer is None:
+            raise ValueError("Inline/advisory QC requires a scorer; set qc.scorer or install QC extras.")
+        h = self.heuristics or QCHeuristics()
+        if not isinstance(h, QCHeuristics):
+            try:
+                h = QCHeuristics(**dict(h))  # type: ignore[arg-type]
+            except Exception as exc:
+                raise TypeError(f"qc.heuristics must be QCHeuristics-compatible; got {type(self.heuristics).__name__}") from exc
+        self.heuristics = h
+        numeric_positive = [
+            ("target_code_min", h.target_code_min),
+            ("target_code_max", h.target_code_max),
+            ("target_log_min", h.target_log_min),
+            ("target_log_max", h.target_log_max),
+            ("target_text_min", h.target_text_min),
+            ("target_text_max", h.target_text_max),
+            ("target_other_min", h.target_other_min),
+            ("target_other_max", h.target_other_max),
+            ("repetition_k", h.repetition_k),
+            ("code_short_line_threshold", h.code_short_line_threshold),
+        ]
+        for name, value in numeric_positive:
+            if value <= 0:
+                raise ValueError(f"qc.heuristics.{name} must be positive; got {value}")
+        weight_fields = [
+            ("code_punct_weight", h.code_punct_weight),
+            ("code_short_line_weight", h.code_short_line_weight),
+        ]
+        for name, value in weight_fields:
+            if not (0.0 <= value <= 1.0):
+                raise ValueError(f"qc.heuristics.{name} must be between 0 and 1; got {value}")
 
 
 @dataclass(slots=True)
@@ -313,28 +458,72 @@ class RepocapsuleConfig:
     def with_context(self, ctx: RepoContext) -> RepocapsuleConfig:
         return replace(self, sinks=replace(self.sinks, context=ctx))
 
-    def prepare(self) -> None:
-        self.logging.apply()
-        self._prepare_http()
-        self._prepare_sources()
-        self._prepare_sinks()
-        self._prepare_pipeline()
-        self._prepare_qc()
-        self.validate()
+    def prepared(self, *, mutate: bool = False) -> "RepocapsuleConfig":
+        """
+        Apply defaults and wiring, returning a runtime-ready configuration.
+
+        Prefer this method over any mutating setup helpers; when ``mutate`` is
+        False (the default) a shallow copy is prepared so the original config
+        remains reusable.
+        """
+
+        cfg = self if mutate else replace(self)
+        cfg.logging.apply()
+        cfg._prepare_http()
+        cfg._prepare_sources()
+        cfg._prepare_sinks()
+        cfg._prepare_pipeline()
+        cfg._prepare_qc()
+        cfg._attach_run_header_record()
+        cfg.validate()
+        return cfg
 
     def _prepare_http(self) -> None:
+        """
+        Normalize HTTP client wiring.
+
+        Installs ``self.http.client`` and, when ``as_global`` is True, registers it as the
+        process-wide default via ``safe_http.set_global_http_client``. Library callers that need
+        per-run isolation should set ``as_global=False`` and pass ``self.http.build_client()``
+        directly to factories instead of relying on globals.
+        """
         client = self.http.build_client()
         self.http.client = client
         if self.http.as_global:
             set_global_http_client(client)
 
     def _prepare_sources(self) -> None:
-        # Placeholder for future normalization of source configs.
+        """
+        Hook for future normalization of source configs (currently a no-op).
+        """
         return None
 
     def _prepare_sinks(self) -> None:
-        # Placeholder for future sink/output preparation logic.
-        return None
+        sinks = self.sinks
+        meta = self.metadata
+        primary = sinks.primary_jsonl_name or meta.primary_jsonl
+        if not primary:
+            return
+        primary_str = str(primary)
+        sinks.primary_jsonl_name = primary_str
+        meta.primary_jsonl = primary_str
+
+        output_dir = sinks.output_dir
+        needs_output_dir = output_dir is None or str(output_dir) in {"", "."}
+        if needs_output_dir:
+            try:
+                parent = Path(primary_str).parent
+            except Exception:
+                parent = None
+            if parent:
+                sinks.output_dir = parent
+
+    def _attach_run_header_record(self) -> None:
+        header = build_run_header_record(self)
+        for sink in getattr(self.sinks, "sinks", ()):
+            setter = getattr(sink, "set_header_record", None)
+            if callable(setter):
+                setter(header)
 
     def _prepare_pipeline(self) -> None:
         if not self.pipeline.bytes_handlers:
@@ -346,29 +535,44 @@ class RepocapsuleConfig:
 
     def _prepare_qc(self) -> None:
         qc_cfg = self.qc
-        if qc_cfg.enabled and not qc_cfg.scorer:
-            scorer = make_qc_scorer(qc_cfg)
-            if scorer is None:
-                raise RuntimeError(
-                    "QC extras not installed; disable QC or install optional deps."
-                )
-            qc_cfg.scorer = scorer
-        if qc_cfg.enabled and qc_cfg.scorer is None:
-            raise RuntimeError("QC extras not installed; disable QC or install optional deps.")
         mode = qc_cfg.normalize_mode()
-        if mode == QCMode.OFF:
+        if not qc_cfg.enabled or mode == QCMode.OFF:
             qc_cfg.enabled = False
+            qc_cfg.mode = QCMode.OFF
+            return
+
+        if mode in {QCMode.INLINE, QCMode.ADVISORY}:
+            if qc_cfg.scorer is not None and not isinstance(qc_cfg.scorer, QualityScorer):
+                raise TypeError("qc.scorer must implement the QualityScorer protocol for inline/advisory modes.")
+            if qc_cfg.scorer is None:
+                scorer = make_qc_scorer(qc_cfg)
+                if scorer is None:
+                    raise RuntimeError(
+                        "Inline/advisory QC requested but QC extras are not installed; disable qc.enabled or install QC dependencies."
+                    )
+                qc_cfg.scorer = scorer
+            return
+
+        if mode == QCMode.POST and qc_cfg.scorer is None:
+            scorer = make_qc_scorer(qc_cfg, new_instance=False)
+            if scorer is not None:
+                qc_cfg.scorer = scorer
+            else:
+                log.warning("QC POST mode enabled but QC extras are not installed; skipping QC for this run.")
+                qc_cfg.enabled = False
+                qc_cfg.mode = QCMode.OFF
+                qc_cfg.scorer = None
 
     def validate(self) -> None:
         self._validate_paths()
-        if self.qc.enabled and self.qc.mode not in QCMode.ALL:
-            raise ValueError("QC enabled but mode is set to 'off'; disable QC or change mode.")
-
-        if self.qc.enabled and self.qc.mode in {QCMode.INLINE, QCMode.ADVISORY} and not self.qc.scorer:
-            raise ValueError("QC mode requires a scorer; ensure qc.scorer is configured or extras installed.")
-
-        if self.pipeline.executor_kind not in {"thread", "process"}:
-            raise ValueError("pipeline.executor_kind must be 'thread' or 'process'.")
+        self.qc.validate()
+        allowed = {"thread", "process", "auto"}
+        kind = (self.pipeline.executor_kind or "auto").strip().lower()
+        if kind not in allowed:
+            raise ValueError(
+                f"pipeline.executor_kind must be one of {sorted(allowed)}; got {self.pipeline.executor_kind!r}."
+            )
+        self.pipeline.executor_kind = kind
 
     def _validate_paths(self) -> None:
         meta = self.metadata
@@ -387,6 +591,12 @@ class RepocapsuleConfig:
     # Serialization helpers
     # -------------------------
     def to_dict(self) -> Dict[str, Any]:
+        """
+        Return a JSON-serializable representation of this configuration.
+
+        Suitable for embedding in RunSummaryMeta.config or persisting via to_json();
+        skips non-serializable runtime objects like sources, sinks, HTTP clients, or scorer instances.
+        """
         return _dataclass_to_dict(self)
 
     def to_json(self, path: Path | str, *, indent: int = 2) -> str:
@@ -404,6 +614,40 @@ class RepocapsuleConfig:
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(payload)
 
+    @classmethod
+    def from_toml(cls: Type[T], path: Path | str) -> T:
+        """
+        Load a RepocapsuleConfig from a TOML file.
+
+        The TOML layout mirrors the structure of this dataclass: top-level tables like [decode],
+        [chunk], [pipeline], [sinks], [http], [qc], [logging], [metadata], and so on.
+        """
+        if tomllib is None:
+            raise RuntimeError(
+                "TOML support requires Python 3.11+ (tomllib) or installing the 'tomli' package."
+            )
+        path_obj = Path(path)
+        raw = path_obj.read_bytes()
+        data = tomllib.loads(raw.decode("utf-8"))
+
+        if not isinstance(data, Mapping):
+            raise TypeError(f"Top-level TOML document must be a mapping; got {type(data).__name__}.")
+
+        return cls.from_dict(data)
+
+
+def load_config_from_path(path: str | Path) -> RepocapsuleConfig:
+    """
+    Convenience loader that picks a parser based on file extension (.toml or .json).
+    """
+    p = Path(path)
+    suffix = p.suffix.lower()
+    if suffix == ".toml":
+        return RepocapsuleConfig.from_toml(p)
+    if suffix == ".json":
+        return RepocapsuleConfig.from_json(p)
+    raise ValueError(f"Unsupported config extension {p.suffix!r}; expected .toml or .json.")
+
 
 _SKIP_FIELDS: Dict[Type[Any], set[str]] = {
     SourceConfig: {"sources"},
@@ -415,6 +659,7 @@ _SKIP_FIELDS: Dict[Type[Any], set[str]] = {
 
 
 def _dataclass_to_dict(obj: Any) -> Dict[str, Any]:
+    """Serialize dataclasses to JSON-friendly dicts, skipping None and non-serializable fields."""
     result: Dict[str, Any] = {}
     obj_type = type(obj)
     skip = _SKIP_FIELDS.get(obj_type, set())
@@ -431,6 +676,7 @@ def _dataclass_to_dict(obj: Any) -> Dict[str, Any]:
 
 
 def _serialize_value(value: Any) -> Any:
+    """Best-effort JSON-friendly coercion; drops values that cannot be serialized."""
     if value is None:
         return None
     if isinstance(value, (str, int, float, bool)):
@@ -460,11 +706,14 @@ def _serialize_value(value: Any) -> Any:
 def _dataclass_from_dict(cls: Type[T], data: Mapping[str, Any] | None) -> T:
     if data is None:
         return cls()  # type: ignore[call-arg]
+    type_hints = get_type_hints(cls)
+
     kwargs: Dict[str, Any] = {}
     for f in fields(cls):
         if f.name not in data:
             continue
-        kwargs[f.name] = _coerce_value(f.type, data[f.name])
+        field_type = type_hints.get(f.name, f.type)
+        kwargs[f.name] = _coerce_value(field_type, data[f.name])
     return cls(**kwargs)  # type: ignore[arg-type]
 
 
@@ -513,4 +762,4 @@ def is_dataclass_type(typ: Any) -> bool:
 
 
 
-__all__ = ["RepocapsuleConfig", "RunMetadata"]
+__all__ = ["RepocapsuleConfig", "RunMetadata", "FileProcessingConfig"]

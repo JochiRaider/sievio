@@ -16,6 +16,10 @@ Example
 
 Advanced utilities are still imported here for convenience, but they are
 not part of the curated API surface and may change between releases.
+
+For HTTP access (GitHub zipballs, web PDFs), configure ``cfg.http`` and pass the resulting
+``SafeHttpClient`` into factories such as ``make_github_zip_source`` or ``make_web_pdf_source``.
+The module-level ``safe_http`` global is intended only for simple one-shot scripts and the CLI.
 """
 
 from __future__ import annotations
@@ -34,7 +38,7 @@ except Exception:  # PackageNotFoundError or any runtime env oddities
 # ---------------------------------------------------------------------------
 # Primary public API (stable)
 # ---------------------------------------------------------------------------
-from .config import RepocapsuleConfig
+from .config import RepocapsuleConfig, QCHeuristics, load_config_from_path
 from .records import (
     LanguageConfig,
     build_record,
@@ -42,15 +46,21 @@ from .records import (
     RunSummaryMeta,
     QCSummaryMeta,
     ensure_meta_dict,
+    best_effort_record_path,
     is_summary_record,
 )
-from .runner import convert, convert_local_dir, convert_github
+from .runner import (
+    convert,
+    convert_local_dir,
+    convert_github,
+    make_local_repo_config,
+    make_github_repo_config,
+)
 from .fs import LocalDirSource
 from .githubio import GitHubZipSource
 from .sources_webpdf import WebPdfListSource, WebPagePdfSource
 from .sinks import JSONLSink, PromptTextSink, NoopSink
 from .naming import (
-    build_output_basename,
     build_output_basename_github,
     build_output_basename_pdf,
 )
@@ -111,6 +121,8 @@ from .convert import (
 )
 from .interfaces import FileExtractor, FileItem, RepoContext, Source, Sink, Extractor
 from .pipeline import run_pipeline, PipelineStats, PipelineEngine
+from .runner import run_engine
+from .factories import make_web_pdf_source
 
 
 # Optional extras (not part of PRIMARY_API)
@@ -133,10 +145,15 @@ except Exception:  # pragma: no cover
 PRIMARY_API = [
     "__version__",
     "RepocapsuleConfig",
+    "load_config_from_path",
     "LanguageConfig",
     "convert",
+    "best_effort_record_path",
+    "run_engine",
     "convert_local_dir",
     "convert_github",
+    "make_local_repo_config",
+    "make_github_repo_config",
     "LocalDirSource",
     "GitHubZipSource",
     "WebPdfListSource",
@@ -150,7 +167,6 @@ PRIMARY_API = [
     "QCSummaryMeta",
     "ensure_meta_dict",
     "is_summary_record",
-    "build_output_basename",
     "build_output_basename_github",
     "build_output_basename_pdf",
     "detect_license_in_tree",

@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from .interfaces import Source, FileItem
 from . import safe_http
 from .config import PdfSourceConfig
+from .log import get_logger
 from .pipeline import process_items_parallel
 
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
@@ -76,8 +77,12 @@ def _filename_from_content_disposition(hval: Optional[str]) -> Optional[str]:
         try:
             enc, _, rest = val.split("'", 2)
             return urllib.parse.unquote(rest, encoding=(enc or "utf-8"), errors="replace")
-        except Exception:
-            pass
+        except Exception as exc:
+            log.debug(
+                "Failed to parse RFC5987 filename from Content-Disposition %r: %s",
+                hval,
+                exc,
+            )
     return val
 
 
@@ -90,6 +95,9 @@ def _name_from_url(u: str) -> str:
 def _looks_like_pdf(head: bytes) -> bool:
     # PDF files begin with "%PDF-" magic
     return head.startswith(b"%PDF-")
+
+
+log = get_logger(__name__)
 
 
 class WebPdfListSource(Source):
@@ -139,6 +147,9 @@ class WebPdfListSource(Source):
         if cfg.client is None:
             cfg.client = resolved_client
         self._client = resolved_client
+        self._download_max_workers = cfg.download_max_workers
+        self._download_submit_window = cfg.download_submit_window
+        self._download_executor_kind = cfg.download_executor_kind or "thread"
 
     def _request(self, url: str) -> urllib.request.Request:
         safe_url = _ensure_http_url(url)
@@ -170,7 +181,13 @@ class WebPdfListSource(Source):
                     try:
                         if int(cl) > self.max_pdf_bytes:
                             raise RuntimeError(f"Content-Length {cl} exceeds cap {self.max_pdf_bytes}")
-                    except Exception:
+                    except Exception as exc:
+                        log.debug(
+                            "Ignoring invalid Content-Length %r for %s: %s",
+                            cl,
+                            url,
+                            exc,
+                        )
                         # If bad header, ignore and rely on streaming cap
                         pass
 
@@ -271,16 +288,33 @@ class WebPdfListSource(Source):
 
     def iter_files(self) -> Iterable[FileItem]:
         used_names: Set[str] = set()
-        if len(self.urls) <= 1:
-            for idx, u in enumerate(self.urls):
+        total_urls = len(self.urls)
+        success_count = 0
+        skipped_count = 0
+        error_count = 0
+
+        if total_urls <= 1:
+            for _, u in enumerate(self.urls):
                 try:
                     result = self._download(u)
                     data, headers, file_size = self._normalize_download_result(result)
-                except Exception:
+                except Exception as exc:
+                    error_count += 1
+                    log.warning("Failed to download PDF %s: %s", u, exc)
                     continue
                 item = self._build_file_item(u, data, headers, used_names, file_size)
                 if item:
+                    success_count += 1
                     yield item
+                else:
+                    skipped_count += 1
+            log.info(
+                "WebPdfListSource: processed %d URLs (success=%d, skipped=%d, errors=%d)",
+                total_urls,
+                success_count,
+                skipped_count,
+                error_count,
+            )
             return
 
         results: Dict[int, FileItem] = {}
@@ -291,13 +325,43 @@ class WebPdfListSource(Source):
             return task, [(task.url, data, headers, file_size)]
 
         def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, Dict[str, str], int]]) -> None:
+            nonlocal success_count, skipped_count
             for url, data, headers, file_size in payloads:
                 item = self._build_file_item(url, data, headers, used_names, file_size)
                 if item:
                     results[task.index] = item
+                    success_count += 1
+                else:
+                    skipped_count += 1
 
-        max_workers = min(4, len(self.urls))
-        window = max_workers * 4
+        def _on_worker_error(exc: BaseException) -> None:
+            nonlocal error_count
+            error_count += 1
+            log.warning("PDF download worker failed: %s", exc)
+
+        cfg_workers = self._download_max_workers
+        if cfg_workers and cfg_workers > 0:
+            max_workers = min(cfg_workers, len(self.urls))
+        else:
+            max_workers = min(4, len(self.urls))
+        window = (
+            self._download_submit_window
+            if self._download_submit_window is not None
+            else max_workers * 4
+        )
+        executor_kind = (self._download_executor_kind or "thread").strip().lower()
+        if executor_kind not in {"thread", "process"}:
+            log.warning(
+                "WebPdfListSource: unknown download_executor_kind %r; defaulting to 'thread'",
+                executor_kind,
+            )
+            executor_kind = "thread"
+        if executor_kind == "process":
+            log.warning(
+                "WebPdfListSource: process executor is not currently supported for downloads; "
+                "falling back to thread executor."
+            )
+            executor_kind = "thread"
         process_items_parallel(
             (_PdfDownloadTask(idx, url) for idx, url in enumerate(self.urls)),
             _worker,
@@ -305,13 +369,21 @@ class WebPdfListSource(Source):
             max_workers=max_workers,
             window=window,
             fail_fast=False,
-            executor_kind="thread",
+            executor_kind=executor_kind,
+            on_worker_error=_on_worker_error,
         )
 
-        for idx in range(len(self.urls)):
+        for idx in range(total_urls):
             item = results.get(idx)
             if item:
                 yield item
+        log.info(
+            "WebPdfListSource: processed %d URLs (success=%d, skipped=%d, errors=%d)",
+            total_urls,
+            success_count,
+            skipped_count,
+            error_count,
+        )
 
 # ----------------------------
 #  WebPagePdfSource
@@ -414,7 +486,13 @@ class WebPagePdfSource(Source):
             ct = r.headers.get_content_charset() or "utf-8"
         try:
             return raw.decode(ct, errors="replace")
-        except Exception:
+        except Exception as exc:
+            log.debug(
+                "Failed to decode HTML for %s with declared charset %s: %s",
+                self.page_url,
+                ct,
+                exc,
+            )
             return raw.decode("utf-8", errors="replace")
 
     def _discover_pdf_links(self, html: str) -> List[str]:
@@ -455,13 +533,15 @@ class WebPagePdfSource(Source):
     def iter_files(self) -> Iterable[FileItem]:
         try:
             html = self._fetch_html()
-        except Exception:
+        except Exception as exc:
+            log.warning("Failed to fetch web page %s: %s", self.page_url, exc)
             return   # no items
 
         urls = self._discover_pdf_links(html)
         if not urls:
             return 
 
+        success_count = 0
         inner = WebPdfListSource(
             urls,
             timeout=self.timeout,
@@ -472,5 +552,13 @@ class WebPagePdfSource(Source):
             config=self._pdf_config,
             client=self._client,
         )
-        # Delegate actual downloads to the list source
-        yield from inner.iter_files()
+        for item in inner.iter_files():
+            success_count += 1
+            yield item
+
+        log.info(
+            "WebPagePdfSource: processed %d discovered URLs (success=%d) from %s",
+            len(urls),
+            success_count,
+            self.page_url,
+        )

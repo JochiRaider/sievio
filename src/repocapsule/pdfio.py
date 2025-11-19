@@ -115,7 +115,15 @@ def extract_pdf_records(
     password: Optional[str] = None,
     mode: str = "page",  # "page" => 1 record per page; "chunk" => join+chunk
 ) -> List[Dict[str, object]]:
-    """Turn a PDF (bytes) into RepoCapsule JSONL records with metadata."""
+    """
+    Turn a PDF (bytes) into RepoCapsule JSONL records with metadata.
+
+    Notes
+    -----
+    This function is CPU-bound (pypdf parsing + text extraction + chunking). For large batches of PDFs,
+    configure the pipeline with a process executor, e.g. PipelineConfig.executor_kind="process" or "auto",
+    so that the concurrency helper can choose processes for PDF-heavy workloads.
+    """
     policy = policy or ChunkPolicy(mode="doc")
     reader = PdfReader(BytesIO(data))
     ctx = RepoContext(

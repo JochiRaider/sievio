@@ -21,6 +21,10 @@ __all__ = ["JSONLTextSource"]
 class JSONLTextSource(Source):
     """
     Treat existing JSONL lines as pseudo-files for re-chunking.
+
+    - Expects each line to be a JSON object; invalid JSON or non-dicts are skipped.
+    - Uses ``text_key`` (default: "text") to extract content; missing or non-string values are skipped.
+    - Intentionally forgiving for heterogeneous JSONL streams; only lines with usable text are emitted.
     """
 
     paths: Sequence[Path]
@@ -43,6 +47,7 @@ class JSONLTextSource(Source):
                             continue
                         text = _extract_text(record, self.text_key)
                         if text is None:
+                            # Skip records missing the configured text field.
                             continue
                         rel = _derive_path(record, path.name, lineno)
                         data = text.encode("utf-8")

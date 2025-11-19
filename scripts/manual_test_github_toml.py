@@ -1,15 +1,17 @@
-# manual_test_github.py
+# manual_test_github_toml.py
 # SPDX-License-Identifier: MIT
 """
-RepoCapsule - manual smoke test
+RepoCapsule - manual smoke test (GitHub)
+========================================
 
 Run this from your workspace root (no install required). The script:
+
 - Validates the GitHub URL up front
 - Autonames outputs with SPDX license + optional ref + timestamp
-- Builds a `RepocapsuleConfig` and passes it into `convert_github(...)`
+- Loads a TOML-based RepocapsuleConfig and applies a few runtime-only tweaks
+- Builds a GitHub profile config and runs `convert(...)`
 - Treats KQL-from-Markdown as an optional Extractor
 - Lets the pipeline own sink open/close
-- Optionally runs QC if extras are available
 
 Environment: set GITHUB_TOKEN or GH_TOKEN to avoid GitHub API rate limits.
 """
@@ -17,29 +19,30 @@ Environment: set GITHUB_TOKEN or GH_TOKEN to avoid GitHub API rate limits.
 from __future__ import annotations
 
 # Allow running from a source checkout without installing the package.
-import sys, pathlib
+import sys
+import pathlib
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from pathlib import Path
 from typing import Optional, Sequence
 
 from repocapsule.log import configure_logging
-from repocapsule import RepocapsuleConfig, convert_github
+from repocapsule import load_config_from_path, convert, RepocapsuleConfig
 from repocapsule.chunk import ChunkPolicy
-from repocapsule.config import QCMode
-from repocapsule.runner import default_paths_for_github
-
-try:
-    from repocapsule.qc import JSONLQualityScorer, score_jsonl_to_csv
-except Exception:
-    JSONLQualityScorer = None  # type: ignore[assignment]
-    score_jsonl_to_csv = None  # type: ignore[assignment]
+from repocapsule.interfaces import RepoContext
+from repocapsule.runner import default_paths_for_github, make_github_profile
 
 # Optional extractor for KQL blocks inside Markdown
 try:
     from repocapsule.md_kql import KqlFromMarkdownExtractor
-except Exception:
-    KqlFromMarkdownExtractor = None  # type: ignore
+except Exception:  # pragma: no cover - optional extra
+    KqlFromMarkdownExtractor = None  # type: ignore[assignment]
+
+try:  # optional QC extra
+    from repocapsule.qc import JSONLQualityScorer
+except Exception:  # pragma: no cover - keep import errors silent
+    JSONLQualityScorer = None  # type: ignore[assignment]
 
 # ──────────────────────────────────────────────────────────────────────────────
 # User-editable knobs for this manual test
@@ -52,84 +55,76 @@ except Exception:
 URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
 
-# Output directory for artifacts (portable path under the repo root):
+# Workspace root and output directory for artifacts (portable path under the repo root):
 REPO_ROOT = Path(__file__).resolve().parents[1]
-OUT_DIR = REPO_ROOT / "out" 
+OUT_DIR = REPO_ROOT / "out"
 
-# Markdown → KQL extraction (now via Extractor; this just toggles whether we add it)
+# Path to the TOML config used as a base for this manual test.
+CONFIG_PATH = REPO_ROOT / "manual_test_github.toml"
+
+# Markdown → KQL extraction (via Extractor; this just toggles whether we add it)
 ENABLE_KQL_MD_EXTRACTOR = False
 
-# Inline/post QC (requires optional torch/transformers/tiktoken extras)
-ENABLE_QC = True
-QC_MODE = QCMode.INLINE  # or QCMode.POST / QCMode.ADVISORY
-QC_MIN_SCORE = 40.0
-QC_DROP_NEAR_DUPS = False
-QC_WRITE_CSV = True
-QC_CSV_SUFFIX = "_quality.csv"
-
-# Chunking policy: tweak as needed
+# Chunking policy: tweak as needed (not expressed in TOML yet)
 POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
 
-# Write prompt text too?
+# Write prompt text too? (affects how we plan output paths)
 ALSO_PROMPT_TEXT = True
-
-# Per-file byte cap for entries inside the GitHub zipball (MiB)
-MAX_FILE_MB = 50
-
-# Decode prefix cap for very large files (MiB); None => no extra cap.
-MAX_DECODE_MB: int | None = None  # e.g. 50 to match MAX_FILE_MB
-
-# Concurrency knobs
-EXECUTOR_KIND = "thread"     # "thread" or "process"
-MAX_WORKERS: int | None = None  # None/0 => let library pick
-SUBMIT_WINDOW: int | None = None  # or an int, e.g., 100
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
 
-def _plan_output_paths(url: str, out_dir: Path, *, ref_hint: str | None, with_prompt: bool) -> tuple[Path, Path | None]:
-    jsonl_str, prompt_str, _ctx = default_paths_for_github(
+
+def _plan_output_paths(
+    url: str,
+    out_dir: Path,
+    *,
+    ref_hint: Optional[str],
+    with_prompt: bool,
+) -> tuple[Path, Optional[Path], RepoContext]:
+    jsonl_str, prompt_str, ctx = default_paths_for_github(
         url,
         out_dir=out_dir,
         include_prompt=with_prompt,
     )
     jsonl_path = Path(jsonl_str)
     prompt_path = Path(prompt_str) if prompt_str is not None else None
-    return jsonl_path, prompt_path
+    return jsonl_path, prompt_path, ctx
 
 
-def _build_config(extractors: Sequence[object]) -> RepocapsuleConfig:
-    cfg = RepocapsuleConfig()
+def _build_config(
+    base_cfg: RepocapsuleConfig,
+    extractors: Sequence[object],
+) -> RepocapsuleConfig:
+    """
+    Take a TOML-loaded RepocapsuleConfig and apply runtime-only tweaks.
+
+    The TOML file controls stable, serializable knobs (QC, concurrency, HTTP, etc.).
+    This helper stitches in objects that are hard to express in TOML, such as:
+    - the ChunkPolicy instance
+    - any custom Extractors (e.g., KqlFromMarkdownExtractor)
+    """
+    cfg = base_cfg
+
+    # Runtime-only wiring that isn't TOML-friendly.
     cfg.chunk.policy = POLICY
-    cfg.sources.github.include_exts = {".rst"}
     cfg.pipeline.extractors = tuple(extractors)
-    cfg.sources.github.per_file_cap = int(MAX_FILE_MB) * 1024 * 1024
-    if MAX_DECODE_MB is not None:
-        cfg.decode.max_bytes_per_file = int(MAX_DECODE_MB) * 1024 * 1024
-    cfg.pipeline.executor_kind = EXECUTOR_KIND
-    if MAX_WORKERS is not None:
-        cfg.pipeline.max_workers = MAX_WORKERS
-    if SUBMIT_WINDOW is not None:
-        cfg.pipeline.submit_window = SUBMIT_WINDOW
-    cfg.qc.enabled = bool(ENABLE_QC)
+   
     if cfg.qc.enabled:
         if JSONLQualityScorer is None:
-            raise RuntimeError("QC requested but optional QC extras are not installed.")
+            raise RuntimeError(
+                "QC is enabled in the config, but QC extras are not installed. "
+                "Disable qc.enabled in the TOML or install the QC dependencies."
+            )
         cfg.qc.scorer = JSONLQualityScorer(
             lm_model_id="Qwen/Qwen2.5-1.5B",
             device="cuda",        # or "cpu"
             dtype="bfloat16",     # or "float32" / "float16"
             local_files_only=False,
+            heuristics=getattr(cfg.qc, "heuristics", None),
         )
-        cfg.qc.mode = QC_MODE
-        cfg.qc.min_score = QC_MIN_SCORE
-        cfg.qc.drop_near_dups = QC_DROP_NEAR_DUPS
-        cfg.qc.write_csv = QC_WRITE_CSV
-        cfg.qc.csv_suffix = QC_CSV_SUFFIX
-        if QC_MODE == QCMode.POST:
-            cfg.qc.parallel_post = True
     else:
         cfg.qc.scorer = None
     return cfg
@@ -139,6 +134,7 @@ def _build_config(extractors: Sequence[object]) -> RepocapsuleConfig:
 # Main
 # ──────────────────────────────────────────────────────────────────────────────
 
+
 def main() -> None:
     # Optional: set a token to avoid low GitHub rate limits
     # os.environ.setdefault("GITHUB_TOKEN", "<your token>")
@@ -146,35 +142,48 @@ def main() -> None:
     log = configure_logging(level="INFO")
     OUT_DIR.mkdir(parents=True, exist_ok=True)
 
+    # Load base config from TOML.
+    base_cfg = load_config_from_path(CONFIG_PATH)
+    if not isinstance(base_cfg, RepocapsuleConfig):
+        raise TypeError(f"Expected RepocapsuleConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
+
     log.info(
         "Converting repo → %s (autoname=%s, prompt=%s, qc=%s[%s])",
         URL,
         True,
         ALSO_PROMPT_TEXT,
-        "on" if ENABLE_QC else "off",
-        QC_MODE,
+        "on" if getattr(base_cfg.qc, "enabled", False) else "off",
+        getattr(base_cfg.qc, "mode", "off"),
     )
 
-    jsonl_path, prompt_path = _plan_output_paths(URL, OUT_DIR, ref_hint=REF, with_prompt=ALSO_PROMPT_TEXT)
+    jsonl_path, prompt_path, ctx = _plan_output_paths(
+        URL,
+        OUT_DIR,
+        ref_hint=REF,
+        with_prompt=ALSO_PROMPT_TEXT,
+    )
 
-    extractors = []
+    extractors: list[object] = []
     if ENABLE_KQL_MD_EXTRACTOR and KqlFromMarkdownExtractor is not None:
         extractors.append(KqlFromMarkdownExtractor())
 
-    base_config = _build_config(extractors)
+    # Apply runtime-only wiring on top of the TOML-based config.
+    run_cfg = _build_config(base_cfg, extractors)
 
-    stats = convert_github(
+    profile_cfg = make_github_profile(
         URL,
         str(jsonl_path),
-        out_prompt=(str(prompt_path) if prompt_path else None),
-        base_config=base_config,
+        out_prompt=str(prompt_path) if prompt_path else None,
+        base_config=run_cfg,
+        repo_context=ctx,
     )
+    stats = convert(profile_cfg)
 
     print("\n=== Done ===")
     print("JSONL :", jsonl_path)
     print("Prompt:", prompt_path)
     print("Stats :", stats)
-    if ENABLE_QC:
+    if getattr(base_cfg.qc, "enabled", False):
         print("QC Summary:", stats.get("qc", {}))
 
 

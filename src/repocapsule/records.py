@@ -5,7 +5,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field, fields
 from pathlib import Path
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, TYPE_CHECKING
 import hashlib
 
 from .chunk import count_tokens
@@ -22,7 +22,9 @@ __all__ = [
     "build_record",
     "RecordMeta",
     "RunSummaryMeta",
+    "RunHeaderMeta",
     "QCSummaryMeta",
+    "build_run_header_record",
     "ensure_meta_dict",
     "merge_meta_defaults",
     "is_summary_record",
@@ -175,6 +177,50 @@ def sha256_text(text: str) -> str:
 RECORD_META_SCHEMA_VERSION = "1"
 SUMMARY_META_SCHEMA_VERSION = "1"
 
+# Canonical record meta fields used across the pipeline. Additional analyzer-specific
+# metadata should be stored under ``meta["extra"]`` so downstream consumers can
+# distinguish between core attributes and optional enrichments.
+STANDARD_META_FIELDS: set[str] = {
+    "kind",
+    "source",
+    "repo",
+    "path",
+    "license",
+    "lang",
+    "chunk_id",
+    "n_chunks",
+    "encoding",
+    "had_replacement",
+    "sha256",
+    "approx_tokens",
+    "tokens",
+    "bytes",
+    "file_bytes",
+    "truncated_bytes",
+    "schema_version",
+}
+# Field overview:
+#   - ``source`` → canonical dataset or repository URL.
+#   - ``repo``   → repo identifier (e.g., "owner/name").
+#   - ``lang``   → human-readable language label for the chunk.
+#   - ``tokens`` / ``approx_tokens`` → exact vs estimated token counts.
+#   - ``sha256`` → content hash of the chunk text.
+#   - ``file_bytes`` / ``truncated_bytes`` → original file sizing info.
+# Any other analyzer metadata should flow through ``RecordMeta.extra``.
+# QC scorers populate a few additional meta keys; documenting them here keeps the
+# schema discoverable for downstream tooling.
+QC_META_FIELDS: set[str] = {
+    "qc_score",
+    "qc_decision",
+    "qc_drop_reason",
+    "near_dup",
+    "dup_family_id",
+    "dup_family_size",
+    "qc_reason",
+}
+# QC scorers may add additional metadata, but these are the canonical keys used by
+# :class:`InlineQCController` and post-QC summaries.
+
 
 def _meta_to_dict(obj: Any) -> Dict[str, Any]:
     """Flatten dataclass fields plus extras, skipping None values."""
@@ -264,6 +310,7 @@ class RecordMeta:
 
 @dataclass(slots=True)
 class RunSummaryMeta:
+    """Metadata footer for runs; expects config to come from RepocapsuleConfig.to_dict()."""
     kind: str = "run_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
     config: Dict[str, Any] = field(default_factory=dict)
@@ -281,6 +328,18 @@ class QCSummaryMeta:
     kind: str = "qc_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
     summary: Dict[str, Any] = field(default_factory=dict)
+    extra: Dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> Dict[str, Any]:
+        return _meta_to_dict(self)
+
+
+@dataclass(slots=True)
+class RunHeaderMeta:
+    kind: str = "run_header"
+    schema_version: str = SUMMARY_META_SCHEMA_VERSION
+    config: Dict[str, Any] = field(default_factory=dict)
+    metadata: Dict[str, Any] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -314,7 +373,7 @@ def is_summary_record(record: Mapping[str, Any]) -> bool:
     if not isinstance(meta, dict):
         return False
     kind = meta.get("kind")
-    return kind in {"run_summary", "qc_summary"}
+    return kind in {"run_header","run_summary", "qc_summary"}
 
 
 # -----------------------
@@ -362,6 +421,10 @@ def build_record(
         "truncated_bytes": 4600
       }
     }
+
+    Standard metadata keys are cataloged in :data:`STANDARD_META_FIELDS`
+    (core record fields) and :data:`QC_META_FIELDS` (quality-scoring enrichments).
+    Additional analyzer-specific keys should be stored under ``meta["extra"]``.
     """
     rp = rel_path.replace("\\", "/")
 
@@ -439,3 +502,44 @@ def build_record(
         "meta": meta_obj.to_dict(),
     }
     return record
+# -----------------------
+# Run header helper
+# -----------------------
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .config import RepocapsuleConfig
+
+
+def build_run_header_record(config: "RepocapsuleConfig") -> Dict[str, Any]:
+    """
+    Build a run_header record describing the configuration and metadata at start of a run.
+    """
+
+    meta = RunHeaderMeta(
+        config=config.to_dict(),
+        metadata=config.metadata.to_dict(),
+    )
+    return {"text": "", "meta": meta.to_dict()}
+
+
+def best_effort_record_path(record: Mapping[str, Any]) -> str:
+    """
+    Return a human-friendly path/identifier for a record for logging/QC.
+
+    Prefers meta['path'], then record['path'], then falls back to doc_id/origin_path,
+    otherwise returns "<unknown>".
+    """
+    if not isinstance(record, Mapping):
+        return "<unknown>"
+    meta = record.get("meta")
+    if isinstance(meta, Mapping):
+        path_val = meta.get("path")
+        if isinstance(path_val, str) and path_val:
+            return path_val
+        doc_id = meta.get("doc_id") or meta.get("chunk_id")
+        if isinstance(doc_id, str) and doc_id:
+            return doc_id
+    path_val = record.get("path") or record.get("origin_path")
+    if isinstance(path_val, str) and path_val:
+        return path_val
+    return "<unknown>"

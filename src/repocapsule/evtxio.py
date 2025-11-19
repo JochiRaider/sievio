@@ -209,7 +209,16 @@ def handle_evtx(
     """
     Stream one JSONL record per event.
 
-    Normal path: python-evtx -> record.xml() -> normalize to JSON (plus raw_xml).
+    Normal path: python-evtx -> record.xml() -> normalize to JSON, plus raw_xml for fidelity.
+    The XML parsing and normalization are CPU-bound; for large EVTX datasets you will usually
+    get better throughput with a process executor (PipelineConfig.executor_kind="process" or "auto").
+
+    Notes
+    -----
+    The JSON payload is intentionally lossy: nested <Data> elements are flattened into
+    ``event_data`` / ``event_data_extra`` and ordering/nesting may not match the source XML.
+    The original XML for each event is preserved in the ``raw_xml`` field when full fidelity is
+    required.
 
     Optional fallback: pass allow_recovery=True (or set
     REPOCAPSULE_EVTX_RECOVER=1) to try a best-effort recovery using only

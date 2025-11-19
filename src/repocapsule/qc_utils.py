@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+import gzip
 import json
 import math
+import os
 import random
 import re
 import zlib
-from typing import Any, Dict, Iterable, List, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, List, Optional, TextIO, TYPE_CHECKING
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .config import QCHeuristics
 
 __all__ = [
     "CODE_LANGS",
@@ -28,6 +34,8 @@ __all__ = [
     "PerplexityModel",
     "update_dup_family_counts",
     "top_dup_families",
+    "open_jsonl_maybe_gz",
+    "open_jsonl_output_maybe_gz",
 ]
 
 
@@ -80,9 +88,40 @@ LOG_LIKE_LC = {x.lower() for x in LOG_LIKE}
 TEXTY_LC = {x.lower() for x in TEXTY}
 
 
-def target_band(lang: str) -> tuple[int, int]:
+def open_jsonl_maybe_gz(path: str | os.PathLike[str]) -> TextIO:
+    """
+    Open a JSONL file for reading, treating any .gz suffix as gzip-compressed text.
+
+    Intended for JSONL lines (one JSON per line) and used by QC for both post-QC
+    and CSV scoring helpers.
+    """
+    p = Path(path)
+    if p.suffix.lower() == ".gz":
+        return gzip.open(p, "rt", encoding="utf-8")
+    return open(p, "r", encoding="utf-8")
+
+
+def open_jsonl_output_maybe_gz(path: str | os.PathLike[str], mode: str = "a") -> TextIO:
+    """
+    Open a JSONL file for writing/appending, compressing if the destination ends with .gz.
+    """
+    p = Path(path)
+    if p.suffix.lower() == ".gz":
+        return gzip.open(p, f"{mode}t", encoding="utf-8")
+    return open(p, mode, encoding="utf-8")
+
+
+def target_band(lang: str, *, heuristics: "QCHeuristics | None" = None) -> tuple[int, int]:
     """Token windows per content type; adjust as needed."""
     l = (lang or "").lower()
+    if heuristics is not None:
+        if l in CODE_LANGS_LC:
+            return heuristics.target_code_min, heuristics.target_code_max
+        if l in LOG_LIKE_LC:
+            return heuristics.target_log_min, heuristics.target_log_max
+        if l in TEXTY_LC:
+            return heuristics.target_text_min, heuristics.target_text_max
+        return heuristics.target_other_min, heuristics.target_other_max
     if l in CODE_LANGS_LC:
         return (2000, 4000)
     if l in LOG_LIKE_LC:
@@ -109,8 +148,17 @@ def ascii_ratio(s: str) -> float:
     return ascii_bytes / max(1, len(s))
 
 
-def repetition_rate(s: str, k: int = 16) -> float:
+def repetition_rate(
+    s: str,
+    k: int | None = None,
+    *,
+    heuristics: "QCHeuristics | None" = None,
+) -> float:
     """Share of text covered by repeated k-grams (simple near-dup proxy)."""
+    if k is None and heuristics is not None:
+        k = heuristics.repetition_k
+    if k is None:
+        k = 16
     if len(s) < 2 * k:
         return 0.0
     seen: Dict[str, int] = {}
@@ -123,16 +171,19 @@ def repetition_rate(s: str, k: int = 16) -> float:
     return reps / max(1, len(s) - k)
 
 
-def code_complexity(s: str) -> float:
+def code_complexity(s: str, *, heuristics: "QCHeuristics | None" = None) -> float:
     """Rough code-ness heuristic using punctuation density and short lines."""
     if not s:
         return 0.0
+    thresh = heuristics.code_short_line_threshold if heuristics is not None else 60
+    w_punct = heuristics.code_punct_weight if heuristics is not None else 0.5
+    w_short = heuristics.code_short_line_weight if heuristics is not None else 0.5
     punctuation = set("{}();[],:+-*/=<>&|%")
     punct = sum(1 for ch in s if ch in punctuation)
     lines = s.splitlines()
-    short_lines = sum(1 for ln in lines if len(ln.strip()) <= 60)
+    short_lines = sum(1 for ln in lines if len(ln.strip()) <= thresh)
     total_lines = max(1, len(lines))
-    return min(1.0, 0.5 * (punct / max(1, len(s))) + 0.5 * (short_lines / total_lines))
+    return min(1.0, w_punct * (punct / max(1, len(s))) + w_short * (short_lines / total_lines))
 
 
 # ---------- Simhash (64-bit) ----------

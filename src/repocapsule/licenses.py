@@ -191,8 +191,7 @@ ANCHOR_PHRASES = {
         "the software is provided as is and the author disclaims",
     ),
     "CC-BY-4.0": (
-        "creative commons attribution 4.0 international",
-        "creativecommons.org/licenses/by/4.0/",
+        "creative commons attribution 4.0 international public license",
     ),
     "CC-BY-SA-4.0": (
         "creative commons attribution-sharealike 4.0 international",
