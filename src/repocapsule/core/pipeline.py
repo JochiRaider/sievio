@@ -4,22 +4,34 @@
 from __future__ import annotations
 
 from contextlib import ExitStack
-from concurrent.futures import ThreadPoolExecutor, ProcessPoolExecutor, FIRST_COMPLETED, wait, Future
 from dataclasses import dataclass, field
-from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callable, TypeVar
+from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callable
 from pathlib import Path
-import os
 import pickle
 
-from .config import QCMode, RepocapsuleConfig, FileProcessingConfig
-from .interfaces import Source, Sink, RepoContext, Record, FileExtractor
+from .config import RepocapsuleConfig, FileProcessingConfig
+from .builder import PipelinePlan, build_pipeline_plan
+from .interfaces import (
+    Source,
+    Sink,
+    RepoContext,
+    Record,
+    FileExtractor,
+    ClosableSource,
+    RecordMiddleware,
+    FileMiddleware,
+)
+from .concurrency import (
+    Executor,
+    process_items_parallel,
+    resolve_pipeline_executor_config,
+)
 from .convert import DefaultExtractor
 from .log import get_logger
-from .qc_controller import InlineQCController, QCSummaryTracker
+from .qc_controller import QCSummaryTracker
 
 
 log = get_logger(__name__)
-T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -81,112 +93,6 @@ class PipelineStats:
         return self.qc.top_dup_families()
 
 
-
-def process_items_parallel(
-    items: Iterable[T],
-    process_one: Callable[[T], Tuple[Any, Iterable[Record]]],
-    write_records: Callable[[Any, Iterable[Record]], None],
-    *,
-    max_workers: int,
-    window: int,
-    fail_fast: bool,
-    on_submit_error: Optional[Callable[[T, BaseException], None]] = None,
-    on_worker_error: Optional[Callable[[BaseException], None]] = None,
-    executor_kind: str = "thread",
-    initializer: Optional[Callable[[], Any]] = None,
-    initargs: tuple[Any, ...] = (),
-) -> None:
-    """
-    Central concurrency helper used throughout the package.
-
-    It is the internal parallelism primitive for:
-    - pipeline processing (PipelineEngine._process_parallel)
-    - post-QC shard scoring (runner.py)
-    - web PDF fetching (sources_webpdf.py)
-
-    Parameters
-    ----------
-    items:
-        Iterable of work items. Items are consumed lazily, so callers can feed
-        an unbounded generator (e.g., streaming file sources).
-    process_one:
-        Callable executed in worker threads. Must return (item, iterable).
-    write_records:
-        Callable invoked in the main thread with each completed result.
-    max_workers:
-        Worker count for the selected executor (must be >= 1).
-    window:
-        Bounded in-flight submission count. Acts as backpressure so sources do
-        not outrun processing. Automatically clamped to >= max_workers.
-    fail_fast:
-        If True, re-raise errors from submission/worker execution immediately.
-    on_submit_error / on_worker_error:
-        Optional callbacks for bookkeeping/logging when failures occur.
-    executor_kind:
-        "thread" (default) or "process". Process executors require picklable work
-        items and callables.
-    initializer / initargs:
-        Optional initializer invoked once per process when using a process executor.
-        Ignored for thread executors. The initializer must be picklable and any
-        required state should be stored in module-level globals.
-    """
-    if max_workers < 1:
-        raise ValueError("process_items_parallel requires max_workers >= 1")
-    window = max(window, max_workers)
-    kind = (executor_kind or "thread").strip().lower()
-    initargs = tuple(initargs or ())
-    extra_kwargs: Dict[str, Any] = {}
-    if kind == "process":
-        executor_cls = ProcessPoolExecutor
-        if initializer is not None:
-            extra_kwargs["initializer"] = initializer
-            extra_kwargs["initargs"] = initargs
-    else:
-        executor_cls = ThreadPoolExecutor
-        kind = "thread"
-        if initializer is not None:
-            log.debug("Initializer ignored for thread executors in process_items_parallel.")
-    log.debug("process_items_parallel using %s executor (max_workers=%d)", kind, max_workers)
-    with executor_cls(max_workers=max_workers, **extra_kwargs) as pool:
-        pending: List[Future[Tuple[Any, Iterable[Record]]]] = []
-
-        def _drain(block: bool = False) -> None:
-            nonlocal pending
-            if not pending:
-                return
-            done, still = wait(
-                pending,
-                timeout=None if block else 0.0,
-                return_when=FIRST_COMPLETED,
-            )
-            pending = list(still)
-            for fut in done:
-                try:
-                    item, recs = fut.result()
-                except Exception as exc:
-                    if on_worker_error:
-                        on_worker_error(exc)
-                    if fail_fast:
-                        raise
-                    continue
-                write_records(item, recs)
-
-        for work in items:
-            try:
-                pending.append(pool.submit(process_one, work))
-            except Exception as exc:
-                if on_submit_error:
-                    on_submit_error(work, exc)
-                if fail_fast:
-                    raise
-                continue
-            if len(pending) >= window:
-                _drain(block=True)
-
-        while pending:
-            _drain(block=True)
-
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -233,90 +139,6 @@ def _ext_key(path: str) -> str:
         return ""
 
 
-def _has_heavy_binary_handlers(cfg: RepocapsuleConfig) -> bool:
-    """Return True if the pipeline is configured with PDF/EVTX handlers."""
-    try:
-        handlers = cfg.pipeline.bytes_handlers
-    except Exception:
-        return False
-
-    for _sniff, handler in handlers:
-        name = getattr(handler, "__name__", "").lower()
-        mod = getattr(handler, "__module__", "").lower()
-        if name in {"handle_pdf", "handle_evtx"}:
-            return True
-        if "pdfio" in mod or "evtxio" in mod:
-            return True
-    return False
-
-
-def _has_heavy_sources(cfg: RepocapsuleConfig) -> bool:
-    """
-    Heuristic: consider the workload heavy when configured sources strongly suggest PDF/EVTX ingestion.
-    """
-    try:
-        src_cfg = cfg.sources
-    except Exception:
-        return False
-
-    try:
-        for src in src_cfg.sources:
-            cls_name = type(src).__name__.lower()
-            if "pdf" in cls_name or "evtx" in cls_name:
-                return True
-    except Exception:
-        pass
-
-    local_cfg = getattr(src_cfg, "local", None)
-    if local_cfg and getattr(local_cfg, "include_exts", None):
-        exts = {e.lower() for e in local_cfg.include_exts}
-        if ".pdf" in exts or ".evtx" in exts:
-            return True
-
-    gh_cfg = getattr(src_cfg, "github", None)
-    if gh_cfg and getattr(gh_cfg, "include_exts", None):
-        exts = {e.lower() for e in gh_cfg.include_exts}
-        if ".pdf" in exts or ".evtx" in exts:
-            return True
-
-    return False
-
-
-def _infer_executor_kind(cfg: RepocapsuleConfig) -> str:
-    """
-    Decide between 'thread' and 'process' for executor_kind='auto'.
-
-    Default to threads for typical text/code workloads; switch to processes when both
-    heavy binary handlers (pdfio/evtxio) and sources indicating PDF/EVTX ingestion are present.
-    """
-    heavy_handlers = _has_heavy_binary_handlers(cfg)
-    heavy_sources = _has_heavy_sources(cfg)
-
-    if heavy_handlers and heavy_sources:
-        return "process"
-    return "thread"
-
-
-def _resolve_pipeline_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str, bool]:
-    """
-    Normalize pipeline concurrency knobs (workers/window/executor-kind/fail-fast).
-    """
-    pc = cfg.pipeline
-    max_workers = pc.max_workers or (os.cpu_count() or 1)
-    max_workers = max(1, max_workers)
-    window = pc.submit_window or (max_workers * 4)
-    raw_kind = (pc.executor_kind or "auto").strip().lower()
-    if raw_kind == "auto":
-        kind = _infer_executor_kind(cfg)
-    else:
-        kind = raw_kind
-
-    if kind not in {"thread", "process"}:
-        kind = "thread"
-    fail_fast = bool(pc.fail_fast)
-    return max_workers, window, kind, fail_fast
-
-
 def _build_file_processing_config(cfg: RepocapsuleConfig) -> FileProcessingConfig:
     """
     Create a sanitized config containing only per-file knobs for worker processes.
@@ -335,16 +157,21 @@ def _build_file_processing_config(cfg: RepocapsuleConfig) -> FileProcessingConfi
 
 
 class PipelineEngine:
-    def __init__(self, config: RepocapsuleConfig) -> None:
-        self.config = config
+    def __init__(self, plan: PipelinePlan) -> None:
+        self.plan = plan
+        self.config = plan.config
         self.stats = PipelineStats()
-        self.qc_controller: Optional[InlineQCController] = None
         self.log = get_logger(__name__)
+        self._qc_hook_factory = getattr(plan, "qc_hook_factory", None)
+        self._qc_hooks: Optional[Tuple[Callable[[Record], bool], Callable[[Record], None]]] = None
         self.before_record_hooks: List[Callable[[Record], Record]] = []
         self.after_record_hooks: List[Callable[[Record], Record]] = []
         self.record_filter_hooks: List[Callable[[Record], bool]] = []
+        self.record_middlewares: List[RecordMiddleware] = []
+        self.file_middlewares: List[FileMiddleware] = []
         self.before_source_hooks: List[Callable[[Source], None]] = []
         self.after_source_hooks: List[Callable[[Source], None]] = []
+        self._qc_middleware: Optional[RecordMiddleware] = None
 
     def _prepare_qc(self) -> None:
         cfg = self.config
@@ -352,34 +179,87 @@ class PipelineEngine:
         qc_cfg = cfg.qc
 
         tracker = stats.qc
-        inline_or_advisory = qc_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}
-        tracker.enabled = bool(qc_cfg.enabled and inline_or_advisory)
-        tracker.mode = qc_cfg.mode
+        mode_val = getattr(qc_cfg, "mode", None)
+        mode_lower = mode_val.lower() if isinstance(mode_val, str) else mode_val
+        inline_or_advisory = mode_lower in {"inline", "advisory"}
+        tracker.enabled = bool(qc_cfg.enabled) and inline_or_advisory
+        tracker.mode = mode_val
         tracker.min_score = qc_cfg.min_score
         tracker.drop_near_dups = bool(qc_cfg.drop_near_dups)
 
-        inline_mode = qc_cfg.mode == QCMode.INLINE
-        advisory_mode = qc_cfg.mode == QCMode.ADVISORY
-        qc_active = bool(
-            tracker.enabled
-            and getattr(qc_cfg, "scorer", None)
-        )
+    def _attach_qc_hooks(self) -> None:
+        if self._qc_hook_factory is None:
+            return
+        if self._qc_middleware is not None:
+            try:
+                self.record_middlewares.remove(self._qc_middleware)
+            except ValueError:
+                pass
+            self._qc_middleware = None
+        try:
+            filt, obs = self._qc_hook_factory(self.stats)
+        except Exception as exc:
+            self.log.warning("Failed to attach QC hooks: %s", exc)
+            self._qc_hooks = None
+            return
 
-        if tracker.enabled and not qc_active:
-            raise RuntimeError(
-                "Invariant violation: inline/advisory QC enabled without a scorer. "
-                "This should have been rejected during configuration."
-            )
+        def _qc_middleware(record: Record) -> Optional[Record]:
+            try:
+                if not filt(record):
+                    return None
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "record_filter hook %s failed: %s",
+                    getattr(filt, "__name__", filt),
+                    exc,
+                )
+                return None
+            try:
+                return obs(record)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "after_record hook %s failed: %s",
+                    getattr(obs, "__name__", obs),
+                    exc,
+                )
+                return None
 
-        self.qc_controller = None
-        if qc_active:
-            self.qc_controller = InlineQCController(
-                config=qc_cfg,
-                stats=stats,
-                scorer=qc_cfg.scorer,  # type: ignore[arg-type]
-                logger=self.log,
-                enforce_drops=inline_mode,
-            )
+        self.record_middlewares.append(_qc_middleware)
+        self._qc_middleware = _qc_middleware
+        self._qc_hooks = (filt, obs)
+
+    def _apply_middlewares(self, record: Record) -> Optional[Record]:
+        current = record
+        for middleware in self.record_middlewares:
+            try:
+                current = middleware.process(current) if hasattr(middleware, "process") else middleware(current)  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "record middleware %s failed: %s",
+                    getattr(middleware, "__name__", middleware),
+                    exc,
+                )
+                return None
+            if current is None:
+                return None
+        return current
+
+    def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
+        current = records
+        for middleware in self.file_middlewares:
+            try:
+                current = middleware.process(item, current) if hasattr(middleware, "process") else middleware(item, current)  # type: ignore[arg-type]
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "file middleware %s failed for %s: %s",
+                    getattr(middleware, "__name__", middleware),
+                    getattr(item, "path", "<unknown>"),
+                    exc,
+                )
+                return None
+            if current is None:
+                return None
+        return current
 
     def _increment_file_stats(self, item: Any) -> None:
         stats = self.stats
@@ -397,7 +277,7 @@ class PipelineEngine:
 
     def _make_processor(self, *, materialize: bool) -> _ProcessFileCallable:
         cfg = self.config
-        extractor = cfg.pipeline.file_extractor
+        extractor = self.plan.file_extractor or cfg.pipeline.file_extractor
         if extractor is None:
             extractor = DefaultExtractor()
             cfg.pipeline.file_extractor = extractor
@@ -408,6 +288,13 @@ class PipelineEngine:
             materialize=materialize,
         )
 
+    def _build_executor(self) -> Tuple[Executor, bool]:
+        exec_cfg = getattr(self.plan.runtime, "executor_config", None)
+        fail_fast = getattr(self.plan.runtime, "fail_fast", False)
+        if exec_cfg is None:
+            exec_cfg, fail_fast = resolve_pipeline_executor_config(self.config, runtime=self.plan)
+        return Executor(exec_cfg), fail_fast
+
     def _write_records(
         self,
         item: Any,
@@ -415,7 +302,6 @@ class PipelineEngine:
         *,
         sinks: Sequence[Sink],
     ) -> None:
-        qc_controller = self.qc_controller
         stats = self.stats
 
         for record in recs:
@@ -429,11 +315,11 @@ class PipelineEngine:
                         exc,
                     )
 
-            filtered_out = False
+            keep = True
             for check in self.record_filter_hooks:
                 try:
                     if not check(record):
-                        filtered_out = True
+                        keep = False
                         break
                 except Exception as exc:
                     self.log.warning(
@@ -441,13 +327,24 @@ class PipelineEngine:
                         getattr(check, "__name__", check),
                         exc,
                     )
-                    filtered_out = True
+                    keep = False
                     break
-            if filtered_out:
+            if not keep:
                 continue
 
-            if qc_controller and not qc_controller.should_keep(record):
+            record = self._apply_middlewares(record)
+            if record is None:
                 continue
+
+            for hook in self.after_record_hooks:
+                try:
+                    record = hook(record)
+                except Exception as exc:
+                    self.log.warning(
+                        "after_record hook %s failed: %s",
+                        getattr(hook, "__name__", hook),
+                        exc,
+                    )
 
             wrote_any = False
             for sink in sinks:
@@ -462,16 +359,6 @@ class PipelineEngine:
                         exc,
                     )
                     stats.sink_errors += 1
-
-            for hook in self.after_record_hooks:
-                try:
-                    record = hook(record)
-                except Exception as exc:
-                    self.log.warning(
-                        "after_record hook %s failed: %s",
-                        getattr(hook, "__name__", hook),
-                        exc,
-                    )
 
             if wrote_any:
                 stats.records += 1
@@ -532,7 +419,9 @@ class PipelineEngine:
         try:
             self._increment_file_stats(work.item)
             _, recs = processor(work)
-            self._write_records(work.item, recs, sinks=sinks)
+            recs = self._apply_file_middlewares(work.item, recs)
+            if recs is not None:
+                self._write_records(work.item, recs, sinks=sinks)
         except Exception as exc:
             self.log.warning(
                 "Processing failed for %s: %s",
@@ -549,18 +438,15 @@ class PipelineEngine:
         *,
         processor: _ProcessFileCallable,
         sinks: Sequence[Sink],
-        window: int,
-        max_workers: int,
-        executor_kind: str,
+        executor: Executor,
         fail_fast: bool,
     ) -> None:
-        # Thin wrapper that adapts pipeline bookkeeping to process_items_parallel.
-        cfg = self.config
         stats = self.stats
         log = self.log
+        exec_cfg = executor.cfg
 
         def _log_pickling_hint(exc: BaseException) -> None:
-            if executor_kind != "process":
+            if exec_cfg.kind != "process":
                 return
             if isinstance(exc, (pickle.PicklingError, TypeError)):
                 log.warning(
@@ -573,30 +459,34 @@ class PipelineEngine:
                 self._increment_file_stats(work.item)
                 yield work
 
-        def _write_records(item: Any, recs: Iterable[Record]) -> None:
-            self._write_records(item, recs, sinks=sinks)
-
-        def _on_submit_error(work: _WorkItem, exc: BaseException) -> None:
-            log.warning("Scheduling failed for %s: %s", getattr(work.item, "path", "<unknown>"), exc)
-            _log_pickling_hint(exc)
-            stats.source_errors += 1
+        def _process_one(work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
+            return processor(work)
 
         def _on_worker_error(exc: BaseException) -> None:
             log.warning("Worker failed: %s", exc)
             _log_pickling_hint(exc)
             stats.source_errors += 1
 
-        process_items_parallel(
-            _items_with_stats(),
-            processor,
-            _write_records,
-            max_workers=max_workers,
-            window=window,
-            fail_fast=fail_fast,
-            on_submit_error=_on_submit_error,
-            on_worker_error=_on_worker_error,
-            executor_kind=executor_kind,
-        )
+        def _on_result(result: Tuple[Any, Iterable[Record]]) -> None:
+            item, recs = result
+            recs = self._apply_file_middlewares(item, recs)
+            if recs is not None:
+                self._write_records(item, recs, sinks=sinks)
+
+        try:
+            executor.map_unordered(
+                _items_with_stats(),
+                _process_one,
+                _on_result,
+                fail_fast=fail_fast,
+                on_error=_on_worker_error,
+            )
+        except Exception as exc:
+            _log_pickling_hint(exc)
+            stats.source_errors += 1
+            if fail_fast:
+                raise
+            log.warning("Parallel processing aborted: %s", exc)
 
     def _log_qc_summary(self) -> None:
         cfg = self.config
@@ -640,23 +530,33 @@ class PipelineEngine:
         self.stats = PipelineStats()
         stats = self.stats
         self._prepare_qc()
+        self._attach_qc_hooks()
 
         with ExitStack() as stack:
             open_sources: List[Source] = [
-                _open_source_with_stack(stack, src) for src in cfg.sources.sources
+                _open_source_with_stack(stack, src) for src in self.plan.sources
             ]
             initial_ctx: Optional[RepoContext] = cfg.sinks.context
-            open_sinks: List[Sink] = _prepare_sinks(stack, cfg.sinks.sinks, initial_ctx)
+            open_sinks: List[Sink] = _prepare_sinks(stack, self.plan.sinks, initial_ctx)
             if not open_sinks:
                 self.log.warning("No sinks are open; processed records will be dropped.")
 
-            materialize_results = (cfg.pipeline.executor_kind or "thread").strip().lower() == "process"
+            executor, fail_fast = self._build_executor()
+            materialize_results = executor.cfg.kind == "process"
             processor = self._make_processor(materialize=materialize_results)
             source_items = self._iter_source_items(open_sources)
 
-            max_workers, window, executor_kind, fail_fast = _resolve_pipeline_concurrency(cfg)
+            requested_kind = (cfg.pipeline.executor_kind or "auto").strip().lower()
+            resolved_kind = executor.cfg.kind
+            self.log.debug(
+                "Executor kind requested=%s resolved=%s max_workers=%d window=%d",
+                requested_kind,
+                resolved_kind,
+                executor.cfg.max_workers,
+                executor.cfg.window,
+            )
 
-            if max_workers <= 1:
+            if executor.cfg.max_workers <= 1:
                 for work in source_items:
                     self._process_serial(
                         work,
@@ -669,9 +569,7 @@ class PipelineEngine:
                     source_items,
                     processor=processor,
                     sinks=open_sinks,
-                    window=window,
-                    max_workers=max_workers,
-                    executor_kind=executor_kind,
+                    executor=executor,
                     fail_fast=fail_fast,
                 )
 
@@ -684,8 +582,9 @@ class PipelineEngine:
 
 def run_pipeline(*, config: RepocapsuleConfig) -> Dict[str, int]:
     """Run the end-to-end pipeline described by ``config``."""
-    engine = PipelineEngine(config=config.prepared())
+    plan = build_pipeline_plan(config)
+    engine = PipelineEngine(plan)
     stats = engine.run()
     return stats.as_dict()
 
-__all__ = ["run_pipeline", "PipelineStats", "PipelineEngine"]
+__all__ = ["run_pipeline", "PipelineStats", "PipelineEngine", "process_items_parallel"]

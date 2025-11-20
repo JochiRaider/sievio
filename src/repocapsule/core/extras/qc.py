@@ -11,9 +11,10 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence
 
-from .log import get_logger
-from .records import is_summary_record
-from .qc_utils import (
+from ..log import get_logger
+from ..config import QCConfig
+from ..records import is_summary_record
+from ..qc_utils import (
     TEXTY_LC,
     MinHashLSH,
     PerplexityModel,
@@ -30,7 +31,7 @@ from .qc_utils import (
     open_jsonl_maybe_gz,
 )
 
-__all__ = ["JSONLScoreStats", "JSONLQualityScorer", "score_jsonl_to_csv", "write_csv", "main"]
+__all__ = ["JSONLScoreStats", "JSONLQualityScorer", "score_jsonl_to_csv", "write_csv", "DefaultQualityScorerFactory"]
 
 log = get_logger(__name__)
 
@@ -408,33 +409,22 @@ def score_jsonl_to_csv(
     return csv_path
 
 
+class DefaultQualityScorerFactory:
+    id = "jsonl_default"
+
+    def build(self, cfg: QCConfig) -> "JSONLQualityScorer":
+        return JSONLQualityScorer(heuristics=getattr(cfg, "heuristics", None))
+
+
+try:
+    from ..registries import quality_scorer_registry
+
+    quality_scorer_registry.register(DefaultQualityScorerFactory())
+except Exception:
+    pass
+
+
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    import argparse
-
-    ap = argparse.ArgumentParser(description="Score a JSONL file and write a quality CSV.")
-    ap.add_argument("jsonl", help="Path to input JSONL file")
-    ap.add_argument("-o", "--out", dest="out_csv", help="Output CSV path (defaults to <jsonl>_quality.csv)")
-    ap.add_argument("--simhash", dest="simhash", type=int, default=4, help="Simhash Hamming threshold (default: 4)")
-    ap.add_argument("--no-minhash", dest="minhash", action="store_false", help="Disable MinHash LSH duplicate detection")
-    ap.add_argument("--no-gopher", dest="gopher", action="store_false", help="Disable Gopher-style heuristics")
-    args = ap.parse_args(list(argv) if argv is not None else None)
-
-    scorer = JSONLQualityScorer(
-        simhash_hamm_thresh=int(args.simhash),
-        enable_minhash=bool(args.minhash),
-        enable_gopher=bool(args.gopher),
+    raise SystemExit(
+        "repocapsule.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."
     )
-    rows = scorer.score_jsonl_path(str(args.jsonl), fail_on_error=False)
-    stats = scorer.last_stats
-    out_csv = args.out or (str(os.path.splitext(str(args.jsonl))[0]) + "_quality.csv")
-    write_csv(rows, out_csv)
-    if stats and (stats.parse_errors or stats.score_errors):
-        log.warning(
-            "QC: scored %d records from %d lines in %s (parse_errors=%d, score_errors=%d); some lines were skipped.",
-            stats.scored_ok,
-            stats.total_lines,
-            args.jsonl,
-            stats.parse_errors,
-            stats.score_errors,
-        )
-    return 0

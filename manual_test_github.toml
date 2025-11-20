@@ -15,9 +15,7 @@
 [sources.github]
 # Cap bytes per file inside the GitHub archive (50 MiB, down from the 200 MiB default).
 per_file_cap = 52428800
-
-# Only keep .rst files from the repo in this manual test (mirrors cfg.sources.github.include_exts = {".rst"}).
-include_exts = [".rst",".md"]
+include_exts = [".rst",".md",".py"]
 
 # Other GitHubSourceConfig fields (max_total_uncompressed, max_members, etc.)
 # are left at their library defaults.

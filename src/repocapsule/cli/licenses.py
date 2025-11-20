@@ -21,8 +21,8 @@ try:  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover - Py3.10 fallback
     tomllib = None  # type: ignore[assignment]
 
-from .log import get_logger
-from .interfaces import RepoContext
+from ..core.log import get_logger
+from ..core.interfaces import RepoContext
 
 log = get_logger(__name__)
 

@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, Mapping
 import os, json, gzip
 
-from .interfaces import RepoContext, Record
+from ..core.interfaces import RepoContext, Record
 
 
 class _BaseJSONLSink:
@@ -52,9 +52,25 @@ class _BaseJSONLSink:
     def _open_handle(self, path: Path):
         raise NotImplementedError
 
+    def _open_append_handle(self, path: Path):
+        raise NotImplementedError
+
     def set_header_record(self, record: Optional[Mapping[str, Any]]) -> None:
         self._header_record = dict(record) if record else None
         self._header_written = False
+
+    def finalize(self, records: Iterable[Record]) -> None:
+        """Default finalize writes records as normal JSONL entries."""
+        fp = self._fp
+        temp_opened = False
+        if fp is None:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            fp = self._open_append_handle(self._path)
+            temp_opened = True
+        for rec in records:
+            fp.write(json.dumps(dict(rec), ensure_ascii=False, separators=(",", ":")) + "\n")
+        if temp_opened and fp is not None:
+            fp.close()
 
 
 class JSONLSink(_BaseJSONLSink):
@@ -66,6 +82,9 @@ class JSONLSink(_BaseJSONLSink):
     def _open_handle(self, path: Path):
         return open(path, "w", encoding="utf-8", newline="")
 
+    def _open_append_handle(self, path: Path):
+        return open(path, "a", encoding="utf-8", newline="")
+
 
 class GzipJSONLSink(_BaseJSONLSink):
     """Streaming JSONL sink that gzip-compresses its output."""
@@ -75,6 +94,9 @@ class GzipJSONLSink(_BaseJSONLSink):
 
     def _open_handle(self, path: Path):
         return gzip.open(path, "wt", encoding="utf-8", newline="")
+
+    def _open_append_handle(self, path: Path):
+        return gzip.open(path, "at", encoding="utf-8", newline="")
 
 class PromptTextSink:
     """Writes human-readable prompt text (format as you prefer)."""

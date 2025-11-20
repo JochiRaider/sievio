@@ -7,8 +7,8 @@ from pathlib import Path, PurePosixPath
 from typing import Iterable, Iterator, Optional, Sequence, Set
 import os
 
-from .interfaces import FileItem, RepoContext, Source
-from .naming import normalize_extensions
+from ..core.interfaces import FileItem, RepoContext, Source
+from ..core.naming import normalize_extensions
 
 __all__ = [
     "DEFAULT_SKIP_DIRS",

@@ -3,35 +3,21 @@
 from __future__ import annotations
 
 import io
-from dataclasses import replace
+from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
-from .config import RepocapsuleConfig, FileProcessingConfig
+from .config import RepocapsuleConfig, FileProcessingConfig, DecodeConfig, ChunkConfig
 from .chunk import ChunkPolicy, iter_chunk_dicts
 from .decode import decode_bytes
 from .factories import UnsupportedBinary
-from .fs import read_file_prefix
+from ..sources.fs import read_file_prefix
 from .interfaces import FileExtractor, FileItem, RepoContext, Record, StreamingExtractor
 from .log import get_logger
 from .records import build_record
 
 ConfigForRecords = RepocapsuleConfig | FileProcessingConfig
-
-
-def _get_streaming_extractor(config: ConfigForRecords) -> Optional[StreamingExtractor]:
-    """
-    Return the pipeline file_extractor if it also supports the StreamingExtractor protocol.
-    """
-
-    pipeline_cfg = getattr(config, "pipeline", None)
-    if pipeline_cfg is None:
-        return None
-    extractor = getattr(pipeline_cfg, "file_extractor", None)
-    if extractor is None:
-        return None
-    return extractor if isinstance(extractor, StreamingExtractor) else None
 
 
 class _LimitedStream(io.BufferedReader):
@@ -53,12 +39,19 @@ class _LimitedStream(io.BufferedReader):
         return chunk
 
 __all__ = [
+    "list_records_for_file",
+    "list_records_from_bytes",
+    "build_records_from_bytes",
+    "ByteSource",
+    "RecordBuilderContext",
+    "iter_records_from_bytes",
+    "iter_records_for_file",
+    "build_records_from_bytes",
+    "iter_records_from_file_item",
+    "resolve_bytes_from_file_item",
+    "DefaultExtractor",
     "make_records_for_file",
     "make_records_from_bytes",
-    "iter_records_for_file",
-    "iter_records_from_bytes",
-    "iter_records_from_file_item",
-    "DefaultExtractor",
 ]
 
 log = get_logger(__name__)
@@ -68,6 +61,20 @@ BytesHandler = Callable[
     [bytes, str, Optional[RepoContext], Optional[ChunkPolicy]],
     Optional[Iterable[Record]],
 ]
+
+
+@dataclass(slots=True)
+class ByteSource:
+    data: Optional[bytes]
+    origin: Optional[Path]
+    size: Optional[int]
+
+
+@dataclass(slots=True)
+class RecordBuilderContext:
+    decode: DecodeConfig
+    chunk: ChunkConfig
+    metadata_seed: Mapping[str, Any] | None = None
 
 # ---------------------------------------------------------------------------
 # Record creation for a single file
@@ -94,9 +101,58 @@ def _infer_mode_and_fmt(rel_path: str) -> Tuple[str, Optional[str]]:
     return "code", None
 
 
+def _build_record_context(config: ConfigForRecords, context: Optional[RepoContext]) -> RecordBuilderContext:
+    meta_seed = (context.as_meta_seed() or None) if context else None
+    return RecordBuilderContext(
+        decode=config.decode,
+        chunk=config.chunk,
+        metadata_seed=meta_seed,
+    )
+
+
+def _augment_context_with_source(
+    context: Optional[RepoContext],
+    source_url: Optional[str],
+    source_domain: Optional[str],
+) -> Optional[RepoContext]:
+    if not source_url and not source_domain:
+        return context
+    extra: Dict[str, Any] = {}
+    if context and context.extra:
+        extra.update(context.extra)
+    if source_url:
+        extra.setdefault("url", source_url)
+    if source_domain:
+        extra.setdefault("source_domain", source_domain)
+    return replace(
+        context or RepoContext(),
+        extra=extra,
+    )
+
+
+def resolve_bytes_from_file_item(item: FileItem, decode_cfg: DecodeConfig) -> ByteSource:
+    """
+    Normalize a FileItem into a ByteSource, reopening the origin when needed.
+    """
+    data = getattr(item, "data", None)
+    file_size = getattr(item, "size", None)
+    origin = getattr(item, "origin_path", None)
+
+    if data is not None:
+        return ByteSource(data=data, origin=None, size=file_size)
+
+    if getattr(item, "streamable", False) and origin:
+        origin_path = Path(origin)
+        max_bytes = decode_cfg.max_bytes_per_file
+        reopened, size = read_file_prefix(origin_path, max_bytes, file_size=file_size)
+        return ByteSource(data=reopened, origin=origin_path, size=size)
+
+    return ByteSource(data=None, origin=None, size=file_size)
+
+
 # --- Public entrypoint the pipeline can call ---
 
-def make_records_for_file(
+def list_records_for_file(
     *,
     text: str,
     rel_path: str,
@@ -109,12 +165,14 @@ def make_records_for_file(
     source_url: Optional[str] = None,
     source_domain: Optional[str] = None,
 ) -> List[Dict[str, object]]:
-    """Materialize the record iterator for a decoded file into a list."""
+    """Materialize records for a decoded file (text already provided)."""
+    cfg = config
+    record_ctx = _build_record_context(cfg, context)
     return list(
         iter_records_for_file(
             text=text,
             rel_path=rel_path,
-            config=config,
+            record_ctx=record_ctx,
             context=context,
             encoding=encoding,
             had_replacement=had_replacement,
@@ -122,6 +180,7 @@ def make_records_for_file(
             truncated_bytes=truncated_bytes,
             source_url=source_url,
             source_domain=source_domain,
+            extractors=cfg.pipeline.extractors,
         )
     )
 
@@ -130,7 +189,7 @@ def iter_records_for_file(
     *,
     text: str,
     rel_path: str,
-    config: ConfigForRecords,
+    record_ctx: RecordBuilderContext,
     context: Optional[RepoContext],
     encoding: str,
     had_replacement: bool,
@@ -138,14 +197,14 @@ def iter_records_for_file(
     truncated_bytes: int | None = None,
     source_url: Optional[str] = None,
     source_domain: Optional[str] = None,
+    extractors: Sequence[Any] = (),
 ) -> Iterator[Dict[str, object]]:
     """Yield chunk records followed by extractor records for a decoded file."""
-    cfg = config
     extractor_recs: List[Dict[str, object]] = []
-    context_meta = (context.as_meta_seed() or None) if context else None
+    context_meta = record_ctx.metadata_seed
     file_nlines = 0 if text == "" else text.count("\n") + 1
-    if cfg.pipeline.extractors:
-        for extractor in cfg.pipeline.extractors:
+    if extractors:
+        for extractor in extractors:
             try:
                 out = extractor.extract(text=text, path=rel_path, context=context)
             except Exception as exc:
@@ -166,11 +225,12 @@ def iter_records_for_file(
             text,
             mode=mode,
             fmt=fmt,
-            policy=cfg.chunk.policy,
-            tokenizer_name=cfg.chunk.tokenizer_name,
+            policy=record_ctx.chunk.policy,
+            tokenizer_name=record_ctx.chunk.tokenizer_name,
         )
     )
     total_chunks = len(chunk_dicts)
+    attach_lang = record_ctx.chunk.attach_language_metadata
 
     for idx, chunk in enumerate(chunk_dicts, start=1):
         yield build_record(
@@ -183,7 +243,7 @@ def iter_records_for_file(
             had_replacement=had_replacement,
             chunk_id=idx,
             n_chunks=total_chunks,
-            lang=chunk.get("lang") if cfg.chunk.attach_language_metadata else None,
+            lang=chunk.get("lang") if attach_lang else None,
             tokens=chunk.get("n_tokens"),
             extra_meta=context_meta,
             file_bytes=file_bytes,
@@ -221,24 +281,68 @@ def iter_records_from_bytes(
             derived_domain = urlparse(source_url).hostname
         except Exception:
             derived_domain = None
-    ctx_with_source = context
-    if source_url or derived_domain:
-        extra: Dict[str, Any] = {}
-        if context and context.extra:
-            extra.update(context.extra)
-        if source_url:
-            extra.setdefault("url", source_url)
-        if derived_domain:
-            extra.setdefault("source_domain", derived_domain)
-        ctx_with_source = replace(
-            context or RepoContext(),
-            extra=extra,
-        )
+    ctx_with_source = _augment_context_with_source(context, source_url, derived_domain)
+    record_ctx = _build_record_context(cfg, ctx_with_source)
     handlers = list(cfg.pipeline.bytes_handlers)
-    for sniff, handler in handlers:
+    yield from build_records_from_bytes(
+        data,
+        rel_path,
+        record_ctx=record_ctx,
+        bytes_handlers=handlers,
+        extractors=cfg.pipeline.extractors,
+        context=ctx_with_source,
+        chunk_policy=cfg.chunk.policy,
+        source_url=source_url,
+        source_domain=derived_domain,
+        file_size=file_size,
+    )
+
+
+def list_records_from_bytes(
+    data: bytes,
+    rel_path: str,
+    *,
+    config: ConfigForRecords,
+    context: Optional[RepoContext],
+) -> List[Dict[str, object]]:
+    """Materialize records from raw bytes for a single file."""
+    return list(
+        iter_records_from_bytes(
+            data,
+            rel_path,
+            config=config,
+            context=context,
+        )
+    )
+
+# Compatibility aliases
+make_records_for_file = list_records_for_file
+make_records_from_bytes = list_records_from_bytes
+
+
+def build_records_from_bytes(
+    data: bytes,
+    rel_path: str,
+    *,
+    record_ctx: RecordBuilderContext,
+    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]],
+    extractors: Sequence[Any],
+    context: Optional[RepoContext],
+    chunk_policy: ChunkPolicy,
+    file_size: int | None = None,
+    source_url: Optional[str] = None,
+    source_domain: Optional[str] = None,
+) -> Iterator[Dict[str, object]]:
+    """
+    Pure record builder: bytes -> decode -> chunk -> build_record.
+
+    The caller is responsible for deciding streaming vs buffered and constructing
+    the RecordBuilderContext/handler lists.
+    """
+    for sniff, handler in bytes_handlers:
         if sniff(data, rel_path):
             try:
-                records = handler(data, rel_path, ctx_with_source, cfg.chunk.policy)
+                records = handler(data, rel_path, context, chunk_policy)
             except UnsupportedBinary as e:
                 log.info("Skipping unsupported binary for %s: %s", rel_path, e)
                 records = None
@@ -246,7 +350,7 @@ def iter_records_from_bytes(
                 yield from records
                 return
 
-    max_bytes = cfg.decode.max_bytes_per_file
+    max_bytes = record_ctx.decode.max_bytes_per_file
     if max_bytes is not None and len(data) > max_bytes:
         data = data[:max_bytes]
     processed_len = len(data)
@@ -260,38 +364,22 @@ def iter_records_from_bytes(
 
     dec = decode_bytes(
         data,
-        normalize=cfg.decode.normalize,
-        strip_controls=cfg.decode.strip_controls,
-        fix_mojibake=cfg.decode.fix_mojibake,
+        normalize=record_ctx.decode.normalize,
+        strip_controls=record_ctx.decode.strip_controls,
+        fix_mojibake=record_ctx.decode.fix_mojibake,
     )
     yield from iter_records_for_file(
         text=dec.text,
         rel_path=rel_path,
-        config=cfg,
-        context=ctx_with_source,
+        record_ctx=record_ctx,
+        context=context,
         encoding=dec.encoding,
         had_replacement=dec.had_replacement,
         file_bytes=file_bytes,
         truncated_bytes=truncated_bytes,
         source_url=source_url,
-        source_domain=derived_domain,
-    )
-
-
-def make_records_from_bytes(
-    data: bytes,
-    rel_path: str,
-    *,
-    config: ConfigForRecords,
-    context: Optional[RepoContext],
-) -> List[Dict[str, object]]:
-    return list(
-        iter_records_from_bytes(
-            data,
-            rel_path,
-            config=config,
-            context=context,
-        )
+        source_domain=source_domain,
+        extractors=extractors,
     )
 
 
@@ -300,10 +388,9 @@ def iter_records_from_file_item(
     *,
     config: ConfigForRecords,
     context: Optional[RepoContext],
+    streaming_extractor: Optional[StreamingExtractor] = None,
 ) -> Iterator[Dict[str, object]]:
     cfg = config
-    data = getattr(item, "data", None)
-    file_size = getattr(item, "size", None)
     origin_url: Optional[str] = None
     origin_domain: Optional[str] = None
     if getattr(item, "origin_path", None):
@@ -316,15 +403,8 @@ def iter_records_from_file_item(
             origin_url = None
             origin_domain = None
 
-    pipeline_cfg = getattr(cfg, "pipeline", None)
-    exec_kind = "thread"
-    if pipeline_cfg is not None:
-        exec_kind = (getattr(pipeline_cfg, "executor_kind", "thread") or "thread").strip().lower()
-
-    streaming_extractor = _get_streaming_extractor(cfg)
     if (
         streaming_extractor is not None
-        and exec_kind == "thread"
         and getattr(item, "streamable", False)
         and item.origin_path
     ):
@@ -352,39 +432,26 @@ def iter_records_from_file_item(
                 exc,
             )
 
-    if data is not None:
-        yield from iter_records_from_bytes(
-            data,
-            item.path,
-            config=cfg,
-            context=context,
-            file_size=file_size,
-            source_url=origin_url,
-            source_domain=origin_domain,
-        )
-        return
-    if getattr(item, "streamable", False) and item.origin_path:
-        origin = Path(item.origin_path)
-        max_bytes = cfg.decode.max_bytes_per_file
-        try:
-            reopened, size = read_file_prefix(origin, max_bytes, file_size=file_size)
-        except Exception as exc:
-            raise RuntimeError(f"Failed to reopen stream for {item.path}: {exc}") from exc
-        yield from iter_records_from_bytes(
-            reopened,
-            item.path,
-            config=cfg,
-            context=context,
-            file_size=size,
-            source_url=origin_url,
-            source_domain=origin_domain,
-        )
-        return
-    raise ValueError(f"FileItem {item.path!r} missing data and not streamable")
+    resolved = resolve_bytes_from_file_item(item, cfg.decode)
+    if resolved.data is None:
+        raise ValueError(f"FileItem {item.path!r} missing data and not streamable")
+
+    yield from iter_records_from_bytes(
+        resolved.data,
+        item.path,
+        config=cfg,
+        context=context,
+        file_size=resolved.size,
+        source_url=origin_url,
+        source_domain=origin_domain,
+    )
 
 
 class DefaultExtractor(FileExtractor):
     """Fallback file-level extractor that reuses the built-in decoding/record flow."""
+
+    def __init__(self, streaming_extractor: Optional[StreamingExtractor] = None) -> None:
+        self.streaming_extractor = streaming_extractor
 
     def extract(
         self,
@@ -393,4 +460,9 @@ class DefaultExtractor(FileExtractor):
         config: ConfigForRecords,
         context: Optional[RepoContext] = None,
     ) -> Iterable[Dict[str, object]]:
-        return iter_records_from_file_item(item, config=config, context=context)
+        return iter_records_from_file_item(
+            item,
+            config=config,
+            context=context,
+            streaming_extractor=self.streaming_extractor,
+        )

@@ -9,17 +9,18 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from pathlib import Path
 from typing import Optional, Sequence
 
-from repocapsule.log import configure_logging
-from repocapsule import RepocapsuleConfig
-from repocapsule.chunk import ChunkPolicy
-from repocapsule.config import QCMode
-from repocapsule.sources_webpdf import WebPdfListSource, WebPagePdfSource
-from repocapsule.interfaces import RepoContext
-from repocapsule.factories import build_default_sinks
-from repocapsule.runner import convert, default_paths_for_pdf, _finalize_profile
+from repocapsule import RepocapsuleConfig, convert, load_config_from_path
+from repocapsule.cli.runner import default_paths_for_pdf
+from repocapsule.core.builder import build_pipeline_plan
+from repocapsule.core.chunk import ChunkPolicy
+from repocapsule.core.config import QCMode, SourceSpec, SinkSpec
+from repocapsule.core.interfaces import RepoContext
+from repocapsule.core.log import configure_logging
+from repocapsule.core.pipeline import PipelineEngine
+from repocapsule.core.registries import quality_scorer_registry
 
 try:
-    from repocapsule.qc import JSONLQualityScorer
+    from repocapsule.core.extras.qc import JSONLQualityScorer
 except Exception:  # optional extras
     JSONLQualityScorer = None  # type: ignore[assignment]
 
@@ -38,6 +39,8 @@ PAGE_URL: Optional[str] = None  # e.g., "https://example.org/resources"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO_ROOT / "out"
+# Path to the TOML config used as a base for this manual test.
+CONFIG_PATH = REPO_ROOT / "manual_test_github.toml"
 
 # Chunking policy (adjust token targets/overlap as desired)
 POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
@@ -62,35 +65,29 @@ ALSO_PROMPT_TEXT = True
 MAX_PDF_MB = 100
 MAX_DECODE_MB: Optional[int] = None  # cap decode stage per file (MiB)
 
+# QC extras probe (to avoid hard crashes when optional deps are missing)
+try:
+    import importlib
+
+    importlib.import_module("repocapsule.core.extras.qc")
+    QC_EXTRAS_AVAILABLE = True
+except Exception:
+    QC_EXTRAS_AVAILABLE = False
+
+# Optional QC scorer override (to enable perplexity/LM-backed scoring)
+USE_CUSTOM_QC_SCORER = True
+QC_MODEL_ID = "Qwen/Qwen2.5-1.5B"
+QC_DEVICE = "cuda"       # or "cpu"
+QC_DTYPE = "bfloat16"    # or "float32" / "float16"
+QC_LOCAL_ONLY = False
+
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_source() -> WebPdfListSource | WebPagePdfSource:
-    max_pdf_bytes = int(MAX_PDF_MB) * 1024 * 1024
-    if PAGE_URL:
-        return WebPagePdfSource(
-            PAGE_URL,
-            same_domain=True,
-            max_links=50,
-            include_ambiguous=False,
-            add_prefix="webpdfs",
-            max_pdf_bytes=max_pdf_bytes,
-            require_pdf=True,
-        )
-    if not URLS:
-        raise ValueError("URLS must contain at least one PDF when PAGE_URL is not set.")
-    return WebPdfListSource(
-        URLS,
-        max_pdf_bytes=max_pdf_bytes,
-        require_pdf=True,
-        add_prefix="webpdfs",
-    )
-
-
-def _build_config() -> RepocapsuleConfig:
-    cfg = RepocapsuleConfig()
+def _build_config(base_cfg: RepocapsuleConfig) -> RepocapsuleConfig:
+    cfg = base_cfg
     cfg.chunk.policy = POLICY
 
     if MAX_DECODE_MB is not None:
@@ -104,14 +101,6 @@ def _build_config() -> RepocapsuleConfig:
 
     cfg.qc.enabled = bool(ENABLE_QC)
     if cfg.qc.enabled:
-        if JSONLQualityScorer is None:
-            raise RuntimeError("QC requested but optional QC extras are not installed.")
-        cfg.qc.scorer = JSONLQualityScorer(
-            lm_model_id="Qwen/Qwen2.5-1.5B",
-            device="cuda",        # or "cpu"
-            dtype="bfloat16",     # or "float32" / "float16"
-            local_files_only=False,
-        )
         cfg.qc.mode = QC_MODE
         cfg.qc.min_score = QC_MIN_SCORE
         cfg.qc.drop_near_dups = QC_DROP_NEAR_DUPS
@@ -120,6 +109,38 @@ def _build_config() -> RepocapsuleConfig:
     else:
         cfg.qc.scorer = None
     return cfg
+
+
+def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> None:
+    if getattr(cfg.qc, "enabled", False) and not QC_EXTRAS_AVAILABLE:
+        log.warning("QC enabled but QC extras are not installed; disabling QC for this run.")
+        cfg.qc.enabled = False
+        cfg.qc.mode = QCMode.OFF
+        cfg.qc.scorer = None
+
+
+def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
+    if not (getattr(cfg.qc, "enabled", False) and USE_CUSTOM_QC_SCORER):
+        return
+    if not QC_EXTRAS_AVAILABLE:
+        log.warning("QC extras are not installed; skipping custom QC scorer registration.")
+        return
+
+    class ManualQualityScorerFactory:
+        id = "jsonl_default"  # override the default factory
+
+        def build(self, qc_cfg):
+            from repocapsule.core.extras.qc import JSONLQualityScorer
+
+            return JSONLQualityScorer(
+                lm_model_id=QC_MODEL_ID,
+                device=QC_DEVICE,
+                dtype=QC_DTYPE,
+                local_files_only=QC_LOCAL_ONLY,
+                heuristics=getattr(qc_cfg, "heuristics", None),
+            )
+
+    quality_scorer_registry.register(ManualQualityScorerFactory())
 
 
 # ---------------------------------------------------------------------------
@@ -148,24 +169,38 @@ def main() -> None:
         QC_MODE,
     )
 
-    cfg = _build_config()
+    base_cfg = load_config_from_path(CONFIG_PATH)
+    if not isinstance(base_cfg, RepocapsuleConfig):
+        raise TypeError(f"Expected RepocapsuleConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
 
-    sources: Sequence[object] = (_build_source(),)
-    ctx = RepoContext(
-        repo_full_name=None,
-        repo_url=corpus_url,
-        license_id=None,
-        extra={"source": "webpdf"},
-    )
-    sink_result = build_default_sinks(
-        cfg.sinks,
-        jsonl_path=jsonl_path,
-        prompt_path=prompt_path,
-        context=ctx,
-    )
-    cfg = _finalize_profile(cfg, sources, sink_result, extra_metadata={"source": "webpdf"})
+    cfg = _build_config(base_cfg)
+    _maybe_disable_qc(cfg, log)
+    _register_qc_factory(cfg, log)
+    ctx = RepoContext(repo_url=corpus_url, extra={"source": "webpdf"})
 
-    stats = convert(cfg)
+    # Configure sources/sinks via specs so the builder wires them up.
+    add_prefix = "webpdfs"
+    if PAGE_URL:
+        cfg.sources.specs = [
+            SourceSpec(kind="web_page_pdf", options={"page_url": PAGE_URL, "add_prefix": add_prefix}),
+        ]
+    else:
+        if not URLS:
+            raise ValueError("URLS must contain at least one PDF when PAGE_URL is not set.")
+        cfg.sources.specs = [
+            SourceSpec(kind="web_pdf_list", options={"urls": URLS, "add_prefix": add_prefix}),
+        ]
+    cfg.sinks.specs = [
+        SinkSpec(
+            kind="default_jsonl_prompt",
+            options={"jsonl_path": str(jsonl_path), "prompt_path": str(prompt_path) if prompt_path else None},
+        )
+    ]
+    cfg.sinks.context = ctx
+
+    plan = build_pipeline_plan(cfg, scorer_registry=quality_scorer_registry)
+    engine = PipelineEngine(plan)
+    stats = convert(engine)
 
     print("\n=== Done ===")
     print("JSONL :", jsonl_path)

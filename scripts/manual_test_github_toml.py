@@ -9,6 +9,7 @@ Run this from your workspace root (no install required). The script:
 - Validates the GitHub URL up front
 - Autonames outputs with SPDX license + optional ref + timestamp
 - Loads a TOML-based RepocapsuleConfig and applies a few runtime-only tweaks
+- Registers an optional QC scorer via the new registry system (keeps the config runtime-free)
 - Builds a GitHub profile config and runs `convert(...)`
 - Treats KQL-from-Markdown as an optional Extractor
 - Lets the pipeline own sink open/close
@@ -27,22 +28,29 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from pathlib import Path
 from typing import Optional, Sequence
 
-from repocapsule.log import configure_logging
-from repocapsule import load_config_from_path, convert, RepocapsuleConfig
-from repocapsule.chunk import ChunkPolicy
-from repocapsule.interfaces import RepoContext
-from repocapsule.runner import default_paths_for_github, make_github_profile
+from repocapsule import RepocapsuleConfig, convert, load_config_from_path
+from repocapsule.cli.runner import default_paths_for_github, make_github_profile
+from repocapsule.core.builder import build_pipeline_plan
+from repocapsule.core.chunk import ChunkPolicy
+from repocapsule.core.interfaces import RepoContext
+from repocapsule.core.log import configure_logging
+from repocapsule.core.pipeline import PipelineEngine
+from repocapsule.core.registries import quality_scorer_registry
 
 # Optional extractor for KQL blocks inside Markdown
 try:
-    from repocapsule.md_kql import KqlFromMarkdownExtractor
+    from repocapsule.core.extras.md_kql import KqlFromMarkdownExtractor
 except Exception:  # pragma: no cover - optional extra
     KqlFromMarkdownExtractor = None  # type: ignore[assignment]
 
-try:  # optional QC extra
-    from repocapsule.qc import JSONLQualityScorer
-except Exception:  # pragma: no cover - keep import errors silent
-    JSONLQualityScorer = None  # type: ignore[assignment]
+# QC extras probe (used to auto-disable QC when dependencies are missing)
+try:
+    import importlib
+
+    importlib.import_module("repocapsule.core.extras.qc")
+    QC_EXTRAS_AVAILABLE = True
+except Exception:
+    QC_EXTRAS_AVAILABLE = False
 
 # ──────────────────────────────────────────────────────────────────────────────
 # User-editable knobs for this manual test
@@ -50,9 +58,9 @@ except Exception:  # pragma: no cover - keep import errors silent
 
 # Example GitHub repo to test:
 # URL = "https://github.com/pallets/flask/tree/main/docs"
-# URL = "https://github.com/JochiRaider/URL_Research_Tool"
+URL = "https://github.com/JochiRaider/URL_Research_Tool"
 # URL = "https://github.com/chinapandaman/PyPDFForm"
-URL = "https://github.com/SystemsApproach/book"
+# URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
 
 # Workspace root and output directory for artifacts (portable path under the repo root):
@@ -71,6 +79,13 @@ POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min
 # Write prompt text too? (affects how we plan output paths)
 ALSO_PROMPT_TEXT = True
 
+# Optional QC scorer override (keeps the config declarative; wired via registry)
+USE_CUSTOM_QC_SCORER = True
+QC_MODEL_ID = "Qwen/Qwen2.5-1.5B"
+QC_DEVICE = "cuda"       # or "cpu"
+QC_DTYPE = "bfloat16"    # or "float32" / "float16"
+QC_LOCAL_ONLY = False
+
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
@@ -81,7 +96,6 @@ def _plan_output_paths(
     url: str,
     out_dir: Path,
     *,
-    ref_hint: Optional[str],
     with_prompt: bool,
 ) -> tuple[Path, Optional[Path], RepoContext]:
     jsonl_str, prompt_str, ctx = default_paths_for_github(
@@ -105,29 +119,65 @@ def _build_config(
     This helper stitches in objects that are hard to express in TOML, such as:
     - the ChunkPolicy instance
     - any custom Extractors (e.g., KqlFromMarkdownExtractor)
+    QC scorers are now registered via the registry system to keep the config runtime-free.
     """
     cfg = base_cfg
 
     # Runtime-only wiring that isn't TOML-friendly.
     cfg.chunk.policy = POLICY
     cfg.pipeline.extractors = tuple(extractors)
-   
-    if cfg.qc.enabled:
-        if JSONLQualityScorer is None:
-            raise RuntimeError(
-                "QC is enabled in the config, but QC extras are not installed. "
-                "Disable qc.enabled in the TOML or install the QC dependencies."
-            )
-        cfg.qc.scorer = JSONLQualityScorer(
-            lm_model_id="Qwen/Qwen2.5-1.5B",
-            device="cuda",        # or "cpu"
-            dtype="bfloat16",     # or "float32" / "float16"
-            local_files_only=False,
-            heuristics=getattr(cfg.qc, "heuristics", None),
-        )
-    else:
-        cfg.qc.scorer = None
+    cfg.qc.scorer = None
     return cfg
+
+
+def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> bool:
+    """
+    Turn off QC if the optional QC extras are missing to avoid runtime errors.
+    """
+    if not getattr(cfg.qc, "enabled", False):
+        return False
+    if QC_EXTRAS_AVAILABLE:
+        return False
+    log.warning("QC enabled but QC extras are not installed; disabling QC for this run.")
+    cfg.qc.enabled = False
+    cfg.qc.mode = "off"
+    cfg.qc.scorer = None
+    return True
+
+
+def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
+    """
+    Register a QC scorer factory when QC is enabled.
+
+    The registry keeps the declarative config free of runtime objects. Registering
+    the factory before ``convert(...)`` ensures it wins over the default factory.
+    """
+    if not (getattr(cfg.qc, "enabled", False) and USE_CUSTOM_QC_SCORER):
+        return
+    if not QC_EXTRAS_AVAILABLE:
+        log.warning("QC extras are not installed; skipping custom QC scorer registration.")
+        return
+
+    class ManualQualityScorerFactory:
+        id = "jsonl_default"  # override the default factory
+
+        def build(self, qc_cfg):
+            try:
+                from repocapsule.core.extras.qc import JSONLQualityScorer
+            except Exception as exc:  # pragma: no cover - optional extra
+                raise RuntimeError(
+                    "QC is enabled in the config, but QC extras are not installed. "
+                    "Disable qc.enabled in the TOML or install the QC dependencies."
+                ) from exc
+            return JSONLQualityScorer(
+                lm_model_id=QC_MODEL_ID,
+                device=QC_DEVICE,
+                dtype=QC_DTYPE,
+                local_files_only=QC_LOCAL_ONLY,
+                heuristics=getattr(qc_cfg, "heuristics", None),
+            )
+
+    quality_scorer_registry.register(ManualQualityScorerFactory())
 
 
 # ──────────────────────────────────────────────────────────────────────────────
@@ -147,28 +197,32 @@ def main() -> None:
     if not isinstance(base_cfg, RepocapsuleConfig):
         raise TypeError(f"Expected RepocapsuleConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
 
-    log.info(
-        "Converting repo → %s (autoname=%s, prompt=%s, qc=%s[%s])",
-        URL,
-        True,
-        ALSO_PROMPT_TEXT,
-        "on" if getattr(base_cfg.qc, "enabled", False) else "off",
-        getattr(base_cfg.qc, "mode", "off"),
-    )
-
-    jsonl_path, prompt_path, ctx = _plan_output_paths(
-        URL,
-        OUT_DIR,
-        ref_hint=REF,
-        with_prompt=ALSO_PROMPT_TEXT,
-    )
-
     extractors: list[object] = []
     if ENABLE_KQL_MD_EXTRACTOR and KqlFromMarkdownExtractor is not None:
         extractors.append(KqlFromMarkdownExtractor())
 
     # Apply runtime-only wiring on top of the TOML-based config.
     run_cfg = _build_config(base_cfg, extractors)
+    _maybe_disable_qc(run_cfg, log)
+    _register_qc_factory(run_cfg, log)
+
+    qc_enabled = bool(getattr(run_cfg.qc, "enabled", False))
+    qc_mode = getattr(run_cfg.qc, "mode", "off")
+
+    log.info(
+        "Converting repo → %s (autoname=%s, prompt=%s, qc=%s[%s])",
+        URL,
+        True,
+        ALSO_PROMPT_TEXT,
+        "on" if qc_enabled else "off",
+        qc_mode,
+    )
+
+    jsonl_path, prompt_path, ctx = _plan_output_paths(
+        URL,
+        OUT_DIR,
+        with_prompt=ALSO_PROMPT_TEXT,
+    )
 
     profile_cfg = make_github_profile(
         URL,
@@ -177,13 +231,15 @@ def main() -> None:
         base_config=run_cfg,
         repo_context=ctx,
     )
-    stats = convert(profile_cfg)
+    plan = build_pipeline_plan(profile_cfg, scorer_registry=quality_scorer_registry)
+    engine = PipelineEngine(plan)
+    stats = convert(engine)
 
     print("\n=== Done ===")
     print("JSONL :", jsonl_path)
     print("Prompt:", prompt_path)
     print("Stats :", stats)
-    if getattr(base_cfg.qc, "enabled", False):
+    if qc_enabled:
         print("QC Summary:", stats.get("qc", {}))
 
 

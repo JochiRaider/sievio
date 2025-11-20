@@ -9,11 +9,11 @@ import urllib.parse, urllib.request, urllib.error
 import posixpath, re, io
 from dataclasses import dataclass
 
-from .interfaces import Source, FileItem
-from . import safe_http
-from .config import PdfSourceConfig
-from .log import get_logger
-from .pipeline import process_items_parallel
+from ..core.interfaces import Source, FileItem
+from ..core import safe_http
+from ..core.config import PdfSourceConfig
+from ..core.log import get_logger
+from ..core.concurrency import Executor, ExecutorConfig
 
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 
@@ -361,16 +361,18 @@ class WebPdfListSource(Source):
                 "WebPdfListSource: process executor is not currently supported for downloads; "
                 "falling back to thread executor."
             )
-            executor_kind = "thread"
-        process_items_parallel(
+        exec_cfg = ExecutorConfig(
+            max_workers=max_workers,
+            window=max(window, max_workers),
+            kind="thread",
+        )
+        executor = Executor(exec_cfg)
+        executor.map_unordered(
             (_PdfDownloadTask(idx, url) for idx, url in enumerate(self.urls)),
             _worker,
-            _writer,
-            max_workers=max_workers,
-            window=window,
+            lambda result: _writer(*result),
             fail_fast=False,
-            executor_kind=executor_kind,
-            on_worker_error=_on_worker_error,
+            on_error=_on_worker_error,
         )
 
         for idx in range(total_urls):

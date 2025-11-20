@@ -10,9 +10,9 @@ from typing import Dict, Iterable, Optional, Any
 
 from Evtx.Evtx import Evtx  # python-evtx
 
-from .chunk import ChunkPolicy
-from .interfaces import RepoContext, Record
-from .records import build_record
+from ..core.chunk import ChunkPolicy
+from ..core.interfaces import RepoContext, Record
+from ..core.records import build_record
 
 __all__ = ["sniff_evtx", "handle_evtx"]
 
@@ -294,3 +294,11 @@ def handle_evtx(
                     "recovery_strategy": "python-evtx-carve",
                 }),
             )
+
+# Register default bytes handler
+try:
+    from ..core.registries import bytes_handler_registry
+
+    bytes_handler_registry.register(sniff_evtx, handle_evtx)
+except Exception:
+    pass

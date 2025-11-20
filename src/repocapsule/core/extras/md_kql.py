@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from .interfaces import RepoContext, Record
-from .records import build_record
 from typing import Iterable, Iterator, List, Optional, Sequence
 import re
+
+from ..interfaces import RepoContext, Record
+from ..records import build_record
 
 __all__ = [
     "KQLBlock",

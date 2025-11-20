@@ -9,32 +9,31 @@ from typing import Optional, Dict, Any, Sequence, Mapping, List, Iterator, Itera
 import json
 import os
 
-from .config import QCConfig, QCMode, RepocapsuleConfig
-from .factories import (
+from ..core.config import QCConfig, QCMode, RepocapsuleConfig, SourceSpec, SinkSpec
+from ..core.factories import (
     SinkFactoryResult,
-    build_default_sinks,
-    make_github_zip_source,
-    make_local_dir_source,
     make_output_paths_for_github,
     make_output_paths_for_pdf,
     make_qc_scorer,
     make_repo_context_from_git,
 )
-from .interfaces import RepoContext
+from ..core.interfaces import RepoContext
 from .licenses import detect_license_in_tree, apply_license_to_context
-from .pipeline import process_items_parallel, PipelineEngine, _infer_executor_kind
-from .githubio import get_repo_info, parse_github_url, RepoSpec, detect_license_for_github_repo
-from .log import get_logger
-from .qc_controller import QCSummaryTracker, summarize_qc_rows
-from .records import RunSummaryMeta, is_summary_record
-from .qc_utils import open_jsonl_maybe_gz, open_jsonl_output_maybe_gz
+from ..core.builder import build_pipeline_plan
+from ..core.pipeline import PipelineEngine
+from ..core.concurrency import Executor, resolve_qc_executor_config
+from ..sources.githubio import get_repo_info, parse_github_url, RepoSpec, detect_license_for_github_repo
+from ..core.log import get_logger
+from ..core.qc_controller import QCSummaryTracker, summarize_qc_rows
+from ..core.records import RunSummaryMeta, is_summary_record
+from ..core.qc_utils import open_jsonl_maybe_gz, open_jsonl_output_maybe_gz
 
-try:  
-    from .qc import JSONLQualityScorer, score_jsonl_to_csv, write_csv
-except Exception: 
-    JSONLQualityScorer = None  
-    score_jsonl_to_csv = None  
-    write_csv = None  
+try:
+    from ..core.extras.qc import JSONLQualityScorer, score_jsonl_to_csv, write_csv
+except Exception:
+    JSONLQualityScorer = None
+    score_jsonl_to_csv = None
+    write_csv = None
 
 log = get_logger(__name__)
 
@@ -68,7 +67,7 @@ def run_engine(engine: PipelineEngine) -> Dict[str, int]:
     """
     Run an existing PipelineEngine, then perform QC and append a run summary to the primary JSONL (if available).
 
-    Assumes engine.config has already been prepared (RepocapsuleConfig.prepared()).
+    Assumes engine.config has already been prepared via build_pipeline_plan.
     """
     cfg = engine.config
     stats_obj = engine.run()
@@ -132,15 +131,14 @@ def run_engine(engine: PipelineEngine) -> Dict[str, int]:
                     score_jsonl_to_csv(str(jsonl_path), out_csv)
 
     qc_summary = qc_summary or stats_obj.qc.as_dict()
-    if jsonl_path:
-        stats_dict = stats_obj.as_dict()
-        summary_record = RunSummary(
-            config=cfg.to_dict(),
-            stats=stats_dict,
-            qc_summary=qc_summary if isinstance(qc_summary, dict) else None,
-            metadata=cfg.metadata.to_dict(),
-        )
-        _append_run_summary(jsonl_path, summary_record)
+    stats_dict = stats_obj.as_dict()
+    summary_record = RunSummary(
+        config=cfg.to_dict(),
+        stats=stats_dict,
+        qc_summary=qc_summary if isinstance(qc_summary, dict) else None,
+        metadata=cfg.metadata.to_dict(),
+    ).to_record()
+    _dispatch_finalizers(engine.plan.runtime.sinks, summary_record, jsonl_path, cfg.sinks.context)
     return stats_obj.as_dict()
 
 
@@ -149,18 +147,15 @@ def convert(config: RepocapsuleConfig | PipelineEngine) -> Dict[str, int]:
     """
     Entry point for all conversions.
 
-    - Passing a RepocapsuleConfig will call prepared() and build a new PipelineEngine.
+    - Passing a RepocapsuleConfig will build a PipelinePlan and a new PipelineEngine.
     - Passing an existing PipelineEngine assumes its config has already been prepared and validated.
     """
     if isinstance(config, PipelineEngine):
         return run_engine(config)
 
-    cfg = config.prepared()
-    if not cfg.sources.sources:
-        raise ValueError("RepocapsuleConfig.sources.sources must contain at least one Source")
-    if not cfg.sinks.sinks:
-        raise ValueError("RepocapsuleConfig.sinks.sinks must contain at least one Sink")
-    engine = PipelineEngine(config=cfg)
+    plan = build_pipeline_plan(config)
+    cfg = plan.config
+    engine = PipelineEngine(plan)
     return run_engine(engine)
 
 
@@ -269,7 +264,7 @@ def _derive_csv_path(jsonl_path: Optional[str], suffix: Optional[str]) -> Option
 
 
 def _append_run_summary(jsonl_path: str, summary: RunSummary) -> None:
-    record = summary.to_record()
+    record = summary if isinstance(summary, dict) else summary.to_record()
     with open_jsonl_output_maybe_gz(jsonl_path, "a") as fp:
         fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
         fp.write("\n")
@@ -292,6 +287,46 @@ def _log_post_qc_summary(summary: Dict[str, Any]) -> None:
         log.info("Largest duplicate families (post-QC):\n%s", "\n".join(lines))
     else:
         log.info("Largest duplicate families (post-QC): none")
+
+
+def _dispatch_finalizers(
+    sinks: Sequence[Sink],
+    summary_record: Dict[str, Any],
+    primary_jsonl: Optional[str],
+    context: Optional[RepoContext] = None,
+) -> None:
+    """
+    Send run summary/QC footers to sinks that support finalize(); preserve JSONL footer behavior.
+    """
+    from ..sinks.sinks import JSONLSink, GzipJSONLSink  # local import to avoid cycles
+
+    sent_to_finalize = False
+    wrote_jsonl = False
+    for sink in sinks:
+        finalize = getattr(sink, "finalize", None)
+        if callable(finalize):
+            opened_here = False
+            open_fn = getattr(sink, "open", None)
+            close_fn = getattr(sink, "close", None)
+            try:
+                if callable(open_fn):
+                    open_fn(context)
+                    opened_here = True
+                finalize([summary_record])
+                sent_to_finalize = True
+                if isinstance(sink, (JSONLSink, GzipJSONLSink)):
+                    wrote_jsonl = True
+            except Exception as exc:
+                log.warning("Sink %s failed to finalize: %s", type(sink).__name__, exc)
+            finally:
+                if opened_here and callable(close_fn):
+                    try:
+                        close_fn()
+                    except Exception as exc:  # noqa: BLE001
+                        log.debug("Sink %s close after finalize failed: %s", type(sink).__name__, exc)
+    # Preserve legacy JSONL footer write when we haven't already written via a JSONL sink
+    if primary_jsonl and not wrote_jsonl:
+        _append_run_summary(primary_jsonl, summary_record)
 
 
 def _score_jsonl_sequential(
@@ -337,32 +372,6 @@ def _score_jsonl_sequential_streaming(
             consume_rows(rows)
 
 
-def _resolve_qc_post_concurrency(cfg: RepocapsuleConfig) -> Tuple[int, int, str]:
-    """
-    Resolve post-QC concurrency, using QC overrides when present and falling back to pipeline defaults.
-    """
-    qc = cfg.qc
-    pc = cfg.pipeline
-    pipeline_max_workers = pc.max_workers or (os.cpu_count() or 1)
-    pipeline_max_workers = max(1, pipeline_max_workers)
-    max_workers = pipeline_max_workers if qc.post_max_workers is None else qc.post_max_workers
-    max_workers = max(1, max_workers)
-
-    if qc.post_submit_window is not None:
-        window = qc.post_submit_window
-    elif pc.submit_window is not None:
-        window = pc.submit_window
-    else:
-        window = max_workers * 4
-
-    kind = (qc.post_executor_kind or pc.executor_kind or "thread").strip().lower()
-    if kind == "auto":
-        kind = _infer_executor_kind(cfg)
-    if kind not in {"thread", "process"}:
-        kind = "thread"
-    return max_workers, window, kind
-
-
 def _run_parallel_qc(
     shards: Iterable[_JsonlShard],
     qc_cfg,
@@ -386,55 +395,53 @@ def _run_parallel_qc(
             raise RuntimeError("Unable to create scorer for parallel QC processing.")
         return additional
 
-    def _writer(shard_idx: int, shard_rows: Iterable[Dict[str, Any]]) -> None:
+    exec_cfg = resolve_qc_executor_config(config)
+    init = None
+    initargs: tuple[Any, ...] = ()
+    if exec_cfg.kind == "process":
+        payload_cfg = replace(qc_cfg, scorer=None)
+        qc_payload = asdict(payload_cfg)
+        init = _qc_worker_initializer
+        initargs = (qc_payload,)
+
+    executor = Executor(
+        exec_cfg,
+        initializer=init,
+        initargs=initargs,
+    )
+
+    def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+        if exec_cfg.kind == "process":
+            return _qc_parallel_worker(shard)
+        scorer = _scorer_factory()
+        label = f"shard-{shard.index}:{shard.path}"
+        return shard.index, _score_lines(
+            shard.lines,
+            scorer,
+            source_path=shard.path,
+            shard_label=label,
+            fail_on_error=bool(qc_cfg.fail_on_error),
+            tracker=None,
+        )
+
+    def _on_result(result: Tuple[int, List[Dict[str, Any]]]) -> None:
+        shard_idx, shard_rows = result
         rows_list = list(shard_rows)
         if rows_list:
             handle_rows(shard_idx, rows_list)
 
-    max_workers, window, executor_kind = _resolve_qc_post_concurrency(config)
+    def _on_error(exc: BaseException) -> None:
+        log.error("Parallel QC worker failed: %s", exc)
 
     try:
-        if executor_kind == "process":
-            # Process mode: use initializer/initargs so each process sets up its scorer once.
-            payload_cfg = replace(qc_cfg, scorer=None)
-            qc_payload = asdict(payload_cfg)
-            process_items_parallel(
-                shards,
-                _qc_parallel_worker,
-                _writer,
-                max_workers=max_workers,
-                window=window,
-                fail_fast=True,
-                executor_kind=executor_kind,
-                initializer=_qc_worker_initializer,
-                initargs=(qc_payload,),
-            )
-        else:
-
-            def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
-                # Thread mode: each worker builds its own scorer instance.
-                scorer = _scorer_factory()
-                label = f"shard-{shard.index}:{shard.path}"
-                return shard.index, _score_lines(
-                    shard.lines,
-                    scorer,
-                    source_path=shard.path,
-                    shard_label=label,
-                    fail_on_error=bool(qc_cfg.fail_on_error),
-                    tracker=None,
-                )
-
-            process_items_parallel(
-                shards,
-                _worker,
-                _writer,
-                max_workers=max_workers,
-                window=window,
-                fail_fast=True,
-                executor_kind=executor_kind,
-            )
+        executor.map_unordered(
+            shards,
+            _worker,
+            _on_result,
+            fail_fast=True,
+            on_error=_on_error,
+        )
     except Exception as exc:
-        # Fail fast inside process_items_parallel, then fall back to sequential scoring.
         log.warning("Parallel QC scoring failed (%s); falling back to sequential mode.", exc)
         return False
 
@@ -525,9 +532,8 @@ def _finalize_profile(
     *,
     extra_metadata: Optional[Mapping[str, Any]] = None,
 ) -> RepocapsuleConfig:
-    cfg.sources = replace(cfg.sources, sources=tuple(sources))
-    cfg.sinks = sink_result.sink_config
-    combined_meta: Dict[str, Any] = dict(sink_result.metadata)
+    # Deprecated helper retained for compatibility; prefer declarative specs + registries.
+    combined_meta: Dict[str, Any] = {}
     if extra_metadata:
         for key, value in extra_metadata.items():
             if value is not None:
@@ -672,21 +678,26 @@ def make_local_profile(
         license_id, meta = detect_license_in_tree(str(root_dir), None)
         if license_id:
             ctx = apply_license_to_context(ctx, license_id, meta)
-    sources = [
-        make_local_dir_source(
-            root_dir,
-            config=cfg.sources.local,
-            context=ctx,
+    cfg.sinks.context = ctx
+    cfg.sources.specs = [
+        SourceSpec(kind="local_dir", options={"root_dir": str(root_dir)}),
+    ]
+    cfg.sinks.specs = [
+        SinkSpec(
+            kind="default_jsonl_prompt",
+            options={
+                "jsonl_path": str(out_jsonl),
+                "prompt_path": str(out_prompt) if out_prompt is not None else None,
+            },
         )
     ]
-    sink_result = build_default_sinks(
-        cfg.sinks,
-        jsonl_path=out_jsonl,
-        prompt_path=out_prompt,
-        context=ctx,
-    )
     extra_meta = {"repo_url": ctx.repo_url} if ctx.repo_url else {}
-    return _finalize_profile(cfg, sources, sink_result, extra_metadata=extra_meta)
+    meta_update = {"primary_jsonl": str(out_jsonl)}
+    if out_prompt is not None:
+        meta_update["prompt_path"] = str(out_prompt)
+    meta_update.update(extra_meta)
+    cfg.metadata = cfg.metadata.merged(meta_update)
+    return cfg
 
 
 def make_github_profile(
@@ -702,24 +713,25 @@ def make_github_profile(
     profile = _build_github_repo_profile(url, base_context=base_ctx)
     ctx = profile.ctx
     cfg.sinks.context = ctx
-    http_client = cfg.http.build_client()
-    sources = [
-        make_github_zip_source(
-            url,
-            config=cfg.sources.github,
-            context=ctx,
-            download_timeout=cfg.http.timeout,
-            http_client=http_client,
+    cfg.sources.specs = [
+        SourceSpec(kind="github_zip", options={"url": url}),
+    ]
+    cfg.sinks.specs = [
+        SinkSpec(
+            kind="default_jsonl_prompt",
+            options={
+                "jsonl_path": str(out_jsonl),
+                "prompt_path": str(out_prompt) if out_prompt is not None else None,
+            },
         )
     ]
-    sink_result = build_default_sinks(
-        cfg.sinks,
-        jsonl_path=out_jsonl,
-        prompt_path=out_prompt,
-        context=ctx,
-    )
     extra_meta = {"repo_url": ctx.repo_url} if ctx.repo_url else {}
-    return _finalize_profile(cfg, sources, sink_result, extra_metadata=extra_meta)
+    meta_update = {"primary_jsonl": str(out_jsonl)}
+    if out_prompt is not None:
+        meta_update["prompt_path"] = str(out_prompt)
+    meta_update.update(extra_meta)
+    cfg.metadata = cfg.metadata.merged(meta_update)
+    return cfg
 @dataclass(slots=True)
 class _JsonlShard:
     index: int

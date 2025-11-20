@@ -12,26 +12,16 @@ except ModuleNotFoundError:  # pragma: no cover
 from collections.abc import Sequence as ABCSequence
 from dataclasses import dataclass, field, replace, is_dataclass, fields
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints, List
 
 from .chunk import ChunkPolicy
-from .factories import make_bytes_handlers, make_qc_scorer
 from .interfaces import Extractor, FileExtractor, RepoContext, Source, Sink, Record, QualityScorer
-from .log import configure_logging, PACKAGE_LOGGER_NAME, get_logger
-from .safe_http import SafeHttpClient, set_global_http_client
-from .records import build_run_header_record
-
-log = get_logger(__name__)
-
+from .log import configure_logging, PACKAGE_LOGGER_NAME
+from .safe_http import SafeHttpClient
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
 BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy]], Optional[Iterable[Record]]]
-
-
-def _default_bytes_handlers() -> Sequence[Tuple[Sniff, BytesHandler]]:
-    return tuple(make_bytes_handlers())
-
 # ---------------------------------------------------------------------------
 # QC mode helpers
 # ---------------------------------------------------------------------------
@@ -128,6 +118,7 @@ class PdfSourceConfig:
 
 @dataclass(slots=True)
 class SourceConfig:
+    specs: List["SourceSpec"] = field(default_factory=list)
     sources: Sequence[Source] = field(default_factory=tuple)
     local: LocalDirSourceConfig = field(default_factory=LocalDirSourceConfig)
     github: GitHubSourceConfig = field(default_factory=GitHubSourceConfig)
@@ -174,9 +165,7 @@ class PipelineConfig:
 
     extractors: Sequence[Extractor] = field(default_factory=tuple)
     file_extractor: Optional[FileExtractor] = None
-    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(
-        default_factory=_default_bytes_handlers
-    )
+    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(default_factory=tuple)
     max_workers: int = 0
     submit_window: Optional[int] = None
     fail_fast: bool = False
@@ -206,6 +195,7 @@ class PromptConfig:
 
 @dataclass(slots=True)
 class SinkConfig:
+    specs: List["SinkSpec"] = field(default_factory=list)
     sinks: Sequence[Sink] = field(default_factory=tuple)
     context: Optional[RepoContext] = None
     output_dir: Path = Path(".")
@@ -213,6 +203,22 @@ class SinkConfig:
     prompt: PromptConfig = field(default_factory=PromptConfig)
     compress_jsonl: bool = False
     jsonl_basename: str = "data"
+
+
+@dataclass(slots=True)
+class SourceSpec:
+    """Declarative source entry; factories map kind -> concrete sources."""
+
+    kind: str
+    options: Dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class SinkSpec:
+    """Declarative sink entry; factories map kind -> concrete sinks."""
+
+    kind: str
+    options: Dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +232,7 @@ class HttpConfig:
 
     - ``client`` can hold a pre-built SafeHttpClient instance. When set, it will be reused by
       ``build_client()`` and passed to factories.
-    - ``as_global`` controls whether ``RepocapsuleConfig.prepared()`` installs this client as the
+    - ``as_global`` controls whether the builder installs this client as the
       module-wide default via ``set_global_http_client``. For CLI-style one-shot runs, leaving this
       True is convenient. For tests or long-lived processes, prefer ``as_global=False`` and pass the
       client explicitly.
@@ -465,114 +471,28 @@ class RepocapsuleConfig:
     def __post_init__(self) -> None:
         if not isinstance(self.metadata, RunMetadata):
             self.metadata = RunMetadata.from_dict(dict(self.metadata or {}))
+        if self.sources.sources:
+            raise ValueError("sources.sources must be empty in declarative specs; use sources.specs instead.")
+        if self.sinks.sinks:
+            raise ValueError("sinks.sinks must be empty in declarative specs; use sinks.specs instead.")
 
     def with_context(self, ctx: RepoContext) -> RepocapsuleConfig:
         return replace(self, sinks=replace(self.sinks, context=ctx))
 
     def prepared(self, *, mutate: bool = False) -> "RepocapsuleConfig":
         """
-        Apply defaults and wiring, returning a runtime-ready configuration.
-
-        Prefer this method over any mutating setup helpers; when ``mutate`` is
-        False (the default) a shallow copy is prepared so the original config
-        remains reusable.
+        Deprecated: use ``build_pipeline_plan`` instead. Returns the prepared config for compatibility.
         """
+        import warnings
+        from .builder import build_pipeline_plan
 
-        cfg = self if mutate else replace(self)
-        cfg.logging.apply()
-        cfg._prepare_http()
-        cfg._prepare_sources()
-        cfg._prepare_sinks()
-        cfg._prepare_pipeline()
-        cfg._prepare_qc()
-        cfg._attach_run_header_record()
-        cfg.validate()
-        return cfg
-
-    def _prepare_http(self) -> None:
-        """
-        Normalize HTTP client wiring.
-
-        Installs ``self.http.client`` and, when ``as_global`` is True, registers it as the
-        process-wide default via ``safe_http.set_global_http_client``. Library callers that need
-        per-run isolation should set ``as_global=False`` and pass ``self.http.build_client()``
-        directly to factories instead of relying on globals.
-        """
-        client = self.http.build_client()
-        self.http.client = client
-        if self.http.as_global:
-            set_global_http_client(client)
-
-    def _prepare_sources(self) -> None:
-        """
-        Hook for future normalization of source configs (currently a no-op).
-        """
-        return None
-
-    def _prepare_sinks(self) -> None:
-        sinks = self.sinks
-        meta = self.metadata
-        primary = sinks.primary_jsonl_name or meta.primary_jsonl
-        if not primary:
-            return
-        primary_str = str(primary)
-        sinks.primary_jsonl_name = primary_str
-        meta.primary_jsonl = primary_str
-
-        output_dir = sinks.output_dir
-        needs_output_dir = output_dir is None or str(output_dir) in {"", "."}
-        if needs_output_dir:
-            try:
-                parent = Path(primary_str).parent
-            except Exception:
-                parent = None
-            if parent:
-                sinks.output_dir = parent
-
-    def _attach_run_header_record(self) -> None:
-        header = build_run_header_record(self)
-        for sink in getattr(self.sinks, "sinks", ()):
-            setter = getattr(sink, "set_header_record", None)
-            if callable(setter):
-                setter(header)
-
-    def _prepare_pipeline(self) -> None:
-        if not self.pipeline.bytes_handlers:
-            self.pipeline.bytes_handlers = tuple(make_bytes_handlers())
-        if self.pipeline.file_extractor is None:
-            from .convert import DefaultExtractor  # local import to avoid cycle
-
-            self.pipeline.file_extractor = DefaultExtractor()
-
-    def _prepare_qc(self) -> None:
-        qc_cfg = self.qc
-        mode = qc_cfg.normalize_mode()
-        if not qc_cfg.enabled or mode == QCMode.OFF:
-            qc_cfg.enabled = False
-            qc_cfg.mode = QCMode.OFF
-            return
-
-        if mode in {QCMode.INLINE, QCMode.ADVISORY}:
-            if qc_cfg.scorer is not None and not isinstance(qc_cfg.scorer, QualityScorer):
-                raise TypeError("qc.scorer must implement the QualityScorer protocol for inline/advisory modes.")
-            if qc_cfg.scorer is None:
-                scorer = make_qc_scorer(qc_cfg)
-                if scorer is None:
-                    raise RuntimeError(
-                        "Inline/advisory QC requested but QC extras are not installed; disable qc.enabled or install QC dependencies."
-                    )
-                qc_cfg.scorer = scorer
-            return
-
-        if mode == QCMode.POST and qc_cfg.scorer is None:
-            scorer = make_qc_scorer(qc_cfg, new_instance=False)
-            if scorer is not None:
-                qc_cfg.scorer = scorer
-            else:
-                log.warning("QC POST mode enabled but QC extras are not installed; skipping QC for this run.")
-                qc_cfg.enabled = False
-                qc_cfg.mode = QCMode.OFF
-                qc_cfg.scorer = None
+        warnings.warn(
+            "RepocapsuleConfig.prepared is deprecated; use build_pipeline_plan instead.",
+            DeprecationWarning,
+            stacklevel=2,
+        )
+        plan = build_pipeline_plan(self, mutate=mutate)
+        return plan.config
 
     def validate(self) -> None:
         self._validate_paths()

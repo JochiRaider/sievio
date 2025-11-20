@@ -20,9 +20,11 @@ from typing import (
     Tuple,
 )
 
-from .interfaces import RepoContext, Record, Sink
-from .sinks import JSONLSink, GzipJSONLSink, PromptTextSink
-from .fs import PatternFileSource
+from .interfaces import RepoContext, Record, Sink, Source, SourceFactory, SinkFactory
+from ..sinks.sinks import JSONLSink, GzipJSONLSink, PromptTextSink
+from ..sources.fs import PatternFileSource
+from ..sources.sources_webpdf import WebPdfListSource, WebPagePdfSource
+from .registries import BytesHandlerRegistry, QualityScorerRegistry, bytes_handler_registry, quality_scorer_registry
 
 if TYPE_CHECKING:  # pragma: no cover - type-only imports
     from .chunk import ChunkPolicy
@@ -33,9 +35,13 @@ if TYPE_CHECKING:  # pragma: no cover - type-only imports
         QCConfig,
         PdfSourceConfig,
         SinkConfig,
+        RepocapsuleConfig,
+        SourceSpec,
+        SinkSpec,
     )
     from .qc import JSONLQualityScorer
     from .safe_http import SafeHttpClient
+    from .interfaces import SourceFactory, SinkFactory
 
 __all__ = [
     "BytesHandler",
@@ -54,6 +60,11 @@ __all__ = [
     "make_jsonl_text_source",
     "make_qc_scorer",
     "make_repo_context_from_git",
+    "LocalDirSourceFactory",
+    "GitHubZipSourceFactory",
+    "WebPdfListSourceFactory",
+    "WebPagePdfSourceFactory",
+    "DefaultJsonlPromptSinkFactory",
 ]
 
 Sniff = Callable[[bytes, str], bool]
@@ -180,6 +191,106 @@ def make_pattern_file_source(
     return PatternFileSource(root, patterns, config=config, context=context)
 
 
+# ---------- Source/Sink factories for declarative specs ----------
+
+
+@dataclass
+class LocalDirSourceFactory(SourceFactory):
+    id: str = "local_dir"
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SourceSpec") -> Sequence[Source]:
+        root = spec.options.get("root_dir")
+        if root is None:
+            raise ValueError("local_dir source spec requires root_dir")
+        ctx = cfg.sinks.context
+        src = make_local_dir_source(
+            root_dir=root,
+            config=cfg.sources.local,
+            context=ctx,
+        )
+        return [src]
+
+
+@dataclass
+class GitHubZipSourceFactory(SourceFactory):
+    id: str = "github_zip"
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SourceSpec") -> Sequence[Source]:
+        url = spec.options.get("url")
+        if url is None:
+            raise ValueError("github_zip source spec requires url")
+        ctx = cfg.sinks.context
+        http_client = cfg.http.build_client()
+        src = make_github_zip_source(
+            url,
+            config=cfg.sources.github,
+            context=ctx,
+            download_timeout=cfg.http.timeout,
+            http_client=http_client,
+        )
+        return [src]
+
+
+@dataclass
+class WebPdfListSourceFactory(SourceFactory):
+    id: str = "web_pdf_list"
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SourceSpec") -> Sequence[Source]:
+        urls = spec.options.get("urls")
+        if not urls:
+            raise ValueError("web_pdf_list source spec requires urls")
+        src = WebPdfListSource(
+            urls,
+            timeout=cfg.sources.pdf.timeout,
+            max_pdf_bytes=cfg.sources.pdf.max_pdf_bytes,
+            require_pdf=cfg.sources.pdf.require_pdf,
+            add_prefix=spec.options.get("add_prefix"),
+            retries=cfg.sources.pdf.retries,
+            config=cfg.sources.pdf,
+            client=cfg.sources.pdf.client or cfg.http.build_client(),
+        )
+        return [src]
+
+
+@dataclass
+class WebPagePdfSourceFactory(SourceFactory):
+    id: str = "web_page_pdf"
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SourceSpec") -> Sequence[Source]:
+        page_url = spec.options.get("page_url")
+        if page_url is None:
+            raise ValueError("web_page_pdf source spec requires page_url")
+        src = WebPagePdfSource(
+            page_url,
+            max_links=cfg.sources.pdf.max_links,
+            require_pdf=cfg.sources.pdf.require_pdf,
+            include_ambiguous=cfg.sources.pdf.include_ambiguous,
+            add_prefix=spec.options.get("add_prefix"),
+            config=cfg.sources.pdf,
+            client=cfg.sources.pdf.client or cfg.http.build_client(),
+        )
+        return [src]
+
+
+@dataclass
+class DefaultJsonlPromptSinkFactory(SinkFactory):
+    id: str = "default_jsonl_prompt"
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SinkSpec") -> SinkFactoryResult:
+        jsonl_path = spec.options.get("jsonl_path")
+        if jsonl_path is None:
+            raise ValueError("default_jsonl_prompt sink spec requires jsonl_path")
+        prompt_path = spec.options.get("prompt_path")
+        sink_cfg = cfg.sinks
+        ctx = sink_cfg.context
+        return build_default_sinks(
+            sink_cfg,
+            jsonl_path=jsonl_path,
+            prompt_path=prompt_path,
+            context=ctx,
+        )
+
+
 # ---------------------------------------------------------------------------
 # HTTP / QC factories
 # ---------------------------------------------------------------------------
@@ -193,7 +304,12 @@ def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
     return http_cfg.build_client()
 
 
-def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) -> Optional["JSONLQualityScorer"]:
+def make_qc_scorer(
+    qc_cfg: Optional["QCConfig"],
+    *,
+    new_instance: bool = False,
+    scorer_registry: Optional[QualityScorerRegistry] = None,
+) -> Optional["JSONLQualityScorer"]:
     """
     Instantiate a JSONLQualityScorer when QC is enabled and extras are present.
     """
@@ -202,11 +318,15 @@ def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) 
     existing = getattr(qc_cfg, "scorer", None)
     if existing is not None and not new_instance:
         return existing
+    # Trigger registration of built-in scorer factory (and any extras).
     try:
-        from .qc import JSONLQualityScorer  # optional extra
+        from .extras import qc as _qc_module  # noqa: F401
     except Exception:
+        pass
+    reg = scorer_registry or quality_scorer_registry
+    scorer = reg.build(qc_cfg)
+    if scorer is None:
         return None
-    scorer = JSONLQualityScorer(heuristics=getattr(qc_cfg, "heuristics", None))
     if not new_instance:
         qc_cfg.scorer = scorer
     return scorer
@@ -216,24 +336,26 @@ def make_qc_scorer(qc_cfg: Optional["QCConfig"], *, new_instance: bool = False) 
 # Bytes-handler factory (PDF/EVTX)
 # ---------------------------------------------------------------------------
 
-def make_bytes_handlers() -> Sequence[Tuple[Sniff, BytesHandler]]:
+def make_bytes_handlers(registry: Optional[BytesHandlerRegistry] = None) -> Sequence[Tuple[Sniff, BytesHandler]]:
     """
     Return the default sniff/handler pairs for binary formats (PDF/EVTX).
     """
-    try:
-        from .pdfio import sniff_pdf, handle_pdf  # type: ignore
-    except Exception:
-        sniff_pdf, handle_pdf = _fallback_sniff_pdf, _fallback_handle_pdf
-
-    try:
-        from .evtxio import sniff_evtx, handle_evtx  # type: ignore
-    except Exception:
-        sniff_evtx, handle_evtx = _fallback_sniff_evtx, _fallback_handle_evtx
-
-    return [
-        (sniff_pdf, handle_pdf),
-        (sniff_evtx, handle_evtx),
-    ]
+    reg = registry or bytes_handler_registry
+    if not reg.handlers():
+        try:
+            from ..sources import pdfio  # noqa: F401
+        except Exception:
+            pass
+        try:
+            from ..sources import evtxio  # noqa: F401
+        except Exception:
+            pass
+    handlers = list(reg.handlers())
+    if handlers:
+        return handlers
+    reg.register(_fallback_sniff_pdf, _fallback_handle_pdf)
+    reg.register(_fallback_sniff_evtx, _fallback_handle_evtx)
+    return reg.handlers()
 
 
 def _fallback_sniff_pdf(data: bytes, rel: str) -> bool:
@@ -310,7 +432,7 @@ def make_repo_context_from_git(repo_root: Path | str) -> Optional[RepoContext]:
     remote = origin_url or fallback_url
     if not remote:
         return None
-    from .githubio import parse_github_url  # local import to avoid cycles
+    from ..sources.githubio import parse_github_url  # local import to avoid cycles
 
     spec = parse_github_url(remote)
     if not spec:
@@ -334,7 +456,7 @@ def make_local_dir_source(
     """
     if config is None:
         raise ValueError("LocalDirSourceConfig is required")
-    from .fs import LocalDirSource  # local import to break cycles
+    from ..sources.fs import LocalDirSource  # local import to break cycles
 
     return LocalDirSource(root, config=config, context=context)
 
@@ -352,7 +474,7 @@ def make_github_zip_source(
     """
     if not url:
         raise ValueError("url is required for GitHubZipSource")
-    from .githubio import GitHubZipSource  # local import to avoid cycles
+    from ..sources.githubio import GitHubZipSource  # local import to avoid cycles
 
     return GitHubZipSource(
         url,
@@ -375,7 +497,7 @@ def make_web_pdf_source(
     The http_client parameter, if provided, is passed through directly and avoids using the
     global SafeHttpClient fallback.
     """
-    from .sources_webpdf import WebPdfListSource  # local import to avoid cycles
+    from ..sources.sources_webpdf import WebPdfListSource  # local import to avoid cycles
 
     norm_urls = [str(u) for u in urls]
     return WebPdfListSource(

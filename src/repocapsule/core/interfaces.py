@@ -17,7 +17,8 @@ from typing import (
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
-    from .config import RepocapsuleConfig, FileProcessingConfig
+    from .config import RepocapsuleConfig, FileProcessingConfig, SourceSpec, SinkSpec
+    from .factories import SinkFactoryResult
 
 
 # -----------------------------------------------------------------------------
@@ -92,6 +93,22 @@ class RepoContext:
 # A JSONL record shape is intentionally loose: dict-like with string keys.
 Record = Mapping[str, Any]
 
+# -----------------------------------------------------------------------------
+# Record hook protocols
+# -----------------------------------------------------------------------------
+
+
+@runtime_checkable
+class RecordFilter(Protocol):
+    def accept(self, record: Record) -> bool:
+        ...
+
+
+@runtime_checkable
+class RecordObserver(Protocol):
+    def on_record(self, record: Record) -> None:
+        ...
+
 
 # -----------------------------------------------------------------------------
 # Extension-point protocols
@@ -107,6 +124,16 @@ class Source(Protocol):
     """
     def iter_files(self) -> Iterable[FileItem]:
         """Yield FileItem objects. Must not raise on benign unreadable entries."""
+
+
+@runtime_checkable
+class ClosableSource(Protocol):
+    """
+    Optional extension for sources that need cleanup but are not context managers.
+    """
+
+    def close(self) -> None:
+        ...
 
 
 @runtime_checkable
@@ -204,6 +231,10 @@ class Sink(Protocol):
     def close(self) -> None:
         """Flush and free resources. Must not raise on repeated calls."""
 
+    # Optional extension point: sinks can consume finalizer records such as run summaries.
+    def finalize(self, records: Iterable[Record]) -> None:  # pragma: no cover - optional
+        """Consume a sequence of finalizer records (e.g., run summaries)."""
+
 
 @runtime_checkable
 class QualityScorer(Protocol):
@@ -218,6 +249,54 @@ class QualityScorer(Protocol):
         """Iterate QC rows for every record within a JSONL file."""
 
 
+@runtime_checkable
+class SourceFactory(Protocol):
+    id: str
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SourceSpec") -> Iterable["Source"]:
+        ...
+
+
+@runtime_checkable
+class SinkFactory(Protocol):
+    id: str
+
+    def build(self, cfg: "RepocapsuleConfig", spec: "SinkSpec") -> "SinkFactoryResult":
+        ...
+
+
+@runtime_checkable
+class RecordMiddleware(Protocol):
+    """
+    Per-record middleware that can transform or drop a record.
+    Returning None drops the record.
+    """
+
+    def process(self, record: Record) -> Optional[Record]:
+        ...
+
+
+@runtime_checkable
+class FileMiddleware(Protocol):
+    """
+    Per-file middleware that can transform or drop record iterators for a FileItem.
+    Returning None drops all records for that item.
+    """
+
+    def process(self, item: "FileItem", records: Iterable[Record]) -> Optional[Iterable[Record]]:
+        ...
+
+
+@runtime_checkable
+class ConcurrencyProfile(Protocol):
+    """
+    Optional hint for executor selection.
+    """
+
+    preferred_executor: Optional[str]  # "thread" or "process"
+    cpu_intensive: bool
+
+
 __all__ = [
     "FileItem",
     "RepoContext",
@@ -228,4 +307,11 @@ __all__ = [
     "StreamingExtractor",
     "Sink",
     "QualityScorer",
+    "SourceFactory",
+    "SinkFactory",
+    "RecordFilter",
+    "RecordObserver",
+    "RecordMiddleware",
+    "FileMiddleware",
+    "ConcurrencyProfile",
 ]

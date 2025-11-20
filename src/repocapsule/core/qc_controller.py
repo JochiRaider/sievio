@@ -153,7 +153,7 @@ class InlineQCController:
         tracker.drop_near_dups = bool(config.drop_near_dups)
         self.summary = tracker
 
-    def should_keep(self, record: Record) -> bool:
+    def accept(self, record: Record) -> bool:
         try:
             qc_result = self.scorer.score_record(record)
         except Exception as exc:
@@ -173,6 +173,14 @@ class InlineQCController:
         keep = self.summary.observe(qc_result, apply_gates=self.enforce_drops)
         self._merge_qc_meta(record, qc_result)
         return keep
+
+    def should_keep(self, record: Record) -> bool:
+        # Backward compatibility alias for legacy call sites.
+        return self.accept(record)
+
+    def on_record(self, record: Record) -> Record:
+        # Inline QC performs all work inside accept(); observer hook is a pass-through.
+        return record
 
     def summary_dict(self) -> Dict[str, Any]:
         return self.summary.as_dict()

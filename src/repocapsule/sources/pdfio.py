@@ -7,9 +7,9 @@ from typing import Optional, List, Dict, Any, Iterable
 from datetime import datetime
 from pypdf import PdfReader
 
-from .chunk import ChunkPolicy, chunk_text
-from .records import build_record
-from .interfaces import RepoContext, Record
+from ..core.chunk import ChunkPolicy, chunk_text
+from ..core.records import build_record
+from ..core.interfaces import RepoContext, Record
 
 # Re-export for DI registration
 __all__ = ["extract_pdf_records", "sniff_pdf", "handle_pdf"]
@@ -208,3 +208,11 @@ def extract_pdf_records(
             )
 
     return records
+
+# Register default bytes handler
+try:
+    from ..core.registries import bytes_handler_registry
+
+    bytes_handler_registry.register(sniff_pdf, handle_pdf)
+except Exception:
+    pass

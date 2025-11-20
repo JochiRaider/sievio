@@ -30,14 +30,14 @@ from repocapsule.config import QCMode
 from repocapsule.runner import default_paths_for_github
 
 try:
-    from repocapsule.qc import JSONLQualityScorer, score_jsonl_to_csv
+    from repocapsule.core.extras.qc import JSONLQualityScorer, score_jsonl_to_csv
 except Exception:
     JSONLQualityScorer = None  # type: ignore[assignment]
     score_jsonl_to_csv = None  # type: ignore[assignment]
 
 # Optional extractor for KQL blocks inside Markdown
 try:
-    from repocapsule.md_kql import KqlFromMarkdownExtractor
+    from repocapsule.core.extras.md_kql import KqlFromMarkdownExtractor
 except Exception:
     KqlFromMarkdownExtractor = None  # type: ignore
 

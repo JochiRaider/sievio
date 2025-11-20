@@ -8,11 +8,11 @@ from typing import Iterator, Optional, Tuple, Dict, Any, Iterable
 import contextlib, json, os, re, tempfile, time, urllib.error, urllib.parse, urllib.request, zipfile
 from pathlib import Path
 
-from . import safe_http
-from .interfaces import FileItem, RepoContext, Source
-from .licenses import detect_license_in_zip, apply_license_to_context
-from .log import get_logger
-from .naming import normalize_extensions
+from ..core import safe_http
+from ..core.interfaces import FileItem, RepoContext, Source
+from ..cli.licenses import detect_license_in_zip, apply_license_to_context
+from ..core.log import get_logger
+from ..core.naming import normalize_extensions
 
 __all__ = [
     "RepoSpec",

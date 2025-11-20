@@ -33,6 +33,7 @@ def _get_tokenizer(tokenizer_name: Optional[str] = None):
       - an encoding like "cl100k_base" (safe default)
       - a model name that tiktoken recognizes
     """
+    global _DEFAULT_TOKENIZER
     if not _HAVE_TIKTOKEN:
         return None
     name = tokenizer_name or "cl100k_base"
