@@ -6,7 +6,7 @@
 The names listed in :data:`PRIMARY_API` form the recommended, stable
 surface for most callers: configure a run via :class:`RepocapsuleConfig`
 or a TOML/JSON file, invoke a runner such as :func:`convert_local_dir`
-/:func:`convert_github` or :func:`convert`, and consume records via the
+/ :func:`convert_github` or :func:`convert`, and consume records via the
 provided sinks.
 
 High-level entry points such as :func:`convert`, :func:`convert_local_dir`,
@@ -17,39 +17,34 @@ factories used by the engine rather than creating ad-hoc pipelines in
 these helpers.
 
 Quality control (inline or post-hoc) is configured via :class:`QCConfig`.
-When `mode="post"`, :func:`run_engine` (from
+When ``mode="post"``, :func:`run_engine` (from
 :mod:`repocapsule.cli.runner`) can rescore the primary JSONL after
 extraction, optionally using process-based parallel scoring and emitting
 QC CSV diagnostics.
 
-## Examples
+Examples:
+    Minimal local directory run::
 
-Minimal local directory run::
+        >>> from repocapsule import convert_local_dir
+        >>> stats = convert_local_dir(
+        ...     root_dir="path/to/repo",
+        ...     out_jsonl="out/repo.jsonl",
+        ... )
 
-```
->>> from repocapsule import convert_local_dir
->>> stats = convert_local_dir(
-...     root_dir="path/to/repo",
-...     out_jsonl="out/repo.jsonl",
-... )
-```
+    Config-driven run::
 
-Config-driven run::
-
-```
->>> from repocapsule import load_config_from_path, convert
->>> cfg = load_config_from_path("example_config.toml")
->>> stats = convert(cfg)
-```
+        >>> from repocapsule import load_config_from_path, convert
+        >>> cfg = load_config_from_path("example_config.toml")
+        >>> stats = convert(cfg)
 
 Advanced utilities are imported here for convenience, but anything not in
-`PRIMARY_API` is considered an expert surface and may change between
+``PRIMARY_API`` is considered an expert surface and may change between
 releases.
 
 For HTTP access (GitHub zipballs, web PDFs), prefer configuring
-`cfg.http`; the builder/factories will construct a :class:`SafeHttpClient`
+``cfg.http``; the builder/factories will construct a :class:`SafeHttpClient`
 and reuse it for remote sources. The module-level client in
-`core.safe_http` is intended primarily for simple one-shot scripts and
+``core.safe_http`` is intended primarily for simple one-shot scripts and
 the CLI, not long-lived applications.
 """
 

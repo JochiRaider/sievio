@@ -98,7 +98,7 @@ def _apply_pipeline_overrides(cfg: RepocapsuleConfig, args: argparse.Namespace) 
         cfg (RepocapsuleConfig): Configuration object to mutate.
         args (argparse.Namespace): Parsed CLI arguments that may contain
             pipeline override fields.
-    """    
+    """
     if getattr(args, "override_max_workers", None) is not None:
         cfg.pipeline.max_workers = int(args.override_max_workers)
     if getattr(args, "override_executor_kind", None):
@@ -118,7 +118,7 @@ def _load_base_config(path: Optional[str]) -> Optional[RepocapsuleConfig]:
     Returns:
         RepocapsuleConfig | None: Loaded configuration instance, or None
         if no path was provided.
-    """    
+    """
     if not path:
         return None
     return load_config_from_path(path)
@@ -138,7 +138,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     Returns:
         int: Process exit code, where 0 indicates success and non-zero
         values indicate failure.
-    """    
+    """
     configure_logging(level=args.log_level)
     cmd = args.command
 
@@ -229,7 +229,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     Returns:
         int: Process exit code, where 0 indicates success and non-zero
         values indicate failure.
-    """    
+    """
     parser = _build_parser()
     args = parser.parse_args(list(argv) if argv is not None else None)
     try:

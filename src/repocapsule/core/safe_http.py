@@ -1,5 +1,6 @@
 # safe_http.py
 # SPDX-License-Identifier: MIT
+"""Stdlib-only HTTP client with private IP and redirect safeguards."""
 
 from __future__ import annotations
 
@@ -35,6 +36,8 @@ class RedirectBlocked(RuntimeError):
 
 
 class _SafeHTTPConnection(http.client.HTTPConnection):
+    """HTTPConnection bound to a pre-resolved IP address."""
+
     def __init__(self, host: str, *, resolved_ip: str, **kwargs):
         super().__init__(host=host, **kwargs)
         self._resolved_ip = resolved_ip
@@ -46,6 +49,8 @@ class _SafeHTTPConnection(http.client.HTTPConnection):
 
 
 class _SafeHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPSConnection bound to a pre-resolved IP address with SNI."""
+
     def __init__(self, host: str, *, resolved_ip: str, **kwargs):
         super().__init__(host=host, **kwargs)
         self._resolved_ip = resolved_ip
@@ -62,9 +67,7 @@ class _SafeHTTPSConnection(http.client.HTTPSConnection):
 
 @dataclass(frozen=True)
 class SafeHttpResponse:
-    """
-    Minimal wrapper that mimics urllib responses while owning the underlying connection.
-    """
+    """Minimal wrapper that mirrors urllib responses while owning the connection."""
 
     _response: http.client.HTTPResponse
     _connection: http.client.HTTPConnection
@@ -116,9 +119,12 @@ class SafeHttpResponse:
 
 
 class SafeHttpClient:
-    """
-    Stdlib-only HTTP client that resolves DNS up-front, blocks private IPs, and enforces
-    host-scoped redirects.
+    """HTTP client that blocks private IPs and enforces host-scoped redirects.
+
+    Attributes:
+        _default_timeout (float): Default request timeout in seconds.
+        _max_redirects (int): Maximum redirects to follow.
+        _trusted_redirect_suffixes (set[str]): Allowed redirect host suffixes.
     """
 
     _ALLOWED_SCHEMES = ("http", "https")
@@ -141,6 +147,7 @@ class SafeHttpClient:
 
     # helpers
     def _resolve_ips(self, hostname: str, *, url: Optional[str] = None) -> list[str]:
+        """Resolve a hostname and filter out private or disallowed addresses."""
         try:
             infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
         except socket.gaierror as exc:   # noqa: BLE001
@@ -161,6 +168,7 @@ class SafeHttpClient:
         return ips
 
     def _trusted_suffix_for(self, host: Optional[str]) -> Optional[str]:
+        """Return the trusted redirect suffix for a host, if any."""
         if not host:
             return None
         host_l = host.lower()
@@ -171,12 +179,14 @@ class SafeHttpClient:
 
     @staticmethod
     def _registrable_domain(host: str) -> Optional[str]:
+        """Return the registrable domain portion of a host."""
         parts = host.split(".")
         if len(parts) < 2:
             return None
         return ".".join(parts[-2:])
 
     def _hosts_related(self, origin: Optional[str], target: Optional[str]) -> bool:
+        """Determine if two hosts are related enough to allow redirects."""
         if not origin or not target:
             return False
         origin = origin.lower()
@@ -207,6 +217,7 @@ class SafeHttpClient:
         port: int,
         timeout: float,
     ) -> http.client.HTTPConnection:
+        """Build a safe HTTP(S) connection pinned to a resolved IP."""
         common_kwargs = {"timeout": timeout}
         if scheme == "https":
             context = ssl.create_default_context()
@@ -222,6 +233,7 @@ class SafeHttpClient:
     def _normalize_headers(
         self, headers: Optional[Mapping[str, str]], host: str, port: int, scheme: str
     ) -> Dict[str, str]:
+        """Normalize headers, ensuring Host is set and not overridden."""
         host_value = host if self._is_default_port(scheme, port) else f"{host}:{port}"
         out: Dict[str, str] = {"Host": host_value}
         if headers:
@@ -230,12 +242,15 @@ class SafeHttpClient:
                     continue
                 out[k] = v
         return out
+
     @staticmethod
     def _is_default_port(scheme: str, port: int) -> bool:
+        """Return True if the port matches the scheme's default."""
         return (scheme == "http" and port == 80) or (scheme == "https" and port == 443)
 
     @staticmethod
     def _build_path(parsed: urllib.parse.SplitResult) -> str:
+        """Reconstruct a URL path with query string."""
         path = parsed.path or "/"
         if parsed.query:
             path = f"{path}?{parsed.query}"
@@ -250,6 +265,19 @@ class SafeHttpClient:
         timeout: Optional[float] = None,
         redirect_log: Optional[list[tuple[str, str, int]]] = None,
     ) -> SafeHttpResponse:
+        """Open an HTTP request with redirect and IP safety checks.
+
+        Args:
+            request (RequestLike): URL string or prebuilt Request object.
+            data (Optional[bytes]): Payload to send; overrides Request.data.
+            timeout (Optional[float]): Request timeout; defaults to client
+                default.
+            redirect_log (Optional[list[tuple[str, str, int]]]): Optional log
+                of redirects encountered.
+
+        Returns:
+            SafeHttpResponse: Response wrapper owning the connection.
+        """
         req_obj = request
         if isinstance(request, str):
             req_obj = urllib.request.Request(request)
@@ -282,8 +310,25 @@ class SafeHttpClient:
         only_get_like: bool = True,
         redirect_log: Optional[list[tuple[str, str, int]]] = None,
     ) -> SafeHttpResponse:
-        """
-        Retry wrapper around ``open`` with exponential backoff (GET-like methods only by default).
+        """Retry wrapper around ``open`` with exponential backoff.
+
+        Args:
+            request (RequestLike): URL or Request to execute.
+            data (Optional[bytes]): Payload to send; overrides Request.data.
+            timeout (Optional[float]): Request timeout; defaults to client
+                default.
+            retries (int): Number of retry attempts.
+            backoff_base (float): Base delay before the first retry.
+            backoff_factor (float): Multiplier applied each retry.
+            only_get_like (bool): Restrict retries to GET-like methods.
+            redirect_log (Optional[list[tuple[str, str, int]]]): Optional log
+                of redirects encountered.
+
+        Returns:
+            SafeHttpResponse: Response wrapper if the request succeeds.
+
+        Raises:
+            urllib.error.URLError: If all attempts fail.
         """
         req_obj = request
         if isinstance(request, str):
@@ -322,6 +367,7 @@ class SafeHttpClient:
         redirects_followed: int,
         redirect_log: Optional[list[tuple[str, str, int]]] = None,
     ) -> SafeHttpResponse:
+        """Internal request executor with redirect handling and safety checks."""
         parsed = urllib.parse.urlsplit(url)
         scheme = (parsed.scheme or "http").lower()
         if scheme not in self._ALLOWED_SCHEMES:
@@ -395,12 +441,7 @@ SAFE_HTTP_CLIENT: Optional[SafeHttpClient] = None
 
 
 def get_global_http_client() -> SafeHttpClient:
-    """
-    Return the process-wide SafeHttpClient, creating a default one if unset.
-
-    Primarily intended for CLI-style use. Library code should prefer injecting a client explicitly
-    rather than relying on this mutable global.
-    """
+    """Return the process-wide SafeHttpClient, creating a default if unset."""
     global SAFE_HTTP_CLIENT
     if SAFE_HTTP_CLIENT is None:
         SAFE_HTTP_CLIENT = SafeHttpClient(allowed_redirect_suffixes=("github.com",))
@@ -408,11 +449,6 @@ def get_global_http_client() -> SafeHttpClient:
 
 
 def set_global_http_client(client: Optional[SafeHttpClient]) -> None:
-    """
-    Override (or clear) the module-level SAFE_HTTP_CLIENT used by helpers.
-
-    This is a convenience for one-shot tools and the CLI. Long-lived applications and tests should
-    avoid mutating global state and instead pass SafeHttpClient instances directly where needed.
-    """
+    """Override or clear the module-level SAFE_HTTP_CLIENT helper."""
     global SAFE_HTTP_CLIENT
     SAFE_HTTP_CLIENT = client

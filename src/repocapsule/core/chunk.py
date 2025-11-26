@@ -33,7 +33,6 @@ _TOKENIZER_CACHE: Dict[str, Any] = {}
 def _get_tokenizer(tokenizer_name: Optional[str] = None):
     """Return a tiktoken tokenizer for the given name if available.
 
-
     Args:
         tokenizer_name (str | None): Optional encoding or model
             name understood by tiktoken. If omitted, a cached
@@ -80,7 +79,6 @@ _PUNCT = set("()[]{}<>=:+-*/%,.;$#@\\|`~^")
 def _char_token_ratio(text: str,kind: str) -> float:
     """Estimate the character-per-token ratio for text.
 
-
     Heuristic: code typically has more symbols and shorter
     identifiers, so it uses fewer characters per token. The result
     is clamped into a reasonable range.
@@ -108,7 +106,6 @@ def _char_token_ratio(text: str,kind: str) -> float:
 
 def count_tokens(text: str, tokenizer=None, mode: str="auto") -> int:
     """Count tokens using tiktoken or a fast heuristic fallback.
-
 
     Args:
         text (str): Text to tokenize.
@@ -142,7 +139,6 @@ def count_tokens(text: str, tokenizer=None, mode: str="auto") -> int:
 class Block:
     """Immutable text block produced by a splitter.
 
-
     Attributes:
         text (str): Block contents.
         start (int): Start offset of the block in the original
@@ -151,7 +147,7 @@ class Block:
         tokens (int): Approximate token count for the block.
         kind (str): Logical kind for the block, such as
             ``"text"``, ``"code"``, or ``"heading"``.
-    """    
+    """
     text: str
     start: int
     end: int
@@ -174,7 +170,6 @@ _SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])(?:["\')\]]+)?\s+(?=[A-Z0-9])')
 
 def _split_markdown_blocks(text: str, tokenizer) -> List[Block]:
     """Split Markdown text into logical blocks.
-
 
     The splitter recognizes ATX and Setext headings and fenced
     code blocks. Everything else is grouped into paragraph-like
@@ -290,7 +285,6 @@ _RST_CODE_DIRECTIVES = {
 def _leading_spaces(s: str) -> int:
     """Compute indentation width in spaces for a line.
 
-
     Tabs are treated as four spaces.
 
     Args:
@@ -313,7 +307,6 @@ def _leading_spaces(s: str) -> int:
 def _underline_long_enough(adorn_line: str, title_line: str) -> bool:
     """Return whether an RST underline is long enough for a title.
 
-
     Args:
         adorn_line (str): Line containing adornment characters.
         title_line (str): Line containing the section title.
@@ -321,7 +314,7 @@ def _underline_long_enough(adorn_line: str, title_line: str) -> bool:
     Returns:
         bool: True if the underline length satisfies Docutils'
             section title rule.
-    """  
+    """
     tlen = len(title_line.rstrip("\r\n"))
     ulen = len(adorn_line.rstrip("\r\n").strip())
     return ulen >= tlen
@@ -329,7 +322,6 @@ def _underline_long_enough(adorn_line: str, title_line: str) -> bool:
 
 def _split_rst_blocks(text: str, tokenizer) -> List[Block]:
     """Split reStructuredText into logical blocks.
-
 
     The splitter recognizes section titles (underline-only or
     overline/title/underline), literal blocks introduced by ``::``,
@@ -499,7 +491,6 @@ _SPLITTER_REGISTRY: Dict[str, BlockSplitter] = {
 def register_doc_splitter(fmt_name: str, splitter: BlockSplitter) -> None:
     """Register or override a document block splitter.
 
-
     Args:
         fmt_name (str): Canonical name for the document format.
         splitter (BlockSplitter): Callable that splits text into
@@ -509,7 +500,6 @@ def register_doc_splitter(fmt_name: str, splitter: BlockSplitter) -> None:
 
 def split_doc_blocks(text: str, fmt: Optional[str], tokenizer) -> List[Block]:
     """Split documentation text into blocks using a registered splitter.
-
 
     Args:
         text (str): Full document text.
@@ -532,7 +522,6 @@ def split_doc_blocks(text: str, fmt: Optional[str], tokenizer) -> List[Block]:
 @dataclass
 class ChunkPolicy:
     """Configuration for chunking text into token-bounded spans.
-
 
     Attributes:
         mode (str): Chunking mode, ``"doc"`` for documentation
@@ -558,14 +547,13 @@ class ChunkPolicy:
 def _semantic_block_limit(pol: ChunkPolicy) -> int:
     """Compute the maximum token count for semantic sub-blocks.
 
-
     Args:
         pol (ChunkPolicy): Chunking policy providing semantic
             limits.
 
     Returns:
         int: Token limit to use when splitting text blocks.
-    """    
+    """
     base = pol.semantic_tokens_per_block or 0
     if base <= 0:
         base = min(pol.target_tokens, 600)
@@ -576,7 +564,6 @@ def _semantic_block_limit(pol: ChunkPolicy) -> int:
 def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
     """Compute paragraph span offsets for a text blob.
 
-
     Paragraphs are separated by blank lines. If no separators are
     found, a single span covering the entire text is returned.
 
@@ -586,7 +573,7 @@ def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
     Returns:
         list[tuple[int, int]]: Character ranges for each paragraph
             as ``(start, end)`` offsets.
-    """    
+    """
     spans: List[Tuple[int, int]] = []
     last = 0
     for match in _PARA_SPLITTER.finditer(text):
@@ -603,7 +590,6 @@ def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
 def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, tokenizer) -> List[Block]:
     """Split a paragraph segment into sentence-based blocks.
 
-
     Sentences are grouped so that each block stays under the given
     token limit where possible.
 
@@ -616,7 +602,7 @@ def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, token
 
     Returns:
         list[Block]: Sentence-grouped blocks covering the segment.
-    """    
+    """
     spans: List[Tuple[int, int]] = []
     last = 0
     for match in _SENTENCE_BOUNDARY.finditer(segment_text):
@@ -671,7 +657,6 @@ def _split_paragraph_span(
 ) -> List[Block]:
     """Split a paragraph span into semantic sub-blocks.
 
-
     Depending on token counts and sentence boundaries, the span is
     either returned as a single block or further split.
 
@@ -702,7 +687,6 @@ def _split_paragraph_span(
 def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> List[Block]:
     """Refine a text block into smaller semantic sub-blocks.
 
-
     Paragraphs and sentences are used as boundaries while enforcing
     a token limit per block.
 
@@ -713,7 +697,7 @@ def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> Li
 
     Returns:
         list[Block]: Refined blocks covering the original text.
-    """    
+    """
     spans = _paragraph_spans(block.text)
     refined: List[Block] = []
     for span_start, span_end in spans:
@@ -737,7 +721,6 @@ def _semantic_refine_doc_blocks(
 ) -> List[Block]:
     """Apply semantic refinement to documentation blocks.
 
-
     When ``policy.semantic_doc`` is enabled, large text blocks are
     further split into paragraph or sentence-based sub-blocks.
 
@@ -750,7 +733,7 @@ def _semantic_refine_doc_blocks(
 
     Returns:
         list[Block]: Original or refined blocks.
-    """    
+    """
     if not policy.semantic_doc:
         return blocks
     limit = _semantic_block_limit(policy)
@@ -765,7 +748,6 @@ def _semantic_refine_doc_blocks(
 
 def _take_tail_chars_for_overlap(text: str, approx_tokens: int, mode: str) -> str:
     """Return a tail substring approximating the given token budget.
-
 
     Args:
         text (str): Source text to take the tail from.
@@ -799,7 +781,6 @@ def iter_packed_blocks(
     mode,
 ) -> Iterator[Tuple[str, int, int, int]]:
     """Pack blocks into chunks near the target token size.
-
 
     Blocks are accumulated until the target token count is reached,
     optionally yielding overlapping context between successive
@@ -912,7 +893,6 @@ def iter_packed_blocks(
 def _split_code_lines(text: str, tokenizer) -> List[Block]:
     """Split code text into line-based blocks.
 
-
     Contiguous sections of code are grouped together, with runs of
     blank lines treated as soft boundaries.
 
@@ -966,7 +946,6 @@ def iter_chunk_dicts(
     tokenizer_name: Optional[str] = None,
 ) -> Iterator[dict]:
     """Yield chunk dictionaries for the given text.
-
 
     This is a streaming interface that mirrors :func:`chunk_text`
     but yields chunks one at a time.
@@ -1026,7 +1005,6 @@ def chunk_text(
 ) -> List[dict]:
     """Chunk text into a list of token-bounded spans.
 
-
     Each chunk is returned as a dictionary containing the text,
     token count, and character offsets into the original string.
 
@@ -1063,7 +1041,6 @@ def chunk_text(
 # -------------
 def detect_fmt_from_lang(lang: Optional[str]) -> str:
     """Infer a document format name from a language label.
-
 
     Args:
         lang (str | None): Normalized language or filetype label,

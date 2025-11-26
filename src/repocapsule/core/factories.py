@@ -91,6 +91,18 @@ BytesHandler = Callable[
 
 @dataclass(frozen=True)
 class SinkFactoryResult:
+    """
+    Container for the output of sink construction.
+
+    Attributes:
+        jsonl_path (str): Path to the primary JSONL output.
+        sinks (Sequence[Sink]): Materialized sink instances.
+        sink_config (SinkConfig): Effective sink configuration used to build
+            sinks.
+        metadata (Mapping[str, object]): Auxiliary details exposed to
+            orchestrators.
+    """
+
     jsonl_path: str
     sinks: Sequence[Sink]
     sink_config: "SinkConfig"
@@ -100,7 +112,12 @@ class SinkFactoryResult:
 @dataclass(frozen=True)
 class OutputPaths:
     """
-    Bundles derived output locations for downstream consumers.
+    Bundle derived output locations for downstream consumers.
+
+    Attributes:
+        jsonl (Path): Path to the JSONL dataset.
+        prompt (Path | None): Optional prompt text path.
+        artifacts (Path | None): Optional directory for ancillary artifacts.
     """
 
     jsonl: Path
@@ -108,6 +125,13 @@ class OutputPaths:
     artifacts: Optional[Path] = None
 
     def as_tuple(self) -> Tuple[str, Optional[str]]:
+        """
+        Return the JSONL and prompt paths as strings.
+
+        Returns:
+            Tuple[str, Optional[str]]: JSONL path and optional prompt path.
+        """
+
         return str(self.jsonl), (str(self.prompt) if self.prompt else None)
 
 
@@ -124,10 +148,28 @@ def build_default_sinks(
     context: Optional[RepoContext] = None,
 ) -> SinkFactoryResult:
     """
-    Build the canonical JSONL + prompt sinks for ``cfg``.
+    Build the canonical JSONL and prompt sinks for a sink configuration.
 
-    Exactly one of ``basename`` or ``jsonl_path`` must be provided.  When a path
+    Exactly one of ``basename`` or ``jsonl_path`` must be provided. When a path
     is supplied explicitly, it takes precedence over ``cfg.output_dir``.
+
+    Args:
+        cfg (SinkConfig): Sink configuration providing defaults and output
+            directory.
+        basename (str | None): Basename for derived output files when
+            ``jsonl_path`` is not supplied.
+        jsonl_path (str | Path | None): Explicit JSONL output path. Overrides
+            ``basename`` and ``cfg.output_dir``.
+        prompt_path (str | Path | None): Explicit prompt output path. When
+            omitted, uses a derived path if prompt output is enabled.
+        context (RepoContext | None): Repository context to associate with
+            sinks.
+
+    Returns:
+        SinkFactoryResult: Container for the built sinks and metadata.
+
+    Raises:
+        ValueError: If required path inputs are missing or incompatible.
     """
     if basename and jsonl_path:
         raise ValueError("Provide either basename or jsonl_path, not both")
@@ -175,6 +217,16 @@ def build_default_sinks(
 
 
 def _default_prompt_path(jsonl_path: Path) -> Path:
+    """
+    Derive a prompt file path from a JSONL output path.
+
+    Args:
+        jsonl_path (Path): Primary JSONL path.
+
+    Returns:
+        Path: Prompt text path in the same directory.
+    """
+
     name = jsonl_path.name
     if name.endswith(".jsonl.gz"):
         base = name[:-len(".jsonl.gz")]
@@ -190,6 +242,18 @@ def make_jsonl_text_source(
     context: Optional[RepoContext] = None,
     text_key: str = "text",
 ):
+    """
+    Build a JSONLTextSource for a sequence of JSONL files.
+
+    Args:
+        paths (Sequence[str | Path]): JSONL file paths to read.
+        context (RepoContext | None): Repository context to attach to records.
+        text_key (str): Field containing text within each JSONL record.
+
+    Returns:
+        JSONLTextSource: Configured source for reading text rows.
+    """
+
     from ..sources.jsonl_source import JSONLTextSource
 
     norm_paths = [Path(p) for p in paths]
@@ -206,6 +270,23 @@ def make_csv_text_source(
     has_header: bool = True,
     text_column_index: int = 0,
 ):
+    """
+    Build a CSVTextSource for CSV or TSV inputs.
+
+    Args:
+        paths (Sequence[str | Path]): CSV paths to ingest.
+        context (RepoContext | None): Repository context to attach to records.
+        text_column (str): Column name containing text values.
+        delimiter (str | None): Field delimiter override.
+        encoding (str): File encoding for the CSV files.
+        has_header (bool): Whether the CSV includes a header row.
+        text_column_index (int): Fallback column index for text when headers
+            are absent.
+
+    Returns:
+        CSVTextSource: Configured CSV text source.
+    """
+
     from ..sources.csv_source import CSVTextSource
 
     norm_paths = [Path(p) for p in paths]
@@ -227,6 +308,20 @@ def make_pattern_file_source(
     config: "LocalDirSourceConfig",
     context: Optional[RepoContext] = None,
 ) -> PatternFileSource:
+    """
+    Build a PatternFileSource rooted at a directory.
+
+    Args:
+        root (str | Path): Root directory to scan.
+        patterns (Sequence[str]): Glob-style patterns to include.
+        config (LocalDirSourceConfig): Source configuration controlling chunking
+            and filtering.
+        context (RepoContext | None): Repository context to attach to records.
+
+    Returns:
+        PatternFileSource: Configured file source.
+    """
+
     return PatternFileSource(root, patterns, config=config, context=context)
 
 
@@ -235,9 +330,26 @@ def make_pattern_file_source(
 
 @dataclass
 class LocalDirSourceFactory(SourceFactory):
+    """Build LocalDirSource instances from declarative specs."""
+
     id: str = "local_dir"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a LocalDirSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context including defaults and
+                repository metadata.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single LocalDirSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If ``root_dir`` is missing from the specification.
+        """
+
         root = spec.options.get("root_dir")
         if root is None:
             raise ValueError("local_dir source spec requires root_dir")
@@ -258,9 +370,26 @@ class LocalDirSourceFactory(SourceFactory):
 
 @dataclass
 class GitHubZipSourceFactory(SourceFactory):
+    """Build GitHubZipSource instances from declarative specs."""
+
     id: str = "github_zip"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a GitHubZipSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context with HTTP configuration
+                and source defaults.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single GitHubZipSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If ``url`` is missing from the specification.
+        """
+
         url = spec.options.get("url")
         if url is None:
             raise ValueError("github_zip source spec requires url")
@@ -282,9 +411,26 @@ class GitHubZipSourceFactory(SourceFactory):
 
 @dataclass
 class WebPdfListSourceFactory(SourceFactory):
+    """Build WebPdfListSource instances from declarative specs."""
+
     id: str = "web_pdf_list"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a WebPdfListSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context carrying defaults and
+                HTTP configuration.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single WebPdfListSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If ``urls`` is missing from the specification.
+        """
+
         urls = spec.options.get("urls")
         if not urls:
             raise ValueError("web_pdf_list source spec requires urls")
@@ -307,9 +453,26 @@ class WebPdfListSourceFactory(SourceFactory):
 
 @dataclass
 class WebPagePdfSourceFactory(SourceFactory):
+    """Build WebPagePdfSource instances from declarative specs."""
+
     id: str = "web_page_pdf"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a WebPagePdfSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context carrying defaults and
+                HTTP configuration.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single WebPagePdfSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If ``page_url`` is missing from the specification.
+        """
+
         page_url = spec.options.get("page_url")
         if page_url is None:
             raise ValueError("web_page_pdf source spec requires page_url")
@@ -331,9 +494,26 @@ class WebPagePdfSourceFactory(SourceFactory):
 
 @dataclass
 class SQLiteSourceFactory(SourceFactory):
+    """Build SQLiteSource instances from declarative specs."""
+
     id: str = "sqlite"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a SQLiteSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context with HTTP configuration
+                and defaults.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single SQLiteSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If ``db_path`` is missing from the specification.
+        """
+
         from ..sources.sqlite_source import SQLiteSource
 
         options = spec.options or {}
@@ -384,9 +564,26 @@ class SQLiteSourceFactory(SourceFactory):
 
 @dataclass
 class CsvTextSourceFactory(SourceFactory):
+    """Build CSVTextSource instances from declarative specs."""
+
     id: str = "csv_text"
 
     def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+        """
+        Construct a CSVTextSource from a source specification.
+
+        Args:
+            ctx (SourceFactoryContext): Factory context carrying defaults and
+                HTTP configuration.
+            spec (SourceSpec): Source specification containing options.
+
+        Returns:
+            Sequence[Source]: A single CSVTextSource wrapped in a sequence.
+
+        Raises:
+            ValueError: If no CSV paths are provided.
+        """
+
         from ..sources.csv_source import CSVTextSource
 
         options = spec.options or {}
@@ -426,9 +623,26 @@ class CsvTextSourceFactory(SourceFactory):
 
 @dataclass
 class DefaultJsonlPromptSinkFactory(SinkFactory):
+    """Build the canonical JSONL + prompt sink pair from declarative specs."""
+
     id: str = "default_jsonl_prompt"
 
     def build(self, ctx: SinkFactoryContext, spec: "SinkSpec") -> SinkFactoryResult:
+        """
+        Construct JSONL and prompt sinks from a sink specification.
+
+        Args:
+            ctx (SinkFactoryContext): Factory context with sink configuration
+                and repository metadata.
+            spec (SinkSpec): Sink specification containing options.
+
+        Returns:
+            SinkFactoryResult: Built sinks and effective configuration.
+
+        Raises:
+            ValueError: If ``jsonl_path`` is missing from the specification.
+        """
+
         jsonl_path = spec.options.get("jsonl_path")
         if jsonl_path is None:
             raise ValueError("default_jsonl_prompt sink spec requires jsonl_path")
@@ -445,9 +659,28 @@ class DefaultJsonlPromptSinkFactory(SinkFactory):
 
 @dataclass
 class ParquetDatasetSinkFactory(SinkFactory):
+    """Build ParquetDatasetSink instances from declarative specs."""
+
     id: str = "parquet_dataset"
 
     def build(self, ctx: SinkFactoryContext, spec: "SinkSpec") -> SinkFactoryResult:
+        """
+        Construct a ParquetDatasetSink from a sink specification.
+
+        Args:
+            ctx (SinkFactoryContext): Factory context with sink configuration
+                and repository metadata.
+            spec (SinkSpec): Sink specification containing options.
+
+        Returns:
+            SinkFactoryResult: Built sink and effective configuration.
+
+        Raises:
+            ValueError: If required options are missing or invalid.
+            RuntimeError: If the Parquet extra is unavailable or construction
+                fails.
+        """
+
         sink_cfg = ctx.sink_config
         options = spec.options or {}
         path = options.get("path")
@@ -502,6 +735,15 @@ class ParquetDatasetSinkFactory(SinkFactory):
 def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
     """
     Build (or reuse) the SafeHttpClient described by ``http_cfg``.
+
+    Args:
+        http_cfg (HttpConfig): HTTP configuration describing the client.
+
+    Returns:
+        SafeHttpClient: Client configured per ``http_cfg``.
+
+    Raises:
+        ValueError: If ``http_cfg`` is missing.
     """
     if http_cfg is None:
         raise ValueError("http_cfg is required")
@@ -515,7 +757,18 @@ def make_qc_scorer(
     scorer_registry: Optional[QualityScorerRegistry] = None,
 ) -> Optional["JSONLQualityScorer"]:
     """
-    Instantiate a JSONLQualityScorer when QC is enabled and extras are present.
+    Instantiate a JSONLQualityScorer when QC is enabled and extras are loaded.
+
+    Args:
+        qc_cfg (QCConfig | None): Quality-control configuration.
+        new_instance (bool): Force creation of a fresh scorer even if one is
+            cached on the config.
+        scorer_registry (QualityScorerRegistry | None): Registry override for
+            resolving scorer factories.
+
+    Returns:
+        JSONLQualityScorer | None: Configured scorer, or ``None`` when QC is
+        disabled or no scorer is registered.
     """
     if qc_cfg is None or not getattr(qc_cfg, "enabled", False):
         return None
@@ -544,7 +797,15 @@ def make_qc_scorer(
 
 def make_bytes_handlers(registry: Optional[BytesHandlerRegistry] = None) -> Sequence[Tuple[Sniff, BytesHandler]]:
     """
-    Return the default sniff/handler pairs for binary formats (PDF/EVTX/Parquet).
+    Return the default sniff/handler pairs for binary formats.
+
+    Args:
+        registry (BytesHandlerRegistry | None): Registry override for handler
+            resolution. Falls back to the global registry.
+
+    Returns:
+        Sequence[Tuple[Sniff, BytesHandler]]: Registered sniff/handler pairs for
+        PDF, EVTX, and Parquet files.
     """
     reg = registry or bytes_handler_registry
     if not reg.handlers():
@@ -569,6 +830,8 @@ def make_bytes_handlers(registry: Optional[BytesHandlerRegistry] = None) -> Sequ
 
 
 def _fallback_sniff_pdf(data: bytes, rel: str) -> bool:
+    """Detect PDFs by extension or file header bytes."""
+
     return rel.lower().endswith(".pdf") or data.startswith(b"%PDF-")
 
 
@@ -578,10 +841,14 @@ def _fallback_handle_pdf(
     ctx: Optional[RepoContext],
     policy: Optional["ChunkPolicy"],
 ) -> Optional[Iterable[Record]]:
+    """Raise an error indicating PDF support is unavailable."""
+
     raise UnsupportedBinary("pdf support is not installed")
 
 
 def _fallback_sniff_evtx(data: bytes, rel: str) -> bool:
+    """Detect EVTX blobs by extension or signature markers."""
+
     name = rel.lower()
     if name.endswith(".evtx"):
         return True
@@ -598,6 +865,8 @@ def _fallback_handle_evtx(
     ctx: Optional[RepoContext],
     policy: Optional["ChunkPolicy"],
 ) -> Optional[Iterable[Record]]:
+    """Raise an error indicating EVTX support is unavailable."""
+
     raise UnsupportedBinary("evtx support is not installed")
 
 
@@ -607,8 +876,14 @@ def _fallback_handle_evtx(
 
 def make_repo_context_from_git(repo_root: Path | str) -> Optional[RepoContext]:
     """
-    Infer a RepoContext from ``.git/config`` if the remote points at GitHub.
-    Returns ``None`` when no usable metadata is present.
+    Infer a RepoContext from ``.git/config`` when the remote points at GitHub.
+
+    Args:
+        repo_root (Path | str): Repository root containing a ``.git`` folder.
+
+    Returns:
+        RepoContext | None: Populated context or ``None`` when metadata is
+        unavailable.
     """
     cfg_path = Path(repo_root) / ".git" / "config"
     try:
@@ -662,7 +937,19 @@ def make_local_dir_source(
     context: Optional[RepoContext] = None,
 ):
     """
-    Build a LocalDirSource for ``root`` using the supplied config/context.
+    Build a LocalDirSource for a filesystem root.
+
+    Args:
+        root (Path | str): Root directory to scan.
+        config (LocalDirSourceConfig): Source configuration controlling
+            filtering and chunking.
+        context (RepoContext | None): Repository context to attach to records.
+
+    Returns:
+        LocalDirSource: Configured local directory source.
+
+    Raises:
+        ValueError: If ``config`` is missing.
     """
     if config is None:
         raise ValueError("LocalDirSourceConfig is required")
@@ -680,7 +967,22 @@ def make_github_zip_source(
     http_client: Optional["SafeHttpClient"] = None,
 ):
     """
-    Build a GitHubZipSource for ``url`` with the provided config/context.
+    Build a GitHubZipSource for a GitHub archive URL.
+
+    Args:
+        url (str): GitHub zip or tarball URL.
+        config (GitHubSourceConfig): Source configuration controlling download
+            and filtering behavior.
+        context (RepoContext | None): Repository context to attach to records.
+        download_timeout (float | None): Request timeout for downloading the
+            archive.
+        http_client (SafeHttpClient | None): Optional HTTP client override.
+
+    Returns:
+        GitHubZipSource: Configured GitHub zip source.
+
+    Raises:
+        ValueError: If ``url`` is missing.
     """
     if not url:
         raise ValueError("url is required for GitHubZipSource")
@@ -702,10 +1004,17 @@ def make_web_pdf_source(
     http_client: Optional["SafeHttpClient"] = None,
 ):
     """
-    Build a WebPdfListSource from a sequence of URLs and a PdfSourceConfig.
+    Build a WebPdfListSource from a sequence of URLs.
 
-    The http_client parameter, if provided, is passed through directly and avoids using the
-    global SafeHttpClient fallback.
+    Args:
+        urls (Sequence[str | Path]): PDF URLs to download.
+        config (PdfSourceConfig): Source configuration controlling download
+            behavior and validation.
+        http_client (SafeHttpClient | None): Optional HTTP client override;
+            defaults to the global client if omitted.
+
+    Returns:
+        WebPdfListSource: Configured PDF list source.
     """
     from ..sources.sources_webpdf import WebPdfListSource  # local import to avoid cycles
 
@@ -733,7 +1042,25 @@ def make_output_paths_for_github(
     include_commit: Optional[str] = None,
 ) -> OutputPaths:
     """
-    Build output paths for a GitHub dataset, optionally appending ``timestamp``.
+    Build output paths for a GitHub dataset.
+
+    Args:
+        owner (str): GitHub owner or organization.
+        repo (str): Repository name.
+        ref (str | None): Commit-ish or ref used to build the dataset.
+        license_spdx (str | None): SPDX license identifier for metadata.
+        out_dir (Path | str): Output directory root.
+        include_prompt (bool): Whether to include a prompt output path.
+        timestamp (str | None): Timestamp suffix appended to the basename when
+            provided.
+        include_commit (str | None): Commit hash appended to the basename when
+            provided.
+
+    Returns:
+        OutputPaths: Derived JSONL and prompt paths.
+
+    Raises:
+        ValueError: If ``owner`` or ``repo`` are missing.
     """
     if not owner or not repo:
         raise ValueError("owner and repo are required for GitHub output paths")
@@ -763,7 +1090,22 @@ def make_output_paths_for_pdf(
     timestamp: Optional[str] = None,
 ) -> OutputPaths:
     """
-    Build output paths for a PDF corpus using URL/title/license metadata.
+    Build output paths for a PDF corpus using URL, title, and license metadata.
+
+    Args:
+        url (str): Source URL of the PDF corpus.
+        title (str | None): Optional title incorporated into the basename.
+        license_spdx (str | None): SPDX license identifier for metadata.
+        out_dir (Path | str): Output directory root.
+        include_prompt (bool): Whether to include a prompt output path.
+        timestamp (str | None): Timestamp suffix appended to the basename when
+            provided.
+
+    Returns:
+        OutputPaths: Derived JSONL and prompt paths.
+
+    Raises:
+        ValueError: If ``url`` is missing.
     """
     if not url:
         raise ValueError("url is required for PDF output paths")

@@ -1,5 +1,7 @@
 # evtxio.py
 # SPDX-License-Identifier: MIT
+"""EVTX parser utilities for producing normalized JSON event records."""
+
 from __future__ import annotations
 
 import json
@@ -28,15 +30,18 @@ _SNIFF_SCAN_LIMIT = 1_048_576  # 1 MiB
 
 
 def sniff_evtx(data: bytes, rel: str) -> bool:
-    """
-    Lightweight EVTX sniff that handles common and slightly-damaged cases:
+    """Detect whether a blob is likely an EVTX file.
 
-    1) .evtx extension
-    2) EVTX file header magic 'ElfFile' at offset 0
-    3) Presence of a chunk signature 'ElfChnk' in the first ~1 MiB
-       (helps with carved/truncated headers)
+    Checks common signatures and extensions, including chunk signatures
+    that help with damaged headers. Keep this lightweight; deeper
+    verification happens during QC.
 
-    Keep this fast; deeper verification belongs in the QC stage.
+    Args:
+        data (bytes): Raw bytes to inspect.
+        rel (str): Relative path or name for extension checks.
+
+    Returns:
+        bool: True if the data appears to be EVTX.
     """
     name = (rel or "").lower()
     if name.endswith(".evtx"):
@@ -74,13 +79,17 @@ def _put_coalescing(m: Dict[str, Any], k: str, v: str) -> None:
 
 
 def _parse_event_xml(xml_text: str) -> Dict[str, Any]:
-    """
-    Parse Windows Event XML into a compact dict.
+    """Parse Windows Event XML into a compact dict.
 
-    - Pull core fields from <System>
-    - Convert <EventData><Data Name="...">...</Data> into a map,
-      coalescing duplicate names into lists and preserving unnamed Data.
-    - Leave room for audit by embedding the original XML at the call site.
+    Pulls core fields from System, maps EventData entries, and preserves
+    unnamed Data values. The caller is responsible for attaching the raw
+    XML when needed for audit.
+
+    Args:
+        xml_text (str): XML string for a single event.
+
+    Returns:
+        Dict[str, Any]: Normalized event details.
     """
     try:
         root = ET.fromstring(xml_text)
@@ -127,6 +136,7 @@ def _parse_event_xml(xml_text: str) -> Dict[str, Any]:
 
 
 def _event_json_with_raw(xml_text: str) -> str:
+    """Return a JSON string containing parsed fields and the raw XML."""
     payload = _parse_event_xml(xml_text)
     payload["raw_xml"] = xml_text
     return json.dumps(payload, ensure_ascii=False)
@@ -152,18 +162,23 @@ def _scan_evtx_file_magic_offsets(data: bytes, max_hits: int = 16) -> list[int]:
 
 
 def _recover_best_effort_with_python_evtx(data: bytes) -> Iterable[str]:
-    """\
-    Best-effort recovery using python-evtx only.
+    """Best-effort recovery using python-evtx only.
 
     Strategy:
     - Scan for EVTX file header magic ("ElfFile") within the blob.
-    - For each candidate offset, attempt to open an Evtx view on the slice
-      starting at that offset.
+    - For each candidate offset, attempt to open an Evtx view on the
+      slice starting at that offset.
     - Yield record.xml() for any successfully parsed records.
 
-    This does *not* attempt heavy-duty carving of individual chunks; it's a
-    lightweight, dependency-free salvage path for blobs that contain embedded
-    or slightly damaged EVTX files.
+    This does not attempt heavy-duty carving of individual chunks; it is
+    a lightweight, dependency-free salvage path for blobs that contain
+    embedded or slightly damaged EVTX files.
+
+    Args:
+        data (bytes): Raw bytes that may contain EVTX content.
+
+    Returns:
+        Iterable[str]: Iterator over recovered XML strings.
     """
     # First, if the blob itself starts with an EVTX header, we've already
     # tried that in the main handler and failed. Focus on secondary headers.
@@ -195,6 +210,7 @@ def _recover_best_effort_with_python_evtx(data: bytes) -> Iterable[str]:
 # --- Public handler -----------------------------------------------------------
 
 def _env_wants_recovery() -> bool:
+    """Return whether recovery is enabled via environment variable."""
     return os.getenv("REPOCAPSULE_EVTX_RECOVER", "").strip().lower() in {"1", "true", "yes"}
 
 
@@ -206,25 +222,31 @@ def handle_evtx(
     *,
     allow_recovery: Optional[bool] = None,
 ) -> Iterable[Record]:
-    """
-    Stream one JSONL record per event.
+    """Stream one normalized JSON record per EVTX event.
 
-    Normal path: python-evtx -> record.xml() -> normalize to JSON, plus raw_xml for fidelity.
-    The XML parsing and normalization are CPU-bound; for large EVTX datasets you will usually
-    get better throughput with a process executor (PipelineConfig.executor_kind="process" or "auto").
+    Normal path: python-evtx parses records to XML, which is normalized
+    to JSON while preserving raw_xml. Parsing is CPU-bound; large EVTX
+    sets benefit from process executors.
 
-    Notes
-    -----
-    The JSON payload is intentionally lossy: nested <Data> elements are flattened into
-    ``event_data`` / ``event_data_extra`` and ordering/nesting may not match the source XML.
-    The original XML for each event is preserved in the ``raw_xml`` field when full fidelity is
-    required.
+    The JSON payload is intentionally lossy: nested Data elements are
+    flattened into event_data / event_data_extra and ordering may not
+    match the source XML. raw_xml is retained for fidelity.
 
-    Optional fallback: pass allow_recovery=True (or set
-    REPOCAPSULE_EVTX_RECOVER=1) to try a best-effort recovery using only
-    python-evtx when the primary parse fails or yields zero events. This
-    recovery scans for embedded EVTX file headers within the blob and
-    attempts to parse from those offsets.
+    Optional fallback: enable recovery (allow_recovery=True or
+    REPOCAPSULE_EVTX_RECOVER=1) to scan for embedded EVTX headers and
+    attempt parsing from those offsets when primary parsing yields
+    nothing.
+
+    Args:
+        data (bytes): Raw EVTX blob.
+        rel (str): Relative path used in emitted records.
+        ctx (RepoContext | None): Context for repository metadata.
+        policy (ChunkPolicy | None): Chunking policy (unused here).
+        allow_recovery (bool | None): Override environment-driven
+            recovery behavior.
+
+    Yields:
+        Record: One JSONL record per parsed event.
     """
     context_meta = (ctx.as_meta_seed() or None) if ctx else None
 

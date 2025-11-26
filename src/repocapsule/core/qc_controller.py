@@ -1,8 +1,6 @@
 # qc_controller.py
 # SPDX-License-Identifier: MIT
-"""
-Helpers for inline QC execution and summary building.
-"""
+"""Helpers for inline QC execution and summary building."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -16,12 +14,12 @@ from .qc_utils import update_dup_family_counts, top_dup_families
 
 @dataclass(slots=True)
 class QCSummaryTracker:
-    """
-    Tracks QC scoring outcomes for a run.
+    """Track QC scoring outcomes and duplicate families.
 
-    near_dup is treated as a combined flag (Simhash OR MinHash). With drop_near_dups=True,
-    any record flagged near-duplicate by either mechanism will be dropped. Duplicate families
-    are keyed by dup_family_id with counts/examples for post-QC reporting.
+    near_dup is treated as a combined flag (Simhash OR MinHash). With
+    drop_near_dups=True, any record flagged near-duplicate by either mechanism
+    will be dropped. Duplicate families are keyed by dup_family_id with
+    counts/examples for post-QC reporting.
     """
     enabled: bool = False
     mode: str = QCMode.INLINE
@@ -38,7 +36,16 @@ class QCSummaryTracker:
     top_dup_snapshot: List[Dict[str, Any]] = field(default_factory=list)
 
     def observe(self, qc_result: Dict[str, Any], *, apply_gates: bool = True) -> bool:
-        """Update counters based on a QC row, returning True if it should be kept."""
+        """Update counters based on a QC row and return whether to keep it.
+
+        Args:
+            qc_result (dict[str, Any]): QC metrics for a single record.
+            apply_gates (bool): Whether to apply scoring and near-duplicate
+                drop rules.
+
+        Returns:
+            bool: True when the record should be kept.
+        """
         self.scored += 1
         family_id = qc_result.get("dup_family_id") or qc_result.get("doc_id")
         path = qc_result.get("path")
@@ -69,9 +76,11 @@ class QCSummaryTracker:
         return keep
 
     def record_error(self) -> None:
+        """Increment error count for a failed QC attempt."""
         self.errors += 1
 
     def as_dict(self) -> Dict[str, Any]:
+        """Return a summary dictionary suitable for serialization."""
         return {
             "enabled": bool(self.enabled),
             "mode": self.mode,
@@ -88,6 +97,7 @@ class QCSummaryTracker:
         }
 
     def _is_low_score(self, qc_result: Dict[str, Any]) -> bool:
+        """Return True when qc_result score falls below the configured min."""
         if self.min_score is None:
             return False
         score_value = qc_result.get("score")
@@ -99,12 +109,21 @@ class QCSummaryTracker:
             return False
 
     def top_dup_families(self) -> List[Dict[str, Any]]:
+        """Return the largest duplicate families with cached snapshot reuse."""
         if self.top_dup_snapshot:
             return [dict(entry) for entry in self.top_dup_snapshot]
         return top_dup_families(self.dup_families)
 
     @classmethod
     def from_summary_dict(cls, data: Mapping[str, Any]) -> "QCSummaryTracker":
+        """Rehydrate a tracker from a serialized summary dictionary.
+
+        Args:
+            data (Mapping[str, Any]): Summary produced by as_dict().
+
+        Returns:
+            QCSummaryTracker: Tracker populated with summary values.
+        """
         tracker = cls()
         tracker.enabled = bool(data.get("enabled"))
         mode = data.get("mode")
@@ -126,9 +145,7 @@ class QCSummaryTracker:
 
 
 class InlineQCController:
-    """
-    Wraps scorer + gating logic so pipeline.run_pipeline stays lean.
-    """
+    """Wrap scorer and gating logic used by inline QC."""
 
     def __init__(
         self,
@@ -139,6 +156,15 @@ class InlineQCController:
         logger,
         enforce_drops: bool = True,
     ) -> None:
+        """Initialize the controller with scorer and configuration.
+
+        Args:
+            config: QC configuration object.
+            stats: Pipeline stats object containing a QC tracker.
+            scorer (QualityScorer): Scorer used to evaluate records.
+            logger: Logger for warning and error messages.
+            enforce_drops (bool): Whether to drop records based on QC results.
+        """
         self.cfg = config
         self.stats = stats
         self.scorer = scorer
@@ -155,6 +181,14 @@ class InlineQCController:
         self.summary = tracker
 
     def accept(self, record: Record) -> bool:
+        """Score a record and apply QC gating rules.
+
+        Args:
+            record (Record): Record to score.
+
+        Returns:
+            bool: True if the record passes QC and should be kept.
+        """
         try:
             qc_result = self.scorer.score_record(record)
         except Exception as exc:
@@ -176,19 +210,24 @@ class InlineQCController:
         return keep
 
     def on_record(self, record: Record) -> Record:
+        """No-op observer hook; returns the record unchanged."""
         # Inline QC performs all work inside accept(); observer hook is a pass-through.
         return record
 
     def summary_dict(self) -> Dict[str, Any]:
+        """Return the current QC summary as a dictionary."""
         return self.summary.as_dict()
 
     def _merge_qc_meta(self, record: Record, qc_result: Dict[str, Any]) -> None:
-        """
-        Attach QC-derived metadata to the record's ``meta`` dict.
+        """Attach QC-derived metadata to the record meta dictionary.
 
-        - Populate ``approx_tokens`` (and ``tokens`` if absent) from qc_result["tokens"].
-        - Merge canonical QC fields (QC_META_FIELDS plus qc_score from score) into ``meta``.
-        - Store all other QC metrics under ``meta["extra"]["qc_signals"]`` without clobbering existing entries.
+        Populates approximate token counts, merges canonical QC fields, and
+        stores additional QC signals under meta["extra"]["qc_signals"] without
+        clobbering existing entries.
+
+        Args:
+            record (Record): Record whose meta will be updated.
+            qc_result (dict[str, Any]): QC result data for the record.
         """
         if not isinstance(record, dict):
             return
@@ -222,8 +261,18 @@ def summarize_qc_rows(
     apply_gates: bool = False,
     enabled: bool = True,
 ) -> Dict[str, Any]:
-    """
-    Build a summary dict from QC rows (used by post-processing mode).
+    """Build a summary dictionary from QC rows for post-processing mode.
+
+    Args:
+        rows (Iterable[dict[str, Any]]): QC rows to aggregate.
+        mode (str): QC mode label to store.
+        min_score (float | None): Minimum score threshold.
+        drop_near_dups (bool): Whether to drop near duplicates.
+        apply_gates (bool): Whether to apply gating during aggregation.
+        enabled (bool): Whether QC was enabled for the run.
+
+    Returns:
+        dict[str, Any]: Summary produced by QCSummaryTracker.as_dict().
     """
     tracker = QCSummaryTracker(
         enabled=enabled,

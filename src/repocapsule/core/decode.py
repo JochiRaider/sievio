@@ -1,5 +1,6 @@
 # decode.py
 # SPDX-License-Identifier: MIT
+"""Helpers to decode bytes into normalized text with simple heuristics."""
 
 from __future__ import annotations
 
@@ -15,8 +16,11 @@ __all__ = [
     "read_text",               # returns Decoded
 ]
 
+
 @dataclass(slots=True, frozen=True)
 class DecodedText:
+    """Decoded text content with encoding metadata."""
+
     text: str
     encoding: str
     had_replacement: bool
@@ -37,6 +41,7 @@ _BOMS: tuple[tuple[bytes, str], ...] = (
 
 
 def _detect_bom(data: bytes) -> Optional[str]:
+    """Return encoding implied by a BOM if present."""
     for sig, enc in _BOMS:
         if data.startswith(sig):
             return enc
@@ -44,11 +49,17 @@ def _detect_bom(data: bytes) -> Optional[str]:
 
 
 def _guess_utf16_endian_from_nuls(sample: bytes) -> Optional[str]:
-    """Return 'utf-16-le' or 'utf-16-be' if NUL distribution strongly hints it.
+    """Infer UTF-16 endianness from NUL distribution in a byte sample.
 
-    Heuristic: in ASCII-heavy UTF-16 text, one byte of each 2-byte unit is NUL.
-    Count NULs at even vs odd offsets in a window; prefer the side with more
-    NULs if significantly higher.
+    Heuristic: in ASCII-heavy UTF-16 text, one byte of each 2-byte unit is
+    NUL. Count NULs at even versus odd offsets and pick the side that has
+    significantly more NUL bytes.
+
+    Args:
+        sample (bytes): Leading bytes from a file.
+
+    Returns:
+        str | None: "utf-16-le" or "utf-16-be" when confident, otherwise None.
     """
     if not sample:
         return None
@@ -78,13 +89,13 @@ _ZERO_WIDTH = {
 
 
 def _normalize_newlines(s: str) -> str:
-    # Normalize CRLF and CR-only to LF
+    """Normalize CRLF and CR-only sequences to LF."""
     s = s.replace("\r\n", "\n").replace("\r", "\n")
     return s
 
 
 def _strip_unsafe_controls(s: str) -> str:
-    # Keep TAB, LF, and (already normalized) no CR; drop other C0/C1 controls.
+    """Strip control and zero-width characters while keeping TAB and LF."""
     return "".join(
         ch for ch in s
         if (ch == "\n" or ch == "\t" or _ud.category(ch)[0] != "C") and ord(ch) not in _ZERO_WIDTH
@@ -92,6 +103,7 @@ def _strip_unsafe_controls(s: str) -> str:
 
 
 def _unicode_normalize(s: str, *, form: str = "NFC") -> str:
+    """Apply Unicode normalization, falling back to the original string."""
     try:
         return _ud.normalize(form, s)
     except Exception:
@@ -107,12 +119,20 @@ _MOJI_REGEX = re.compile(r"[\u00C0-\u00FF][\u0080-\u00FF]|Ã.|â.|Â|Â\s|\ufffd
 
 
 def _mojibake_score(s: str) -> int:
+    """Count likely mojibake sequences in the string."""
     return len(_MOJI_REGEX.findall(s))
 
 
 def _maybe_repair_cp1252_utf8(text_cp1252: str) -> str:
-    """Attempt to repair a string that likely came from UTF-8 bytes
-    mis-decoded as cp1252. If repair improves the mojibake score, return it.
+    """Repair text likely mis-decoded as cp1252 when it was UTF-8.
+
+    The repair is accepted only if it reduces the detected mojibake noise.
+
+    Args:
+        text_cp1252 (str): Text decoded as cp1252.
+
+    Returns:
+        str: Repaired or original text, whichever looks cleaner.
     """
     try:
         raw = text_cp1252.encode("cp1252", errors="ignore")
@@ -134,12 +154,22 @@ def decode_bytes(
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> DecodedText:
-    """Decode bytes and return DecodedText(text, encoding, had_replacement).
+    """Decode bytes into normalized text with heuristics and repairs.
+
     Strategy:
-      1) Honor BOMs for UTF-8/16/32 when present (utf-8-sig skips the BOM on decode).
-      2) Try UTF-8 (strict). If it fails, probe UTF-16 endianness by NUL patterns.
-      3) Fallback to cp1252 (strict), else latin-1; optionally repair UTF-8-as-cp1252.
-      4) Normalize newlines, strip unsafe controls, and apply Unicode normalization.
+      1) Honor BOMs for UTF-8/16/32; utf-8-sig strips the BOM.
+      2) Try UTF-8 strictly; if it fails, guess UTF-16 endianness by NULs.
+      3) Fallback to cp1252 strictly, else latin-1 with optional mojibake fix.
+      4) Normalize newlines, strip controls, and apply Unicode normalization.
+
+    Args:
+        data (bytes): Raw bytes to decode.
+        normalize (str | None): Unicode normalization form or None to skip.
+        strip_controls (bool): Whether to remove control and zero-width chars.
+        fix_mojibake (bool): Whether to attempt cp1252/UTF-8 mojibake repair.
+
+    Returns:
+        DecodedText: Text plus encoding and replacement indicator.
     """
     if not data:
         return DecodedText("", "utf-8", False)
@@ -187,6 +217,7 @@ def decode_bytes(
     return DecodedText(text, enc_used, "\ufffd" in text)
 
 def _postprocess(s: str, *, normalize: Optional[str], strip_controls: bool) -> str:
+    """Normalize newlines, strip controls, and apply Unicode normalization."""
     s = _normalize_newlines(s)
     if strip_controls:
         s = _strip_unsafe_controls(s)
@@ -203,14 +234,17 @@ def read_text(
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> str:
-    """Read file as bytes and decodes to a text string.
+    """Read file bytes and decode them to a text string.
 
     Args:
-        path: file path
-        max_bytes: if provided, read at most this many bytes (useful for sampling)
-        normalize: Unicode normalization form (e.g., 'NFC', 'NFKC') or None
-        strip_controls: remove zero-width and control chars except TAB/LF
-        fix_mojibake: attempt to repair common UTF-8-as-cp1252 mojibake
+        path (str | bytes | Path): Path to the file to read.
+        max_bytes (int | None): Optional cap on bytes read for sampling.
+        normalize (str | None): Unicode normalization form such as "NFC".
+        strip_controls (bool): Remove control and zero-width characters.
+        fix_mojibake (bool): Attempt to repair UTF-8-as-cp1252 mojibake.
+
+    Returns:
+        str: Decoded text content; empty on read failure.
     """
     p = Path(path)
     try:

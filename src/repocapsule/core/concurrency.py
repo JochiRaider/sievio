@@ -1,5 +1,11 @@
 # concurrency.py
 # SPDX-License-Identifier: MIT
+"""Concurrency helpers and executor configuration for RepoCapsule.
+
+Wraps thread and process pool executors with a bounded submission
+window and provides helpers to infer executor settings for the main
+ingestion pipeline and quality-control scoring.
+"""
 from __future__ import annotations
 
 from concurrent.futures import (
@@ -24,15 +30,37 @@ R = TypeVar("R")
 
 @dataclass(frozen=True)
 class ExecutorConfig:
+    """Immutable executor settings used to construct worker pools.
+
+
+    Attributes:
+        max_workers (int): Maximum number of worker threads or
+            processes.
+        window (int): Maximum number of in-flight tasks allowed
+            before backpressure is applied.
+        kind (Literal["thread", "process"]): Executor implementation
+            to use.
+    """
     max_workers: int
     window: int
     kind: Literal["thread", "process"]
 
 
 class Executor:
-    """
-    Small wrapper around concurrent.futures executors that adds a bounded
-    submission window and unordered consumption.
+    """Run tasks in a thread or process pool with bounded submission.
+
+
+    This wrapper keeps at most ``cfg.window`` tasks in flight and
+    delivers results to callbacks in completion order, not submission
+    order.
+
+    Attributes:
+        cfg (ExecutorConfig): Executor configuration for this
+            instance.
+        initializer (Callable | None): Optional initializer called in
+            each worker process when using a process pool.
+        initargs (tuple[Any, ...]): Positional arguments passed to
+            the initializer.
     """
 
     def __init__(
@@ -72,9 +100,32 @@ class Executor:
         on_error: Callable[[BaseException], None] | None = None,
         on_submit_error: Callable[[T, BaseException], None] | None = None,
     ) -> None:
+        """Submit items to workers and consume results as they complete.
+
+        Items are submitted up to the configured submission window.
+        Completed results are passed to ``on_result`` in completion
+        order. Errors can be reported via callbacks or cause early
+        termination when ``fail_fast`` is True.
+
+        Args:
+            items (Iterable[T]): Items to process.
+            fn (Callable[[T], R]): Worker function invoked for each
+                item.
+            on_result (Callable[[R], None]): Callback invoked for each
+                successful result.
+            fail_fast (bool): Whether to re-raise the first worker or
+                submission error and abort further processing.
+            on_error (Callable[[BaseException], None] | None): Optional
+                callback invoked when a worker raises an exception.
+            on_submit_error (Callable[[T, BaseException], None] | None):
+                Optional callback invoked when submitting a task to the
+                executor fails.
+
+        Raises:
+            Exception: Propagates the first worker or submission error
+                when ``fail_fast`` is True.
         """
-        Submit items to workers and stream results as they complete.
-        """
+
         window = max(self.cfg.window, self.cfg.max_workers)
         with self._make_executor() as pool:
             pending: list[Future[R]] = []
@@ -131,8 +182,44 @@ def process_items_parallel(
     initializer: Callable[..., Any] | None = None,
     initargs: tuple[Any, ...] = (),
 ) -> None:
-    """
-    Specialized adapter over Executor.map_unordered for file/record processing.
+    """Process items in parallel and stream resulting records.
+
+
+    This is a convenience wrapper around :class:`Executor` that
+    applies ``process_one`` to each input item and then passes the
+    original item and its records to ``write_records``.
+
+    Args:
+        items (Iterable[T]): Items to process.
+        process_one (Callable[[T], tuple[Any, Iterable[Any]]]): Function
+            that transforms a single item into a result and an iterable
+            of records.
+        write_records (Callable[[Any, Iterable[Any]], None]): Callback
+            responsible for writing or emitting records for each item.
+        max_workers (int): Maximum number of worker threads or
+            processes.
+        window (int): Maximum number of in-flight tasks allowed before
+            blocking submissions.
+        fail_fast (bool): Whether to re-raise the first worker or
+            submission error and abort further processing.
+        on_submit_error (Callable[[T, BaseException], None] | None):
+            Optional callback for errors raised while submitting tasks
+            to the executor.
+        on_worker_error (Callable[[BaseException], None] | None):
+            Optional callback for exceptions raised by worker
+            functions.
+        executor_kind (str): Pool implementation to use,
+            ``"thread"`` or ``"process"``. Any other value is treated
+            as ``"thread"``.
+        initializer (Callable[..., Any] | None): Optional initializer
+            invoked in each worker process when using a process pool.
+        initargs (tuple[Any, ...]): Positional arguments passed to the
+            initializer.
+
+    Raises:
+        ValueError: If ``max_workers`` is less than 1.
+        Exception: Propagates the first worker or submission error when
+            ``fail_fast`` is True.
     """
     if max_workers < 1:
         raise ValueError("process_items_parallel requires max_workers >= 1")
@@ -172,7 +259,22 @@ def process_items_parallel(
 
 
 def _has_heavy_binary_handlers(cfg: RepocapsuleConfig, runtime: Any | None = None) -> bool:
-    """Return True if the pipeline is configured with PDF/EVTX handlers."""
+    """Detect whether the pipeline uses heavy binary bytes handlers.
+
+
+    The heuristic looks for PDF/EVTX-oriented handlers on the pipeline
+    configuration or runtime, based on handler names and module
+    prefixes.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        runtime (Any | None): Optional runtime object overriding or
+            augmenting the configured bytes handlers.
+
+    Returns:
+        bool: True if handlers strongly suggest heavy PDF/EVTX
+            processing, False otherwise.
+    """
     try:
         handlers = cfg.pipeline.bytes_handlers
     except Exception:
@@ -191,8 +293,20 @@ def _has_heavy_binary_handlers(cfg: RepocapsuleConfig, runtime: Any | None = Non
 
 
 def _has_heavy_sources(cfg: RepocapsuleConfig, runtime: Any | None = None) -> bool:
-    """
-    Heuristic: consider the workload heavy when configured sources strongly suggest PDF/EVTX ingestion.
+    """Heuristically detect heavy binary sources in the configuration.
+
+
+    Sources and source runtime objects are inspected for PDF/EVTX-like
+    types or filename extensions that imply expensive binary parsing.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        runtime (Any | None): Optional runtime object providing active
+            source instances.
+
+    Returns:
+        bool: True if the configured or runtime sources suggest heavy
+            PDF/EVTX ingestion, False otherwise.
     """
     try:
         src_cfg = cfg.sources
@@ -234,8 +348,20 @@ def _has_heavy_sources(cfg: RepocapsuleConfig, runtime: Any | None = None) -> bo
 
 
 def _extract_concurrency_hint(obj: Any) -> tuple[Optional[str], bool]:
-    """
-    Return (preferred_executor, cpu_intensive) from an object or its ``concurrency_profile`` attribute.
+    """Extract concurrency preferences from an object.
+
+
+    The object is inspected directly and via an optional
+    ``concurrency_profile`` attribute for a preferred executor kind
+    and whether the work is CPU intensive.
+
+    Args:
+        obj (Any): Object that may expose concurrency hints.
+
+    Returns:
+        tuple[Optional[str], bool]: Normalized preferred executor
+            (``"thread"`` or ``"process"``) and a flag indicating
+            whether the workload is CPU intensive.
     """
     if obj is None:
         return None, False
@@ -257,8 +383,20 @@ def _extract_concurrency_hint(obj: Any) -> tuple[Optional[str], bool]:
 
 
 def _preferred_executor_from_hints(runtime: Any | None) -> Optional[str]:
-    """
-    Examine runtime objects (sources/handlers/extractors) for explicit concurrency hints.
+    """Aggregate explicit concurrency hints from runtime components.
+
+
+    Sources, bytes handlers, and file extractors attached to the
+    runtime are inspected for concurrency hints. CPU-heavy components
+    bias the result toward a process executor.
+
+    Args:
+        runtime (Any | None): Runtime object holding sources, handlers,
+            and extractors.
+
+    Returns:
+        Optional[str]: Preferred executor kind (``"thread"`` or
+            ``"process"``) if one can be determined, otherwise None.
     """
     if runtime is None:
         return None
@@ -295,6 +433,20 @@ def _preferred_executor_from_hints(runtime: Any | None) -> Optional[str]:
 
 
 def _infer_executor_kind(cfg: RepocapsuleConfig, runtime: Any | None = None) -> str:
+    """Infer an executor kind from configuration and runtime hints.
+
+    Explicit concurrency hints on runtime components take precedence
+    over heuristics based on configured sources and bytes handlers.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        runtime (Any | None): Optional runtime object used to refine
+            the decision.
+
+    Returns:
+        str: Inferred executor kind, either ``"thread"`` or
+            ``"process"``.
+    """    
     hinted = _preferred_executor_from_hints(runtime)
     if hinted in {"thread", "process"}:
         return hinted
@@ -306,6 +458,22 @@ def _infer_executor_kind(cfg: RepocapsuleConfig, runtime: Any | None = None) -> 
 
 
 def infer_executor_kind(cfg: RepocapsuleConfig, *, default: str = "thread", runtime: Any | None = None) -> Literal["thread", "process"]:
+    """Return a validated executor kind for the pipeline.
+
+
+    This wraps :func:`_infer_executor_kind` and falls back to the given
+    default when the heuristics cannot determine a valid kind.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        default (str): Fallback executor kind to use when inference
+            fails or returns an unknown value.
+        runtime (Any | None): Optional runtime object used to refine
+            the decision.
+
+    Returns:
+        Literal["thread", "process"]: Normalized executor kind.
+    """    
     normalized_default = default if default in {"thread", "process"} else "thread"
     kind = _infer_executor_kind(cfg, runtime=runtime)
     if kind not in {"thread", "process"}:
@@ -314,8 +482,21 @@ def infer_executor_kind(cfg: RepocapsuleConfig, *, default: str = "thread", runt
 
 
 def resolve_pipeline_executor_config(cfg: RepocapsuleConfig, runtime: Any | None = None) -> tuple[ExecutorConfig, bool]:
-    """
-    Return (executor_config, fail_fast) for the main pipeline.
+    """Build executor settings for the main ingestion pipeline.
+
+    The pipeline section of the configuration controls the maximum
+    worker count, submission window, executor kind, and fail-fast
+    behavior. When ``executor_kind`` is ``"auto"``, a suitable kind
+    is inferred from the configured sources and bytes handlers.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        runtime (Any | None): Optional runtime object whose components
+            may influence executor inference.
+
+    Returns:
+        tuple[ExecutorConfig, bool]: Executor configuration for the
+            pipeline and the ``fail_fast`` flag.
     """
     pc = cfg.pipeline
     max_workers = pc.max_workers or (os.cpu_count() or 1)
@@ -334,6 +515,22 @@ def resolve_pipeline_executor_config(cfg: RepocapsuleConfig, runtime: Any | None
 
 
 def resolve_qc_executor_config(cfg: RepocapsuleConfig, runtime: Any | None = None) -> ExecutorConfig:
+    """Build executor settings for post-extraction QC scoring.
+
+
+    QC executor settings are derived from both the QC and pipeline
+    sections of the configuration. When the QC-specific fields are
+    unset, pipeline defaults are reused, and ``"auto"`` executor kinds
+    are resolved using the same heuristics as the main pipeline.
+
+    Args:
+        cfg (RepocapsuleConfig): Top-level configuration object.
+        runtime (Any | None): Optional runtime object whose components
+            may influence executor inference.
+
+    Returns:
+        ExecutorConfig: Executor configuration to use for QC scoring.
+    """
     qc = cfg.qc
     pc = cfg.pipeline
     pipeline_max_workers = pc.max_workers or (os.cpu_count() or 1)

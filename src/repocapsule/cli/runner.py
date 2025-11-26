@@ -56,7 +56,7 @@ class GitHubRepoProfile:
             expression, if available.
         ctx (RepoContext): Repository context carrying repo-level
             metadata, including license, URL, and optional commit SHA.
-    """    
+    """
     spec: RepoSpec
     ref: str
     license_spdx: str | None
@@ -95,7 +95,7 @@ class RunSummary:
         Returns:
             Dict[str, Any]: A JSON-serializable record ready to be
             written to JSONL sinks.
-        """    
+        """
         meta = RunSummaryMeta(
             config=self.config,
             stats=self.stats,
@@ -265,7 +265,7 @@ def _run_post_qc(jsonl_path: Optional[str], config: RepocapsuleConfig, runtime: 
     Raises:
         RuntimeError: If the JSONL path is missing or a scorer cannot be
             constructed given the current configuration.
-    """    
+    """
     if not jsonl_path:
         raise RuntimeError("Cannot run post-QC summary without a primary JSONL path")
     qc_cfg = config.qc
@@ -373,7 +373,7 @@ def _derive_csv_path(jsonl_path: Optional[str], suffix: Optional[str]) -> Option
     Returns:
         str | None: Derived CSV path, or None if ``jsonl_path`` is
         missing.
-    """    
+    """
     if not jsonl_path:
         return None
     suffix = suffix or "_quality.csv"
@@ -393,7 +393,7 @@ def _append_run_summary(jsonl_path: str, summary: RunSummary) -> None:
         jsonl_path (str): Path to the JSONL file to append to.
         summary (RunSummary | dict): Summary object or pre-built record
             to write as a single line.
-    """    
+    """
     record = summary if isinstance(summary, dict) else summary.to_record()
     with open_jsonl_output_maybe_gz(jsonl_path, "a") as fp:
         fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")))
@@ -409,7 +409,7 @@ def _log_post_qc_summary(summary: Dict[str, Any]) -> None:
     Args:
         summary (dict): QC summary dictionary produced by post-QC
             scoring.
-    """    
+    """
     log.info(
         "Post-QC summary (mode=%s, scored=%d, candidates_low_score=%d, candidates_near_dup=%d)",
         summary.get("mode"),
@@ -448,7 +448,7 @@ def _dispatch_finalizers(
             when a direct footer append is required.
         context (RepoContext | None): Optional repository context
             (currently unused but reserved for future extensions).
-    """    
+    """
     from ..sinks.sinks import JSONLSink, GzipJSONLSink  # local import to avoid cycles
 
     wrote_jsonl = False
@@ -485,7 +485,7 @@ def _score_jsonl_sequential(
 
     Returns:
         list[dict]: QC rows produced for all non-summary records.
-    """    
+    """
     rows: List[Dict[str, Any]] = []
     for shard in shards:
         rows.extend(
@@ -519,7 +519,7 @@ def _score_jsonl_sequential_streaming(
         fail_on_error (bool): Whether to raise on parse/score errors.
         tracker (QCSummaryTracker | None): Optional tracker for error
             accounting.
-    """    
+    """
     for shard in _iter_jsonl_shards(jsonl_path):
         rows = _score_lines(
             shard.lines,
@@ -559,7 +559,7 @@ def _run_parallel_qc(
     Returns:
         bool: True if parallel scoring completed successfully, False if a
         fallback to sequential is required.
-    """    
+    """
     try:
         runtime_scorer = getattr(runtime, "post_qc_scorer", None) if runtime is not None else None
         scorer_proto = runtime_scorer or make_qc_scorer(qc_cfg, new_instance=True)
@@ -651,7 +651,7 @@ def _score_jsonl_parallel_collecting(
         list[dict] | None: Collected QC rows ordered by shard index, or
         None if parallel QC could not be run and a sequential fallback is
         required.
-    """    
+    """
     shard_results: Dict[int, List[Dict[str, Any]]] = {}
 
     def _handle_rows(idx: int, rows: List[Dict[str, Any]]) -> None:
@@ -689,7 +689,7 @@ def _score_jsonl_parallel_streaming(
     Returns:
         bool: True if parallel scoring completed successfully, False if a
         sequential fallback is required.
-    """    
+    """
     def _handle_rows(_: int, rows: List[Dict[str, Any]]) -> None:
         consume_rows(rows)
 
@@ -707,7 +707,7 @@ def _clone_base_config(base_config: Optional[RepocapsuleConfig]) -> RepocapsuleC
 
     Returns:
         RepocapsuleConfig: Cloned or freshly constructed configuration.
-    """    
+    """
     return replace(base_config) if base_config is not None else RepocapsuleConfig()
 
 
@@ -733,7 +733,7 @@ def _build_github_repo_profile(
 
     Raises:
         ValueError: If the URL cannot be parsed as a GitHub repository.
-    """    
+    """
     spec = parse_github_url(url)
     if not spec:
         raise ValueError(f"Invalid GitHub URL: {url!r}")
@@ -866,7 +866,7 @@ def convert_local_dir(
 
     Returns:
         Dict[str, int]: Aggregate statistics for the completed run.
-    """    
+    """
     cfg = make_local_profile(
         root_dir,
         out_jsonl,
@@ -898,7 +898,7 @@ def convert_github(
 
     Returns:
         Dict[str, int]: Aggregate statistics for the completed run.
-    """    
+    """
     cfg = make_github_profile(
         url,
         out_jsonl,
@@ -998,7 +998,7 @@ def make_local_profile(
 
     Returns:
         RepocapsuleConfig: Fully wired configuration for the local run.
-    """    
+    """
     cfg = _clone_base_config(base_config)
     ctx = (
         cfg.sinks.context
@@ -1057,7 +1057,7 @@ def make_github_profile(
 
     Returns:
         RepocapsuleConfig: Fully wired configuration for the GitHub run.
-    """    
+    """
     cfg = _clone_base_config(base_config)
     base_ctx = repo_context or cfg.sinks.context
     profile = _build_github_repo_profile(url, base_context=base_ctx)
@@ -1082,6 +1082,7 @@ def make_github_profile(
     meta_update.update(extra_meta)
     cfg.metadata = cfg.metadata.merged(meta_update)
     return cfg
+
 @dataclass(slots=True)
 class _JsonlShard:
     """In-memory representation of a JSONL shard.
@@ -1090,7 +1091,7 @@ class _JsonlShard:
         index (int): Shard index in the overall sequence.
         lines (list[str]): Raw JSONL lines contained in the shard.
         path (str): Path to the source JSONL file.
-    """    
+    """
     index: int
     lines: List[str]
     path: str
@@ -1155,7 +1156,7 @@ def _iter_jsonl_shards(path: str, shard_size: int = 500) -> Iterator[_JsonlShard
 
     Yields:
         _JsonlShard: Shards containing up to ``shard_size`` lines each.
-    """    
+    """
     chunk: List[str] = []
     idx = 0
     # Use helper so post-QC works with gzipped primary JSONL files.
@@ -1199,7 +1200,7 @@ def _score_lines(
 
     Returns:
         list[dict]: QC rows produced for non-summary records.
-    """    
+    """
     rows: List[Dict[str, Any]] = []
     label = shard_label or source_path
     for idx, line in enumerate(lines, start=1):

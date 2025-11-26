@@ -1,5 +1,7 @@
 # fs.py
 # SPDX-License-Identifier: MIT
+"""Filesystem sources and helpers for repo traversal."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -54,12 +56,20 @@ def read_file_prefix(
     chunk_size: int = 1024 * 1024,
     file_size: int | None = None,
 ) -> tuple[bytes, int]:
-    """
-    Read up to `max_bytes` from `path` and return (data, original_size).
+    """Read a prefix of a file without spiking memory.
 
-    When `max_bytes` is None the entire file is read using a chunked loop to
-    avoid transient spikes. The returned `file_size` reflects the on-disk size
-    (via `stat`) regardless of the truncated prefix length.
+    Args:
+        path (Path): File to read.
+        max_bytes (int | None): Maximum bytes to read; None reads the
+            whole file.
+        chunk_size (int): Chunk size for streaming reads.
+        file_size (int | None): Precomputed size to avoid stat calls.
+
+    Returns:
+        tuple[bytes, int]: The data read and the on-disk file size.
+
+    Raises:
+        ValueError: If chunk_size is not positive.
     """
     if chunk_size <= 0:
         raise ValueError("chunk_size must be positive")
@@ -93,6 +103,7 @@ class GitignoreRule:
     base: str  # POSIX-style path (relative to repo root) of the .gitignore's directory
 
     def cleaned_pattern(self) -> str:
+        """Return the pattern stripped of negation and directory markers."""
         p = self.pattern
         if self.negate:
             p = p[1:]
@@ -111,7 +122,7 @@ class GitignoreMatcher:
         self._rules: list[GitignoreRule] = list(rules or [])
 
     def with_additional(self, extra: Sequence[GitignoreRule]) -> "GitignoreMatcher":
-        """Return a new matcher that appends `extra` after current rules."""
+        """Return a new matcher that appends extra rules after current ones."""
         return GitignoreMatcher([*self._rules, *extra])
 
     @staticmethod
@@ -164,6 +175,7 @@ class GitignoreMatcher:
 # --------------
 
 def _parse_gitignore_lines(lines: Iterable[str], base: str) -> list[GitignoreRule]:
+    """Parse .gitignore lines into normalized rules anchored at base."""
     rules: list[GitignoreRule] = []
     for raw in lines:
         # Normalize newlines once
@@ -201,6 +213,7 @@ def _parse_gitignore_lines(lines: Iterable[str], base: str) -> list[GitignoreRul
 
 
 def _load_gitignore_file(path: Path, repo_root: Path) -> list[GitignoreRule]:
+    """Load and parse a .gitignore file relative to the repository root."""
     try:
         with path.open("r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
@@ -233,20 +246,19 @@ def iter_repo_files(
     skip_hidden: bool = True,
     max_file_bytes: Optional[int] = None,
 ) -> Iterator[Path]:
-    """Yield file `Path`s under `root` according to filters.
+    """Yield files under root honoring size, visibility, and ignore rules.
 
     Args:
-        root: repository directory.
-        include_exts: if provided, only files with suffix in this set (lowercased)
-            are yielded (e.g., {".py", ".md"}).
-        exclude_exts: if provided, files with suffix in this set are skipped.
-        follow_symlinks: whether to follow directory symlinks.
-        respect_gitignore: honor `.gitignore` files while walking.
-        skip_hidden: skip dotfiles and dot-directories by default.
-        max_file_bytes: if set, skip files larger than this many bytes.
+        root: Repository directory to traverse.
+        include_exts: Only yield files with these suffixes (lowercased).
+        exclude_exts: Skip files with these suffixes.
+        follow_symlinks: Whether to follow directory symlinks.
+        respect_gitignore: Honor .gitignore files while walking.
+        skip_hidden: Skip dotfiles and dot-directories.
+        max_file_bytes: Skip files larger than this many bytes.
 
     Yields:
-        `Path` objects for files accepted by the filters.
+        Path: Files accepted by the filters.
     """
     root = Path(root).resolve()
     if not root.is_dir():
@@ -325,7 +337,7 @@ def iter_repo_files(
 
 
 def collect_repo_files(*args, **kwargs) -> list[Path]:
-    """Return a list of files produced by `iter_repo_files`.
+    """Return a list of files produced by iter_repo_files.
 
     This is a convenience wrapper useful in tests.
     """
@@ -333,6 +345,7 @@ def collect_repo_files(*args, **kwargs) -> list[Path]:
 
 
 def _is_hidden_rel(rel: Path) -> bool:
+    """Return True if any segment of the relative path is hidden."""
     parts = rel.parts if isinstance(rel, Path) else Path(rel).parts
     for part in parts:
         if part in (".", ".."):
@@ -343,9 +356,10 @@ def _is_hidden_rel(rel: Path) -> bool:
 
 
 class LocalDirSource(Source):
-    """Iterates files from a local repo directory with early filters (hidden/ext/size)."""
+    """Iterate files from a local repo directory with early filters."""
 
     def __init__(self, root: str | Path, *, config, context: Optional[RepoContext] = None) -> None:
+        """Configure traversal parameters for a repository root."""
         self.root = Path(root)
         self._cfg = config
         self.context = context
@@ -359,6 +373,7 @@ class LocalDirSource(Source):
         return None
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Yield FileItems honoring size, extension, and visibility filters."""
         cfg = self._cfg
         for path in iter_repo_files(
             self.root,
@@ -397,9 +412,7 @@ class LocalDirSource(Source):
 
 
 class PatternFileSource(Source):
-    """
-    Source that yields FileItems for files matching glob patterns relative to a root.
-    """
+    """Yield FileItems for files matching glob patterns relative to a root."""
 
     def __init__(
         self,
@@ -409,6 +422,7 @@ class PatternFileSource(Source):
         config,
         context: Optional[RepoContext] = None,
     ) -> None:
+        """Configure glob patterns and filters for a repository root."""
         if not patterns:
             raise ValueError("patterns must contain at least one glob expression")
         self.root = Path(root)
@@ -419,6 +433,7 @@ class PatternFileSource(Source):
         self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Iterate matching files and emit FileItems with optional prefix reads."""
         cfg = self._cfg
         skip_hidden = getattr(cfg, "skip_hidden", True)
         max_file_bytes = getattr(cfg, "max_file_bytes", None)

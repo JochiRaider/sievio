@@ -1,6 +1,8 @@
 # pdfio.py
 # SPDX-License-Identifier: MIT
 
+"""PDF helpers for sniffing, parsing, and emitting RepoCapsule records."""
+
 from __future__ import annotations
 from io import BytesIO
 from typing import Optional, List, Dict, Any, Iterable
@@ -15,7 +17,15 @@ from ..core.interfaces import RepoContext, Record
 __all__ = ["extract_pdf_records", "sniff_pdf", "handle_pdf"]
 
 def sniff_pdf(data: bytes, rel: str) -> bool:
-    """Sniff for PDF files by extension or magic bytes."""
+    """Detects whether the payload looks like a PDF file.
+
+    Args:
+        data (bytes): Raw file bytes.
+        rel (str): Relative path used for extension checks.
+
+    Returns:
+        bool: True if the data appears to be a PDF.
+    """
     return rel.lower().endswith(".pdf") or data.startswith(b"%PDF-")
 
 def handle_pdf(
@@ -24,9 +34,16 @@ def handle_pdf(
     ctx: Optional[RepoContext],
     policy: Optional[ChunkPolicy],
 ) -> Optional[Iterable[Record]]:
-    """
-    BytesHandler implementation for PDF files.
-    Wraps extract_pdf_records to match the BytesHandler protocol.
+    """BytesHandler adapter that processes PDF payloads.
+
+    Args:
+        data (bytes): Raw PDF bytes.
+        rel (str): Relative path for metadata.
+        ctx (RepoContext | None): Optional repository context.
+        policy (ChunkPolicy | None): Chunking policy; passed through.
+
+    Returns:
+        Iterable[Record] | None: Extracted records or None on failure.
     """
     return extract_pdf_records(
         data,
@@ -40,7 +57,14 @@ def handle_pdf(
 
 
 def _iso8601(v: Any) -> str | None:
-    """Best-effort ISO-8601 for pypdf date-like fields (datetime or PDF 'D:YYYY...' strings)."""
+    """Formats pypdf date-like fields into ISO-8601 when possible.
+
+    Args:
+        v (Any): Source value, typically a datetime or PDF date string.
+
+    Returns:
+        str | None: Normalized ISO-8601 string or None if no value.
+    """
     if v is None:
         return None
     if isinstance(v, datetime):
@@ -53,13 +77,27 @@ def _iso8601(v: Any) -> str | None:
     return s
 
 def _first_lang_value(xmp_lang_alt: Any) -> str | None:
-    """Pick a human-friendly value from an XMP language alternative dict."""
+    """Picks a human-friendly value from an XMP language alternative dict.
+
+    Args:
+        xmp_lang_alt (Any): XMP lang alternative mapping or value.
+
+    Returns:
+        str | None: Preferred localized string, if available.
+    """
     if isinstance(xmp_lang_alt, dict):
         return xmp_lang_alt.get("x-default") or next(iter(xmp_lang_alt.values()), None)
     return str(xmp_lang_alt) if xmp_lang_alt else None
 
 def _collect_pdf_metadata(reader: PdfReader) -> Dict[str, Any]:
-    """Collect classic Info dict + a small XMP subset; drop empty/None values."""
+    """Collects classic Info fields and a subset of XMP metadata.
+
+    Args:
+        reader (PdfReader): PDF reader instance to inspect.
+
+    Returns:
+        Dict[str, Any]: Metadata dictionary with empty values removed.
+    """
     out: Dict[str, Any] = {}
 
     # Classic PDF metadata (DocumentInformation)
@@ -115,14 +153,25 @@ def extract_pdf_records(
     password: Optional[str] = None,
     mode: str = "page",  # "page" => 1 record per page; "chunk" => join+chunk
 ) -> List[Dict[str, object]]:
-    """
-    Turn a PDF (bytes) into RepoCapsule JSONL records with metadata.
+    """Converts PDF bytes into RepoCapsule JSONL records with metadata.
 
-    Notes
-    -----
-    This function is CPU-bound (pypdf parsing + text extraction + chunking). For large batches of PDFs,
-    configure the pipeline with a process executor, e.g. PipelineConfig.executor_kind="process" or "auto",
-    so that the concurrency helper can choose processes for PDF-heavy workloads.
+    This routine is CPU-bound (pypdf parsing, text extraction, and
+    chunking). For large batches, configure the pipeline to use process
+    execution so PDF-heavy workloads can be parallelized.
+
+    Args:
+        data (bytes): Raw PDF content.
+        rel_path (str): Relative path used in record metadata.
+        policy (ChunkPolicy | None): Chunking policy for non-page mode.
+        repo_full_name (str | None): Repository identifier for metadata.
+        repo_url (str | None): Repository URL for metadata.
+        license_id (str | None): SPDX license identifier.
+        password (str | None): Password for encrypted PDFs.
+        mode (str): "page" for one record per page, "chunk" to join and
+            chunk the entire document.
+
+    Returns:
+        List[Dict[str, object]]: Extracted records with text and metadata.
     """
     policy = policy or ChunkPolicy(mode="doc")
     reader = PdfReader(BytesIO(data))

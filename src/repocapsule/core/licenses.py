@@ -280,12 +280,15 @@ REPO_SCOPE_PATTERNS = (
 
 
 class _ZipReader:
+    """Read files from a zip archive while respecting a base prefix."""
+
     def __init__(self, zipf: zipfile.ZipFile, subpath: Optional[str]):
         self.zipf = zipf
         self.top_prefix = self._infer_top_prefix()
         self.base_prefix = self._build_base_prefix(subpath)
 
     def _infer_top_prefix(self) -> str:
+        """Infer the top-level directory created by GitHub zipballs."""
         components: set[str] = set()
         for name in self.zipf.namelist():
             if not name:
@@ -300,6 +303,7 @@ class _ZipReader:
         return ""
 
     def _build_base_prefix(self, subpath: Optional[str]) -> str:
+        """Construct the effective prefix for scoped archive walks."""
         prefix = self.top_prefix.strip("/")
         if subpath:
             prefix = "/".join(filter(None, [prefix, subpath.strip("/")]))
@@ -308,6 +312,7 @@ class _ZipReader:
         return prefix
 
     def iter_root_files(self) -> Iterable[Tuple[str, zipfile.ZipInfo]]:
+        """Yield files located at the logical root of the archive."""
         for info in self.zipf.infolist():
             name = info.filename
             if not name or name.endswith("/"):
@@ -320,6 +325,7 @@ class _ZipReader:
             yield rel, info
 
     def iter_files(self) -> Iterable[Tuple[str, zipfile.ZipInfo]]:
+        """Yield all files under the scoped prefix."""
         for info in self.zipf.infolist():
             name = info.filename
             if not name or name.endswith("/"):
@@ -332,6 +338,7 @@ class _ZipReader:
             yield rel, info
 
     def read_text(self, info: zipfile.ZipInfo, limit: int) -> Optional[str]:
+        """Read text content from a zip entry with a byte limit."""
         try:
             with self.zipf.open(info) as fh:
                 data = fh.read(limit)
@@ -341,10 +348,13 @@ class _ZipReader:
 
 
 class _TreeReader:
+    """Read files from a local directory tree with normalized paths."""
+
     def __init__(self, root: Path):
         self.root = root
 
     def iter_root_files(self) -> Iterable[Tuple[str, Path]]:
+        """Yield files located at the root of the directory."""
         try:
             entries = list(self.root.iterdir())
         except Exception:
@@ -354,6 +364,7 @@ class _TreeReader:
                 yield entry.name, entry
 
     def iter_files(self) -> Iterable[Tuple[str, Path]]:
+        """Yield all files under the directory recursively."""
         for path in self.root.rglob("*"):
             if not path.is_file():
                 continue
@@ -364,6 +375,7 @@ class _TreeReader:
             yield rel.as_posix(), path
 
     def read_text(self, path: Path, limit: int) -> Optional[str]:
+        """Read text content from a path with a byte limit."""
         try:
             with path.open("rb") as fh:
                 data = fh.read(limit)
@@ -373,7 +385,8 @@ class _TreeReader:
 
 
 def detect_license_in_zip(zip_path: str, subpath: Optional[str]) -> DetectionResult:
-    """Detect license metadata inside a GitHub zipball.
+    """
+    Detect license metadata inside a GitHub zipball.
 
     Scans the archive (optionally restricted to a subpath) for SPDX headers,
     manifest-declared licenses, canonical license files, and content licenses.
@@ -384,8 +397,7 @@ def detect_license_in_zip(zip_path: str, subpath: Optional[str]) -> DetectionRes
             treat as the logical root. If None, the archive root is used.
 
     Returns:
-        DetectionResult: A tuple of the detected SPDX expression (or None if
-        no license was found) and a metadata dictionary describing the
+        DetectionResult: SPDX expression (or None) and metadata describing the
         detection method and paths.
     """
     try:
@@ -397,21 +409,21 @@ def detect_license_in_zip(zip_path: str, subpath: Optional[str]) -> DetectionRes
 
 
 def detect_license_in_tree(root_dir: str | Path, subpath: Optional[str]) -> DetectionResult:
-    """Detect license metadata in a local filesystem tree.
+    """
+    Detect license metadata in a local filesystem tree.
 
     Scans a directory tree (optionally restricted to a subpath) for SPDX
     headers, manifest-declared licenses, canonical license files, and content
     licenses.
 
     Args:
-        root_dir (str | Path): Root directory of the repository or project
-            on the local filesystem.
+        root_dir (str | Path): Root directory of the repository or project on
+            the local filesystem.
         subpath (str | None): Optional subdirectory under ``root_dir`` to
             treat as the logical root. If None, ``root_dir`` is used.
 
     Returns:
-        DetectionResult: A tuple of the detected SPDX expression (or None if
-        no license was found) and a metadata dictionary describing the
+        DetectionResult: SPDX expression (or None) and metadata describing the
         detection method and paths.
     """
     root = Path(root_dir).expanduser()
@@ -424,6 +436,19 @@ def detect_license_in_tree(root_dir: str | Path, subpath: Optional[str]) -> Dete
 
 
 def _detect_with_reader(reader, *, location: str, subpath: Optional[str]) -> DetectionResult:
+    """
+    Run the ordered detection pipeline against an abstract reader.
+
+    Args:
+        reader: Object exposing ``iter_files``, ``iter_root_files``, and
+            ``read_text``.
+        location (str): Human-friendly location string for logging.
+        subpath (str | None): Logical root within the location.
+
+    Returns:
+        DetectionResult: SPDX expression (or None) and metadata describing the
+        detection method and paths.
+    """
     content_detection = _find_content_license(reader)
 
     detection: Optional[DetectionResult] = _detect_spdx_header(reader)
@@ -454,6 +479,7 @@ def _detect_with_reader(reader, *, location: str, subpath: Optional[str]) -> Det
 
 
 def _detect_spdx_header(reader) -> Optional[DetectionResult]:
+    """Scan files for SPDX-License-Identifier headers within a byte budget."""
     scanned = 0
     for rel_path, handle in reader.iter_files():
         if scanned >= MAX_SPDX_SCAN_FILES:
@@ -483,6 +509,7 @@ def _detect_spdx_header(reader) -> Optional[DetectionResult]:
 
 
 def _detect_from_manifests(reader) -> Optional[DetectionResult]:
+    """Inspect common package manifests for declared licenses."""
     manifest_handlers = (
         ("package.json", _handle_package_json),
         ("Cargo.toml", _handle_cargo_toml),
@@ -505,6 +532,7 @@ def _detect_from_manifests(reader) -> Optional[DetectionResult]:
 
 
 def _detect_from_license_files(reader) -> Optional[DetectionResult]:
+    """Match canonical license files using anchor phrase detection."""
     lower_map = {name.lower(): (name, handle) for name, handle in reader.iter_root_files()}
     for candidate in LICENSE_FILES:
         entry = lower_map.get(candidate.lower())
@@ -529,6 +557,7 @@ def _detect_from_license_files(reader) -> Optional[DetectionResult]:
 
 
 def _find_content_license(reader) -> Optional[DetectionResult]:
+    """Detect Creative Commons content licenses via REUSE or README hints."""
     reuse_detection = _detect_reuse_cc_license(reader)
     if reuse_detection:
         return reuse_detection
@@ -536,6 +565,7 @@ def _find_content_license(reader) -> Optional[DetectionResult]:
 
 
 def _detect_reuse_cc_license(reader) -> Optional[DetectionResult]:
+    """Look for REUSE-style Creative Commons licenses in a licenses folder."""
     root_candidates: list[tuple[str, object, str]] = []
     nested_candidates: list[tuple[str, object, str]] = []
     for rel_path, handle in reader.iter_files():
@@ -575,6 +605,7 @@ def _detect_reuse_cc_license(reader) -> Optional[DetectionResult]:
 
 
 def _cc_id_from_filename(filename: str) -> Optional[str]:
+    """Infer a CC license id from a REUSE-style filename."""
     base = filename.strip()
     if not base:
         return None
@@ -588,6 +619,7 @@ def _cc_id_from_filename(filename: str) -> Optional[str]:
 
 
 def _detect_readme_cc_license(reader) -> Optional[DetectionResult]:
+    """Search README-like files for Creative Commons license URLs."""
     root_files = list(reader.iter_root_files())
     for name, handle in root_files:
         lower = name.lower()
@@ -620,6 +652,7 @@ def _detect_readme_cc_license(reader) -> Optional[DetectionResult]:
 
 
 def _license_id_from_cc_url(url: str) -> Optional[str]:
+    """Extract a known CC license identifier from a URL."""
     normalized = url.split("://", 1)[-1].lower()
     for pattern, license_id in CC_URL_PATTERNS.items():
         if pattern in normalized:
@@ -628,6 +661,7 @@ def _license_id_from_cc_url(url: str) -> Optional[str]:
 
 
 def _extract_line_hint(text: str, index: int) -> Optional[str]:
+    """Return the line of text surrounding a matched URL."""
     if index < 0 or index >= len(text):
         return None
     start = text.rfind("\n", 0, index)
@@ -643,6 +677,7 @@ def _extract_line_hint(text: str, index: int) -> Optional[str]:
 
 
 def _looks_repo_scope(line: Optional[str], lowered_text: str) -> bool:
+    """Heuristically determine whether a CC notice applies to the whole repo."""
     if line:
         segment = line.lower()
         for phrase in REPO_SCOPE_PATTERNS:
@@ -658,6 +693,7 @@ def _attach_content_license(
     detection: Optional[DetectionResult],
     content_detection: Optional[DetectionResult],
 ) -> Optional[DetectionResult]:
+    """Merge content license metadata into a primary detection result."""
     if not detection or not content_detection:
         return detection
     license_id, meta = detection
@@ -686,6 +722,7 @@ def _attach_content_license(
 
 
 def _handle_package_json(text: str, rel_name: str, reader, root_files, lower_map) -> Optional[DetectionResult]:
+    """Resolve licenses declared in package.json."""
     try:
         data = json.loads(text)
     except Exception:
@@ -709,6 +746,19 @@ def _handle_package_json(text: str, rel_name: str, reader, root_files, lower_map
 def _resolve_package_json_license(
     value: str, reader, root_files, lower_map
 ) -> Tuple[Optional[str], Optional[str], Optional[str]]:
+    """
+    Resolve the ``license`` field of package.json to an SPDX expression.
+
+    Args:
+        value (str): Raw license field value.
+        reader: Reader used to open referenced files.
+        root_files: Mapping of root filenames to handles.
+        lower_map: Case-insensitive filename map.
+
+    Returns:
+        Tuple[str | None, str | None, str | None]: SPDX expression, license
+        path (if from a file), and SHA-256 hash.
+    """
     value = value.strip()
     if not value:
         return None, None, None
@@ -736,6 +786,7 @@ def _resolve_package_json_license(
 
 
 def _handle_cargo_toml(text: str, rel_name: str, reader, root_files, lower_map) -> Optional[DetectionResult]:
+    """Resolve licenses declared in Cargo.toml."""
     if tomllib is None:
         return None
     try:
@@ -780,6 +831,7 @@ def _handle_cargo_toml(text: str, rel_name: str, reader, root_files, lower_map) 
 
 
 def _handle_pyproject_toml(text: str, rel_name: str, reader, root_files, lower_map) -> Optional[DetectionResult]:
+    """Resolve licenses declared in pyproject.toml."""
     if tomllib is None:
         return None
     try:
@@ -850,6 +902,7 @@ def _handle_pyproject_toml(text: str, rel_name: str, reader, root_files, lower_m
 
 
 def _match_license_text(text: str) -> Optional[str]:
+    """Match license text against anchor phrases to infer an SPDX id."""
     normalized = (
         text.lower()
         .replace('"', "")
@@ -862,6 +915,7 @@ def _match_license_text(text: str) -> Optional[str]:
 
 
 def _normalize_spdx_expression(expr: str) -> Optional[str]:
+    """Normalize an SPDX expression, validating structure and tokens."""
     expr = expr.strip()
     if not expr:
         return None
@@ -873,17 +927,20 @@ def _normalize_spdx_expression(expr: str) -> Optional[str]:
 
 
 def _normalize_license_text(text: str) -> str:
+    """Normalize license text for hashing comparisons."""
     lines = [line.rstrip() for line in text.splitlines()]
     normalized = "\n".join(lines).strip()
     return normalized
 
 
 def _hash_text(text: str) -> str:
+    """Return the SHA-256 hex digest of a text string."""
     data = text.encode("utf-8", errors="ignore")
     return hashlib.sha256(data).hexdigest()
 
 
 def _tokenize_spdx(expr: str) -> list[str]:
+    """Tokenize an SPDX expression into operators, parens, and operands."""
     tokens: list[str] = []
     i = 0
     while i < len(expr):
@@ -904,6 +961,7 @@ def _tokenize_spdx(expr: str) -> list[str]:
 
 
 def _validate_spdx_tokens(tokens: list[str]) -> Optional[str]:
+    """Validate tokenized SPDX expressions and return a normalized string."""
     stack = 0
     expect_operand = True
     output: list[str] = []
@@ -953,12 +1011,14 @@ def _validate_spdx_tokens(tokens: list[str]) -> Optional[str]:
 
 
 def _is_license_token(token: str) -> bool:
+    """Return True if a token is a valid SPDX license identifier."""
     if token in SPDX_LICENSE_IDS:
         return True
     return bool(LICENSE_REF_RE.match(token))
 
 
 def _is_license_exception(token: str) -> bool:
+    """Return True if a token is a valid SPDX license exception."""
     if token in SPDX_LICENSE_EXCEPTIONS:
         return True
     return bool(LICENSE_REF_RE.match(token))

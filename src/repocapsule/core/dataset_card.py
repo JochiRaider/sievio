@@ -1,5 +1,6 @@
 # dataset_card.py
 # SPDX-License-Identifier: MIT
+"""Helpers to build dataset card fragments and render Hugging Face cards."""
 from __future__ import annotations
 
 import json
@@ -46,6 +47,7 @@ _LANG_META_KEYS = ("language", "lang")
 
 
 def _package_version() -> str:
+    """Return the installed repocapsule version string."""
     try:
         from importlib.metadata import version  # type: ignore
 
@@ -55,6 +57,7 @@ def _package_version() -> str:
 
 
 def _normalize_str_list(value: Any) -> list[str] | None:
+    """Convert strings or iterables into a cleaned list of strings."""
     if value is None:
         return None
     if isinstance(value, str):
@@ -66,6 +69,7 @@ def _normalize_str_list(value: Any) -> list[str] | None:
 
 
 def _merge_str_lists(*values: Any) -> list[str] | None:
+    """Merge multiple string or iterable values into a sorted unique list."""
     merged: set[str] = set()
     for value in values:
         items = _normalize_str_list(value)
@@ -76,6 +80,7 @@ def _merge_str_lists(*values: Any) -> list[str] | None:
 
 
 def _hf_size_category(n_examples: int) -> str:
+    """Return the Hugging Face size category label for a record count."""
     for threshold, label in _SIZE_BUCKETS:
         if n_examples < threshold:
             return label
@@ -84,6 +89,25 @@ def _hf_size_category(n_examples: int) -> str:
 
 @dataclass(slots=True)
 class CardFragment:
+    """Summary of a processed JSONL file used to assemble a dataset card.
+
+    Attributes:
+        schema_version (int): Schema version for compatibility checks.
+        file (str): JSONL filename the fragment describes.
+        split (str | None): Dataset split name.
+        num_examples (int): Number of records contained in the file.
+        num_bytes (int): Size of the file in bytes.
+        language (list[str] | None): Languages observed in the file.
+        multilinguality (str | None): Multilinguality label.
+        license (list[str] | str | None): License identifier(s).
+        size_categories (list[str] | str | None): Hugging Face size buckets.
+        task_categories (list[str] | str | None): High-level task labels.
+        task_ids (list[str] | str | None): Task identifiers.
+        tags (list[str] | None): Additional tags such as modalities.
+        source_repos (list[str] | None): Origin repositories when available.
+        extra (dict[str, Any]): Extra metadata preserved verbatim.
+    """
+
     schema_version: int = CARD_FRAGMENT_SCHEMA_VERSION
     file: str = ""
     split: str | None = None
@@ -100,6 +124,7 @@ class CardFragment:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Convert the fragment into a JSON-serializable dictionary."""
         data: dict[str, Any] = {
             "schema_version": int(self.schema_version),
             "file": self.file,
@@ -120,6 +145,7 @@ class CardFragment:
 
     @classmethod
     def from_dict(cls, data: Mapping[str, Any]) -> "CardFragment":
+        """Reconstruct a fragment from a serialized dictionary."""
         schema_version = int(data.get("schema_version") or 0)
         if schema_version != CARD_FRAGMENT_SCHEMA_VERSION:
             raise ValueError(
@@ -148,6 +174,8 @@ class CardFragment:
 
 @dataclass(slots=True)
 class DatasetCardFields:
+    """Fields for rendering a Hugging Face dataset card."""
+
     language: list[str] | None = None
     license: list[str] | str | None = None
     annotations_creators: list[str] | str | None = None
@@ -166,6 +194,7 @@ class DatasetCardFields:
     extra: dict[str, Any] = field(default_factory=dict)
 
     def to_yaml_dict(self) -> dict[str, Any]:
+        """Return a dictionary ready for YAML serialization."""
         data: dict[str, Any] = {}
 
         def _set(key: str, value: Any) -> None:
@@ -194,6 +223,7 @@ class DatasetCardFields:
 
 
 def _sample_languages(path: Path, *, max_records: int = 100) -> tuple[list[str] | None, str | None]:
+    """Sample language metadata from a JSONL path to infer multilinguality."""
     langs: set[str] = set()
     sampled = 0
     try:
@@ -237,6 +267,7 @@ def _choose_split(
     cfg: RepocapsuleConfig,
     explicit: str | None,
 ) -> str:
+    """Pick a split name from explicit input, config, or metadata."""
     if explicit:
         return explicit
     card_cfg = getattr(cfg, "dataset_card", None)
@@ -253,6 +284,7 @@ def _choose_split(
 
 
 def _derive_tags_from_stats(stats: Mapping[str, Any]) -> list[str] | None:
+    """Generate modality tags from pipeline statistics."""
     if not isinstance(stats, Mapping):
         return None
     ext_counts = stats.get("ext_counts") or stats.get("by_ext")
@@ -280,6 +312,7 @@ def build_card_fragment_for_run(
     *,
     split: str | None = None,
 ) -> CardFragment:
+    """Build a fragment describing one processed JSONL output file."""
     stats_dict = stats.as_dict() if isinstance(stats, PipelineStats) else dict(stats)
     jsonl_path_str = cfg.metadata.primary_jsonl or cfg.sinks.primary_jsonl_name
     if not jsonl_path_str:
@@ -349,6 +382,7 @@ def write_card_fragment_for_run(
     *,
     split: str | None = None,
 ) -> Path:
+    """Write a card fragment sidecar JSON for the current pipeline run."""
     frag = build_card_fragment_for_run(cfg, stats, split=split)
     jsonl_path_str = cfg.metadata.primary_jsonl or cfg.sinks.primary_jsonl_name
     if not jsonl_path_str:
@@ -361,6 +395,7 @@ def write_card_fragment_for_run(
 
 
 def load_card_fragment(path: Path) -> CardFragment:
+    """Load a card fragment from a JSON sidecar file."""
     data = json.loads(path.read_text(encoding="utf-8"))
     return CardFragment.from_dict(data)
 
@@ -370,6 +405,7 @@ def merge_fragments(
     *,
     overrides: Mapping[str, Any] | None = None,
 ) -> DatasetCardFields:
+    """Combine multiple card fragments into dataset-level fields."""
     overrides = overrides or {}
     total_examples = sum(f.num_examples for f in fragments)
     total_bytes = sum(f.num_bytes for f in fragments)
@@ -499,6 +535,7 @@ def merge_fragments(
 
 
 def _format_scalar(value: Any) -> str:
+    """Render a scalar value into a YAML-safe string."""
     if isinstance(value, bool):
         return "true" if value else "false"
     if value is None:
@@ -513,6 +550,7 @@ def _format_scalar(value: Any) -> str:
 
 
 def _yaml_lines_for_item(key: str, value: Any, indent: int = 0) -> list[str]:
+    """Render a YAML key/value pair into lines with indentation."""
     prefix = " " * indent
     if isinstance(value, Mapping):
         lines = [f"{prefix}{key}:"]
@@ -535,6 +573,7 @@ def _yaml_lines_for_item(key: str, value: Any, indent: int = 0) -> list[str]:
 
 
 def build_yaml_block(fields: DatasetCardFields) -> str:
+    """Construct the YAML frontmatter block for a dataset card."""
     yaml_dict = fields.to_yaml_dict()
     lines: list[str] = []
     for key, value in yaml_dict.items():
@@ -543,6 +582,7 @@ def build_yaml_block(fields: DatasetCardFields) -> str:
 
 
 def _human_readable_bytes(n: int) -> str:
+    """Convert a byte count into a human-friendly string."""
     units = ["B", "KB", "MB", "GB", "TB", "PB"]
     size = float(n)
     for unit in units:
@@ -553,6 +593,7 @@ def _human_readable_bytes(n: int) -> str:
 
 
 def _default_summary(fields: DatasetCardFields) -> str:
+    """Produce a default summary paragraph for the dataset card."""
     total_examples = fields.extra.get("total_examples") if isinstance(fields.extra, Mapping) else None
     total_bytes = fields.extra.get("total_bytes") if isinstance(fields.extra, Mapping) else None
     splits = fields.dataset_info.get("splits") if isinstance(fields.dataset_info, Mapping) else None
@@ -572,6 +613,7 @@ def _default_summary(fields: DatasetCardFields) -> str:
 
 
 def _default_supported_tasks(fields: DatasetCardFields) -> str:
+    """Render the supported tasks section using task categories and IDs."""
     tasks = _normalize_str_list(fields.task_categories) or []
     task_ids = _normalize_str_list(fields.task_ids) or []
     if not tasks and not task_ids:
@@ -585,6 +627,7 @@ def _default_supported_tasks(fields: DatasetCardFields) -> str:
 
 
 def _default_languages_section(fields: DatasetCardFields) -> str:
+    """Render the languages section from normalized language values."""
     langs = _normalize_str_list(fields.language)
     if not langs:
         return "[More Information Needed]"
@@ -592,6 +635,7 @@ def _default_languages_section(fields: DatasetCardFields) -> str:
 
 
 def _default_data_instances_section() -> str:
+    """Describe the default data instance schema for records."""
     return (
         "Records are stored as JSON lines with `text` and `meta` keys. "
         "Each line represents one chunked document segment with accompanying metadata."
@@ -599,6 +643,7 @@ def _default_data_instances_section() -> str:
 
 
 def _default_data_fields_section(fields: DatasetCardFields) -> str:
+    """Render the data fields section from dataset_info features."""
     features = None
     if isinstance(fields.dataset_info, Mapping):
         features = fields.dataset_info.get("features")
@@ -616,6 +661,7 @@ def _default_data_fields_section(fields: DatasetCardFields) -> str:
 
 
 def _default_data_splits_section(fields: DatasetCardFields) -> str:
+    """Render the data splits section from dataset_info split metadata."""
     splits = None
     if isinstance(fields.dataset_info, Mapping):
         splits = fields.dataset_info.get("splits")
@@ -748,6 +794,7 @@ def render_dataset_card(
     *,
     body_overrides: Mapping[str, str] | None = None,
 ) -> str:
+    """Render a full dataset card from fields and optional overrides."""
     body_overrides = dict(body_overrides or {})
     yaml_block = build_yaml_block(fields)
     dataset_name = fields.pretty_name or "Dataset"
@@ -775,6 +822,7 @@ def build_dataset_card_from_fragments(
     overrides: Mapping[str, Any] | None = None,
     body_overrides: Mapping[str, str] | None = None,
 ) -> str:
+    """Build and render a dataset card from fragment sidecar files."""
     fragments = [load_card_fragment(Path(p)) for p in fragment_paths]
     fields = merge_fragments(fragments, overrides=overrides)
     return render_dataset_card(fields, body_overrides=body_overrides)

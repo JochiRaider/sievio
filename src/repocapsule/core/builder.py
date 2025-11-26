@@ -152,7 +152,7 @@ class PipelinePreparationResult:
             (sniff, handler) pairs used to handle binary formats.
         file_extractor (FileExtractor): Extractor used to process files
             that are not handled by bytes handlers.
-    """    
+    """
     bytes_handlers: tuple[Tuple[Sniff, BytesHandler], ...]
     file_extractor: FileExtractor
 
@@ -172,7 +172,7 @@ class QCPreparationResult:
             emitting QC CSV reports.
         post_qc_scorer (QualityScorer | None): Scorer to use for
             post-hoc QC runs when mode is QCMode.POST.
-    """    
+    """
     qc_cfg: QCConfig
     qc_hook_factory: Callable[[Any], tuple[Callable[[Record], bool], Callable[[Record], Record]]] | None
     scorer_for_csv: QualityScorer | None
@@ -303,7 +303,6 @@ def build_pipeline_plan(
 def _prepare_http(cfg: RepocapsuleConfig, overrides: PipelineOverrides | None = None) -> Optional[SafeHttpClient]:
     """Resolve the SafeHttpClient to use for remote-capable sources.
 
-
     If an override is provided via PipelineOverrides, it is returned
     as-is. Otherwise a new client is built from ``cfg.http``.
 
@@ -324,7 +323,6 @@ def _prepare_http(cfg: RepocapsuleConfig, overrides: PipelineOverrides | None = 
 
 def _assert_runtime_free_spec(cfg: RepocapsuleConfig) -> None:
     """Validate that a RepocapsuleConfig does not embed runtime objects.
-
 
     This enforces the convention that declarative specs remain pure data
     by rejecting baked-in sources, sinks, HTTP clients, extractors,
@@ -399,7 +397,7 @@ def _prepare_sinks(cfg: RepocapsuleConfig, registry: SinkRegistry, *, ctx: SinkF
 
     Raises:
         ValueError: If ``cfg.sinks.sinks`` is already populated.
-    """    
+    """
     if cfg.sinks.sinks:
         raise ValueError("sinks.sinks must be empty in specs; provide declarative specs instead.")
     sinks_cfg = replace(cfg.sinks, sinks=tuple())
@@ -482,7 +480,6 @@ def _prepare_qc(
 ) -> QCPreparationResult:
     """Resolve quality-control configuration and scorers for a run.
 
-
     This helper normalizes QC mode, wires inline or post-hoc scorers,
     and returns an updated QCConfig plus any factories needed by the
     pipeline.
@@ -501,7 +498,7 @@ def _prepare_qc(
     Raises:
         RuntimeError: If inline or advisory QC is requested but QC
             extras are not installed and no scorer override is provided.
-    """    
+    """
     qc_cfg = cfg.qc
     mode = qc_cfg.normalize_mode()
     qc_hook_factory: Callable[[Any], tuple[Callable[[Record], bool], Callable[[Record], Record]]] | None = None
@@ -573,7 +570,7 @@ def _attach_run_header_record(cfg: RepocapsuleConfig, sinks: Sequence[Sink]) -> 
         cfg (RepocapsuleConfig): Effective configuration for the run.
         sinks (Sequence[Sink]): Runtime sinks that may accept header
             records.
-    """    
+    """
     header = build_run_header_record(cfg)
     for sink in sinks:
         setter = getattr(sink, "set_header_record", None)
@@ -589,7 +586,7 @@ def _strip_runtime_from_spec(cfg: RepocapsuleConfig) -> None:
 
     Args:
         cfg (RepocapsuleConfig): Configuration to sanitize.
-    """    
+    """
     cfg.http.client = None
     cfg.sources.sources = ()
     cfg.sinks.sinks = ()

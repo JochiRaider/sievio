@@ -1,5 +1,6 @@
 # records.py
 # SPDX-License-Identifier: MIT
+"""Helpers for record construction, metadata normalization, and run headers."""
 
 from __future__ import annotations
 
@@ -175,7 +176,14 @@ EXT_LANG: Dict[str, str] = {
 
 @dataclass
 class LanguageConfig:
-    """Configurable file-type & language hints (defaults mirror module globals)."""
+    """Configurable file-type and language hints.
+
+    Attributes:
+        code_exts (set[str]): Extensions treated as code.
+        doc_exts (set[str]): Extensions treated as documentation/text.
+        ext_lang (Dict[str, str]): Mapping of extension to language tag.
+    """
+
     code_exts: set[str] = field(default_factory=lambda: set(CODE_EXTS))
     doc_exts: set[str]  = field(default_factory=lambda: set(DOC_EXTS))
     ext_lang: Dict[str, str] = field(default_factory=lambda: dict(EXT_LANG))
@@ -190,8 +198,12 @@ DEFAULT_LANGCFG = LanguageConfig()
 def guess_lang_from_path(path: str | Path, cfg: LanguageConfig | None = None) -> Tuple[str, str]:
     """Return (kind, lang) for the given path.
 
-    kind  {"code", "doc"}
-    lang is a coarse language tag from EXT_LANG, defaulting to extension or 'text'.
+    Args:
+        path (str | Path): File path to classify.
+        cfg (LanguageConfig | None): Optional language config overrides.
+
+    Returns:
+        Tuple[str, str]: Tuple of kind ("code" or "doc") and language tag.
     """
     cfg = cfg or DEFAULT_LANGCFG
     p = Path(path)    
@@ -208,6 +220,7 @@ def guess_lang_from_path(path: str | Path, cfg: LanguageConfig | None = None) ->
 
 
 def is_code_file(path: str | Path, cfg: LanguageConfig | None = None) -> bool:
+    """Return True if the path extension is recognized as code."""
     cfg = cfg or DEFAULT_LANGCFG
     return Path(path).suffix.lower() in cfg.code_exts
 
@@ -285,12 +298,20 @@ QC_META_FIELDS: set[str] = {
 
 
 def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
-    """
-    Partition a raw QC scorer result into (canonical_qc, qc_signals).
+    """Partition a QC scorer result into canonical and extra signals.
 
-    - canonical_qc → stable QC fields allowed at top-level ``record["meta"]`` (QC_META_FIELDS plus ``qc_score`` from ``score``).
-    - qc_signals  → everything else, intended for ``meta["extra"]["qc_signals"]``.
-    Tokens are skipped here so callers can handle them specially (e.g., populate approx/tokens).
+    Canonical QC fields are allowed at the top level of ``record["meta"]``
+    and include items in ``QC_META_FIELDS`` plus ``qc_score``. Everything
+    else is treated as QC signals intended for
+    ``meta["extra"]["qc_signals"]``. Token counts are skipped so callers
+    can manage them separately.
+
+    Args:
+        qc_result (Mapping[str, Any]): Raw QC scorer output.
+
+    Returns:
+        Tuple[Dict[str, Any], Dict[str, Any]]: Canonical QC fields and the
+        remaining QC signals.
     """
     canonical: Dict[str, Any] = {}
     qc_signals: Dict[str, Any] = {}
@@ -310,9 +331,16 @@ def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[s
 
 
 def _meta_to_dict(obj: Any) -> Dict[str, Any]:
-    """
-    Flatten dataclass fields (including core schema fields such as url/nlines/perplexity) plus extras,
-    skipping None values and preserving the rule that core fields win over ``extra`` entries.
+    """Flatten dataclass fields and extras into a dictionary.
+
+    Skips ``None`` values and prefers core fields over entries duplicated in
+    ``extra``.
+
+    Args:
+        obj (Any): Dataclass instance carrying metadata.
+
+    Returns:
+        Dict[str, Any]: Dictionary representation without ``None`` values.
     """
     out: Dict[str, Any] = {}
     if obj is None:
@@ -335,13 +363,34 @@ def _meta_to_dict(obj: Any) -> Dict[str, Any]:
 
 @dataclass(slots=True)
 class RecordMeta:
-    """
-    Metadata for normal content records (code/docs/logs/etc).
+    """Metadata for content records (code/docs/logs/etc).
 
-    `kind` reflects the coarse file type: 'code' or 'doc'.
-    `file_bytes` captures the original source size, while `bytes` reflects the
-    processed chunk length (UTF-8). `truncated_bytes` represents bytes omitted
-    from the source due to prefix/decoder caps and is repeated across chunks.
+    Attributes:
+        kind (str): Coarse file type, typically "code" or "doc".
+        source (Optional[str]): Source repository or dataset identifier.
+        repo (Optional[str]): Repository name in owner/name form.
+        path (Optional[str]): Relative path to the file or chunk.
+        url (Optional[str]): Canonical URL for the source file.
+        source_domain (Optional[str]): Hostname derived from the URL.
+        license (Optional[str]): SPDX license identifier.
+        lang (Optional[str]): Language tag for the content.
+        lang_score (Optional[float]): Confidence score for language detection.
+        perplexity (Optional[float]): Language model perplexity.
+        ppl_bucket (Optional[str]): Qualitative perplexity bucket.
+        chunk_id (int): Chunk index within the file.
+        n_chunks (int): Total number of chunks for the file.
+        encoding (str): Text encoding used when reading the file.
+        had_replacement (bool): Whether decoding required replacement chars.
+        sha256 (Optional[str]): SHA-256 hex digest of the chunk text.
+        approx_tokens (Optional[int]): Estimated token count.
+        tokens (Optional[int]): Exact token count when available.
+        bytes (Optional[int]): Byte length of the chunk text (UTF-8).
+        file_bytes (Optional[int]): Original source byte length.
+        truncated_bytes (Optional[int]): Bytes omitted due to truncation limits.
+        nlines (Optional[int]): Line count of the chunk text.
+        file_nlines (Optional[int]): Line count of the original file.
+        schema_version (str): Schema version for record metadata.
+        extra (Dict[str, Any]): Arbitrary additional metadata.
     """
 
     kind: str = "code"
@@ -371,6 +420,7 @@ class RecordMeta:
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize metadata to a dictionary, omitting ``None`` values."""
         return _meta_to_dict(self)
 
     @classmethod
@@ -381,6 +431,16 @@ class RecordMeta:
         kind: Optional[str] = None,
         **overrides: Any,
     ) -> "RecordMeta":
+        """Construct a RecordMeta from a seed mapping and optional overrides.
+
+        Args:
+            seed (Optional[Mapping[str, Any]]): Baseline metadata values.
+            kind (Optional[str]): Override for the ``kind`` field.
+            **overrides: Additional fields to apply after the seed.
+
+        Returns:
+            RecordMeta: Populated metadata instance with ``extra`` merged.
+        """
         seed = seed or {}
         data = dict(seed)
         if kind is not None:
@@ -407,7 +467,8 @@ class RecordMeta:
 
 @dataclass(slots=True)
 class RunSummaryMeta:
-    """Metadata footer for runs; expects config to come from RepocapsuleConfig.to_dict()."""
+    """Metadata footer for runs."""
+
     kind: str = "run_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
     config: Dict[str, Any] = field(default_factory=dict)
@@ -417,22 +478,28 @@ class RunSummaryMeta:
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize run summary metadata to a dictionary."""
         return _meta_to_dict(self)
 
 
 @dataclass(slots=True)
 class QCSummaryMeta:
+    """Metadata wrapper for QC summary entries."""
+
     kind: str = "qc_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
     summary: Dict[str, Any] = field(default_factory=dict)
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize QC summary metadata to a dictionary."""
         return _meta_to_dict(self)
 
 
 @dataclass(slots=True)
 class RunHeaderMeta:
+    """Metadata header describing configuration at run start."""
+
     kind: str = "run_header"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
     config: Dict[str, Any] = field(default_factory=dict)
@@ -440,6 +507,7 @@ class RunHeaderMeta:
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Serialize run header metadata to a dictionary."""
         return _meta_to_dict(self)
 
 
@@ -453,9 +521,7 @@ def ensure_meta_dict(record: MutableMapping[str, Any]) -> Dict[str, Any]:
 
 
 def merge_meta_defaults(record: MutableMapping[str, Any], defaults: Mapping[str, Any]) -> Dict[str, Any]:
-    """
-    Ensure a record has a meta dict and fill in default values without clobbering existing entries.
-    """
+    """Fill in default meta values without overriding existing entries."""
     meta = ensure_meta_dict(record)
     for key, value in defaults.items():
         if key in meta or value is None:
@@ -501,30 +567,33 @@ def build_record(
 ) -> Dict[str, object]:
     """Create a canonical JSONL record matching the requested schema.
 
-    JSONL schema (one object per line):
-    {
-      "text": "<chunk>",
-      "meta": {
-        "source": "https://github.com/owner/name",
-        "repo": "owner/name",
-        "path": "sub/dir/file.py",
-        "license": "Apache-2.0",
-        "lang": "Python",
-        "chunk_id": 1,
-        "n_chunks": 3,
-        "encoding": "utf-8",
-        "had_replacement": false,
-        "sha256": "....",
-        "tokens": 1234,
-        "bytes": 5678,
-        "file_bytes": 10240,
-        "truncated_bytes": 4600
-      }
-    }
+    Args:
+        text (str): Chunk content to store.
+        rel_path (str): Path relative to the repository root.
+        repo_full_name (Optional[str]): Repository in ``owner/name`` form.
+        repo_url (Optional[str]): Canonical repository URL.
+        license_id (Optional[str]): SPDX license identifier.
+        url (Optional[str]): Source file URL when available.
+        source_domain (Optional[str]): Hostname derived from the URL or
+            source.
+        lang (Optional[str]): Language label; default derived from
+            extension.
+        encoding (str): Encoding used to read the file.
+        had_replacement (bool): Whether decoding used replacement
+            characters.
+        chunk_id (Optional[int]): Chunk index within the file (1-based).
+        n_chunks (Optional[int]): Total chunk count for the file.
+        extra_meta (Optional[Dict[str, object]]): Extra metadata fields.
+        langcfg (LanguageConfig | None): Language/extension configuration.
+        tokens (Optional[int]): Exact token count if already computed.
+        meta (Optional[RecordMeta | Mapping[str, Any]]): Seed metadata to
+            merge.
+        file_bytes (Optional[int]): Byte size of the original file.
+        truncated_bytes (Optional[int]): Bytes truncated from the source.
+        file_nlines (Optional[int]): Line count of the original file.
 
-    Standard metadata keys are cataloged in :data:`STANDARD_META_FIELDS`
-    (core record fields) and :data:`QC_META_FIELDS` (quality-scoring enrichments).
-    Additional analyzer-specific keys should be stored under ``meta["extra"]``.
+    Returns:
+        Dict[str, object]: Record with ``text`` and normalized ``meta`` payload.
     """
     rp = rel_path.replace("\\", "/")
 
@@ -626,9 +695,7 @@ if TYPE_CHECKING:  # pragma: no cover
 
 
 def build_run_header_record(config: "RepocapsuleConfig") -> Dict[str, Any]:
-    """
-    Build a run_header record describing the configuration and metadata at start of a run.
-    """
+    """Build a run_header record describing configuration at run start."""
 
     meta = RunHeaderMeta(
         config=config.to_dict(),
@@ -638,11 +705,17 @@ def build_run_header_record(config: "RepocapsuleConfig") -> Dict[str, Any]:
 
 
 def best_effort_record_path(record: Mapping[str, Any]) -> str:
-    """
-    Return a human-friendly path/identifier for a record for logging/QC.
+    """Return a human-friendly path or identifier for a record.
 
-    Prefers meta['path'], then meta['doc_id']/meta['chunk_id'], then record['path'] or record['origin_path'];
-    otherwise returns "<unknown>".
+    Prefers ``meta["path"]`` then ``meta["doc_id"]``/``meta["chunk_id"]``,
+    then ``record["path"]`` or ``record["origin_path"]``; otherwise
+    returns ``"<unknown>"``.
+
+    Args:
+        record (Mapping[str, Any]): Record dictionary containing metadata.
+
+    Returns:
+        str: Best-effort identifier for logging or QC messages.
     """
     if not isinstance(record, Mapping):
         return "<unknown>"

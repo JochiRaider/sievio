@@ -1,5 +1,6 @@
 # pipeline.py
 # SPDX-License-Identifier: MIT
+"""Pipeline execution engine coordinating sources, sinks, and middleware."""
 
 from __future__ import annotations
 
@@ -61,10 +62,12 @@ class _FuncFileMiddleware:
 
 
 def _coerce_record_middleware(mw: RecordMiddleware | Callable[[Record], Any]) -> RecordMiddleware:
+    """Wrap a bare callable as RecordMiddleware when needed."""
     return mw if hasattr(mw, "process") else _FuncRecordMiddleware(mw)  # type: ignore[arg-type]
 
 
 def _coerce_file_middleware(mw: FileMiddleware | Callable[[Any, Iterable[Record]], Any]) -> FileMiddleware:
+    """Wrap a bare callable as FileMiddleware when needed."""
     return mw if hasattr(mw, "process") else _FuncFileMiddleware(mw)  # type: ignore[arg-type]
 
 
@@ -75,6 +78,16 @@ class _ProcessFileCallable:
     materialize: bool = False
 
     def __call__(self, work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
+        """Extract records from a work item using the configured extractor.
+
+        Args:
+            work (_WorkItem): Work item containing the source object and
+                optional context.
+
+        Returns:
+            tuple[Any, Iterable[Record]]: The original item and an iterable of
+                extracted records (materialized when configured).
+        """
         item = work.item
         ctx = work.ctx
         rel = getattr(item, "path", None) or getattr(item, "rel_path", None)
@@ -96,6 +109,8 @@ class _ProcessFileCallable:
 # Convention: hot-path dataclasses use slots=True to reduce per-instance overhead.
 @dataclass(slots=True)
 class PipelineStats:
+    """Mutable counters and aggregates collected during pipeline execution."""
+
     files: int = 0
     bytes: int = 0
     records: int = 0
@@ -105,7 +120,7 @@ class PipelineStats:
     qc: QCSummaryTracker = field(default_factory=QCSummaryTracker)
 
     def as_dict(self) -> Dict[str, object]:
-        # Keep a simple, stable shape for external reporting/JSONL footers.
+        """Return a stable dict shape for reporting and JSONL footers."""
         data: Dict[str, object] = {
             "files": int(self.files),
             "bytes": int(self.bytes),
@@ -118,6 +133,7 @@ class PipelineStats:
         return data
 
     def qc_top_dup_families(self) -> List[Dict[str, Any]]:
+        """Return duplicate-family summary for reporting."""
         return self.qc.top_dup_families()
 
 
@@ -126,7 +142,15 @@ class PipelineStats:
 # ---------------------------------------------------------------------------
 
 def _open_source_with_stack(stack: ExitStack, src: Source) -> Source:
-    """Enter context manager if supported; else register close() if present."""
+    """Enter a source context if supported; otherwise register close().
+
+    Args:
+        stack (ExitStack): ExitStack to manage clean-up.
+        src (Source): Source instance to enter or register.
+
+    Returns:
+        Source: Source object, potentially context-managed.
+    """
     enter = getattr(src, "__enter__", None)
     if callable(enter):
         return stack.enter_context(src)  
@@ -136,8 +160,16 @@ def _open_source_with_stack(stack: ExitStack, src: Source) -> Source:
     return src
 
 def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: Optional[RepoContext], stats: PipelineStats) -> List[Sink]:
-    """
-    Open sinks exactly once with RepoContext if supported; record failures in stats.
+    """Open sinks once, tracking failures in stats.
+
+    Args:
+        stack (ExitStack): ExitStack to register closers.
+        sinks (Sequence[Sink]): Sinks to open.
+        ctx (RepoContext | None): Optional repository context passed to open().
+        stats (PipelineStats): Stats container for error tracking.
+
+    Returns:
+        list[Sink]: Sinks successfully opened.
     """
     open_sinks: List[Sink] = []
     for s in sinks:
@@ -158,10 +190,12 @@ def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: Optional[RepoCo
 
 
 def _get_context_from_source(source: Source) -> Optional[RepoContext]:
+    """Extract RepoContext from a source when available."""
     return getattr(source, "context", None)  
 
 
 def _ext_key(path: str) -> str:
+    """Return lowercase file extension from a path-like string."""
     try:
         return Path(path).suffix.lower()
     except Exception:
@@ -169,8 +203,14 @@ def _ext_key(path: str) -> str:
 
 
 def _build_file_processing_config(cfg: RepocapsuleConfig, runtime: PipelineRuntime) -> FileProcessingConfig:
-    """
-    Create a sanitized config containing only per-file knobs for worker processes.
+    """Create per-file configuration for worker processes.
+
+    Args:
+        cfg (RepocapsuleConfig): Base configuration.
+        runtime (PipelineRuntime): Runtime-specific overrides.
+
+    Returns:
+        FileProcessingConfig: Sanitized configuration for workers.
     """
     pipeline_cfg = replace(cfg.pipeline, bytes_handlers=runtime.bytes_handlers)
     return FileProcessingConfig(
@@ -186,14 +226,19 @@ def _build_file_processing_config(cfg: RepocapsuleConfig, runtime: PipelineRunti
 
 
 class PipelineEngine:
-    """
-    Executes a prepared PipelinePlan.
+    """Execute a prepared PipelinePlan against configured sources and sinks.
 
-    Record middlewares should implement ``process(record) -> Optional[Record]``; file middlewares
-    should implement ``process(item, records) -> Optional[Iterable[Record]]``. Simple callables are
-    wrapped automatically.
+    Record middlewares implement process(record) -> Optional[Record]; file
+    middlewares implement process(item, records) -> Optional[Iterable[Record]].
+    Simple callables are wrapped automatically.
     """
     def __init__(self, plan: PipelinePlan) -> None:
+        """Initialize an engine with the provided plan.
+
+        Args:
+            plan (PipelinePlan): Plan containing sources, sinks, and runtime
+                knobs.
+        """
         self.plan = plan
         self.config = plan.spec
         self.stats = PipelineStats()
@@ -211,6 +256,7 @@ class PipelineEngine:
         self._middlewares_normalized = False
 
     def add_record_middleware(self, middleware: RecordMiddleware | Callable[[Record], Any]) -> None:
+        """Register a record middleware or bare callable."""
         self.record_middlewares.append(_coerce_record_middleware(middleware))
         self._middlewares_normalized = False
 
@@ -218,10 +264,12 @@ class PipelineEngine:
         self,
         middleware: FileMiddleware | Callable[[Any, Iterable[Record]], Any],
     ) -> None:
+        """Register a file middleware or bare callable."""
         self.file_middlewares.append(_coerce_file_middleware(middleware))
         self._middlewares_normalized = False
 
     def _normalize_middlewares(self) -> None:
+        """Ensure middleware lists contain adapter-wrapped instances."""
         if self._middlewares_normalized:
             return
 
@@ -231,6 +279,7 @@ class PipelineEngine:
         self._middlewares_normalized = True
 
     def _prepare_qc(self) -> None:
+        """Configure QC tracker fields from pipeline configuration."""
         cfg = self.config
         stats = self.stats
         qc_cfg = cfg.qc
@@ -245,6 +294,7 @@ class PipelineEngine:
         tracker.drop_near_dups = bool(qc_cfg.drop_near_dups)
 
     def _attach_qc_hooks(self) -> None:
+        """Add QC hooks to record middleware list when a factory is provided."""
         if self._qc_hook_factory is None:
             return
         if self._qc_middleware is not None:
@@ -286,6 +336,7 @@ class PipelineEngine:
         self._qc_hooks = (filt, obs)
 
     def _apply_middlewares(self, record: Record) -> Optional[Record]:
+        """Run a record through all registered record middlewares."""
         current = record
         for middleware in self.record_middlewares:
             try:
@@ -302,6 +353,7 @@ class PipelineEngine:
         return current
 
     def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
+        """Run a file's records through registered file middlewares."""
         current = records
         for middleware in self.file_middlewares:
             try:
@@ -319,6 +371,7 @@ class PipelineEngine:
         return current
 
     def _increment_file_stats(self, item: Any) -> None:
+        """Update stats counters for a processed file item."""
         stats = self.stats
         size = getattr(item, "size", None)
         if size is None:
@@ -333,6 +386,15 @@ class PipelineEngine:
         stats.by_ext[ext] = stats.by_ext.get(ext, 0) + 1
 
     def _make_processor(self, *, materialize: bool) -> _ProcessFileCallable:
+        """Build a callable that extracts records for each work item.
+
+        Args:
+            materialize (bool): Whether to materialize iterators in-process
+                workers for pickling.
+
+        Returns:
+            _ProcessFileCallable: Callable that yields extracted records.
+        """
         cfg = self.config
         extractor = self.plan.runtime.file_extractor or cfg.pipeline.file_extractor
         if extractor is None:
@@ -345,6 +407,11 @@ class PipelineEngine:
         )
 
     def _build_executor(self) -> Tuple[Executor, bool]:
+        """Resolve executor configuration and fail-fast behavior.
+
+        Returns:
+            tuple[Executor, bool]: Executor instance and fail-fast flag.
+        """
         exec_cfg = getattr(self.plan.runtime, "executor_config", None)
         fail_fast = getattr(self.plan.runtime, "fail_fast", False)
         if exec_cfg is None:
@@ -358,6 +425,13 @@ class PipelineEngine:
         *,
         sinks: Sequence[Sink],
     ) -> None:
+        """Apply hooks, filter, and write records to sinks.
+
+        Args:
+            item (Any): Source item associated with the records.
+            recs (Iterable[Record]): Records to process.
+            sinks (Sequence[Sink]): Destinations to receive records.
+        """
         stats = self.stats
 
         for record in recs:
@@ -420,6 +494,14 @@ class PipelineEngine:
                 stats.records += 1
 
     def _iter_source_items(self, sources: Sequence[Source]) -> Iterable[_WorkItem]:
+        """Iterate work items from sources while honoring hooks.
+
+        Args:
+            sources (Sequence[Source]): Sources to enumerate.
+
+        Returns:
+            Iterable[_WorkItem]: Generator yielding items with context.
+        """
         cfg = self.config
         stats = self.stats
         default_ctx = cfg.sinks.context
@@ -472,6 +554,14 @@ class PipelineEngine:
         sinks: Sequence[Sink],
         fail_fast: bool,
     ) -> None:
+        """Process a single work item serially.
+
+        Args:
+            work (_WorkItem): Work item to handle.
+            processor (_ProcessFileCallable): Extractor callable.
+            sinks (Sequence[Sink]): Destinations for records.
+            fail_fast (bool): Whether to propagate errors immediately.
+        """
         try:
             self._increment_file_stats(work.item)
             _, recs = processor(work)
@@ -497,6 +587,15 @@ class PipelineEngine:
         executor: Executor,
         fail_fast: bool,
     ) -> None:
+        """Process work items in parallel using the configured executor.
+
+        Args:
+            items (Iterable[_WorkItem]): Stream of work items.
+            processor (_ProcessFileCallable): Extractor callable.
+            sinks (Sequence[Sink]): Destinations for records.
+            executor (Executor): Executor to schedule processing.
+            fail_fast (bool): Whether worker errors halt processing.
+        """
         stats = self.stats
         log = self.log
         exec_cfg = executor.cfg
@@ -555,6 +654,7 @@ class PipelineEngine:
             log.warning("Parallel processing aborted: %s", exc)
 
     def _log_qc_summary(self) -> None:
+        """Emit QC summary metrics after pipeline completion."""
         cfg = self.config
         tracker = self.stats.qc
         if not tracker.enabled:
@@ -592,6 +692,7 @@ class PipelineEngine:
             self.log.info("Largest duplicate families: none")
 
     def run(self) -> PipelineStats:
+        """Execute the pipeline plan and return collected statistics."""
         cfg = self.config
         self.stats = PipelineStats()
         stats = self.stats
@@ -648,7 +749,16 @@ class PipelineEngine:
 # ---------------------------------------------------------------------------
 
 def run_pipeline(*, config: RepocapsuleConfig, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
-    """Run the end-to-end pipeline described by ``config``."""
+    """Run the end-to-end pipeline described by config.
+
+    Args:
+        config (RepocapsuleConfig): Pipeline configuration object.
+        overrides (PipelineOverrides | None): Optional runtime overrides
+            merged into the plan.
+
+    Returns:
+        dict[str, int]: Statistics from execution as primitive values.
+    """
     plan = build_pipeline_plan(config, overrides=overrides)
     engine = PipelineEngine(plan)
     stats = engine.run()

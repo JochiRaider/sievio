@@ -1,4 +1,11 @@
 # config.py
+# SPDX-License-Identifier: MIT
+"""Configuration models and helpers for Repocapsule runs.
+
+This module defines declarative dataclasses for sources, sinks, quality
+control, HTTP, logging, and other pipeline settings, along with helpers
+for serializing and loading configurations from JSON and TOML.
+"""
 from __future__ import annotations
 
 import json
@@ -28,17 +35,16 @@ BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy
 
 
 class QCMode:
-    """
-    Supported quality-control modes.
+    """Supported quality-control modes.
 
-    OFF:
-        Disable QC entirely (no scoring, no annotations).
-    INLINE:
-        Score records during extraction and enforce gating (records may be dropped).
-    ADVISORY:
-        Score records inline but never drop them; annotations are for review only.
-    POST:
-        Run QC after the pipeline completes (no inline annotations or gating).
+    Modes:
+    * ``OFF``: Disable QC entirely (no scoring, no annotations).
+    * ``INLINE``: Score records during extraction and enforce gating
+    (records may be dropped).
+    * ``ADVISORY``: Score records inline but never drop them; annotations
+    are for review only.
+    * ``POST``: Run QC after the pipeline completes (no inline
+    annotations or gating).
     """
 
     INLINE = "inline"
@@ -77,6 +83,22 @@ DEFAULT_QC_SCORER_ID = "jsonl_default"
 
 @dataclass(slots=True)
 class LocalDirSourceConfig:
+    """Configuration options for local directory sources.
+
+    Attributes:
+        include_exts (set[str] | None): File extensions to include.
+            When set, only files with these lowercase suffixes are
+            processed.
+        exclude_exts (set[str] | None): File extensions to exclude.
+        skip_hidden (bool): Whether to skip dotfiles and hidden paths.
+        follow_symlinks (bool): Whether to traverse symbolic links.
+        respect_gitignore (bool): Whether to honor .gitignore patterns.
+        max_file_bytes (int | None): Hard cap on bytes read per file.
+        read_prefix_bytes (int | None): If set, only read this many
+            bytes from each file.
+        read_prefix_for_large_files_only (bool): When True, apply
+            ``read_prefix_bytes`` only to files larger than that limit.
+    """    
     include_exts: Optional[set[str]] = None
     exclude_exts: Optional[set[str]] = None
     skip_hidden: bool = True
@@ -89,6 +111,21 @@ class LocalDirSourceConfig:
 
 @dataclass(slots=True)
 class GitHubSourceConfig:
+    """Configuration for reading sources from GitHub archives.
+
+    Attributes:
+        per_file_cap (int | None): Maximum uncompressed bytes to extract
+            per member file.
+        max_total_uncompressed (int): Maximum total uncompressed bytes
+            across all members.
+        max_members (int): Maximum number of archive members to inspect.
+        max_compression_ratio (float): Safety limit for compressed vs.
+            uncompressed size.
+        include_exts (set[str] | None): Optional whitelist of file
+            extensions to include.
+        exclude_exts (set[str] | None): Optional blacklist of file
+            extensions to exclude.
+    """    
     per_file_cap: Optional[int] = 200 * 1024 * 1024
     max_total_uncompressed: int = 2 * 1024 * 1024 * 1024
     max_members: int = 200_000
@@ -121,6 +158,15 @@ class PdfSourceConfig:
 
 @dataclass(slots=True)
 class CsvSourceConfig:
+    """Default settings for reading text from CSV files.
+
+    Attributes:
+        default_text_column (str): Column name used as the text field
+            when none is specified.
+        default_delimiter (str | None): Delimiter override; when None
+            the CSV sniffer is used.
+        encoding (str): Text encoding used to decode CSV bytes.
+    """    
     default_text_column: str = "text"
     default_delimiter: Optional[str] = None
     encoding: str = "utf-8"
@@ -128,6 +174,16 @@ class CsvSourceConfig:
 
 @dataclass(slots=True)
 class SQLiteSourceConfig:
+    """Settings for reading text from SQLite databases.
+
+    Attributes:
+        default_text_columns (tuple[str, ...]): Column names that are
+            treated as text fields by default.
+        batch_size (int): Number of rows to fetch per query batch.
+        download_max_bytes (int | None): Optional limit on bytes
+            downloaded for remote databases.
+        retries (int): Number of times to retry failed downloads.
+    """    
     default_text_columns: Tuple[str, ...] = ("text",)
     batch_size: int = 1000
     download_max_bytes: Optional[int] = None
@@ -136,6 +192,22 @@ class SQLiteSourceConfig:
 
 @dataclass(slots=True)
 class SourceConfig:
+    """Top-level configuration for all input sources.
+
+    Attributes:
+        specs (list[SourceSpec]): Declarative source specifications used
+            by factories.
+        sources (Sequence[Source]): Concrete source instances, expected
+            to be empty on purely declarative configs.
+        local (LocalDirSourceConfig): Defaults for local directory
+            sources.
+        github (GitHubSourceConfig): Defaults for GitHub sources.
+        pdf (PdfSourceConfig): Defaults for web PDF sources.
+        csv (CsvSourceConfig): Defaults for CSV sources.
+        sqlite (SQLiteSourceConfig): Defaults for SQLite sources.
+        defaults (dict[str, dict[str, Any]]): Per-kind default options
+            keyed by SourceSpec.kind or plugin-defined ids.
+    """    
     specs: List["SourceSpec"] = field(default_factory=list)
     sources: Sequence[Source] = field(default_factory=tuple)
     local: LocalDirSourceConfig = field(default_factory=LocalDirSourceConfig)
@@ -153,6 +225,17 @@ class SourceConfig:
 
 @dataclass(slots=True)
 class DecodeConfig:
+    """Text decoding and normalization options.
+
+    Attributes:
+        normalize (str | None): Unicode normalization form (e.g. "NFC")
+            or None to disable normalization.
+        strip_controls (bool): Whether to strip control characters from
+            decoded text.
+        fix_mojibake (bool): Whether to attempt simple mojibake fixes.
+        max_bytes_per_file (int | None): Soft cap on bytes passed to the
+            decoder per file.
+    """
     normalize: Optional[str] = "NFC"
     strip_controls: bool = True
     fix_mojibake: bool = True
@@ -161,6 +244,16 @@ class DecodeConfig:
 
 @dataclass(slots=True)
 class ChunkConfig:
+    """Configuration for text chunking behavior.
+
+    Attributes:
+        policy (ChunkPolicy): Chunking policy instance used to split
+            decoded text into records.
+        tokenizer_name (str | None): Optional tokenizer identifier used
+            for token-based policies.
+        attach_language_metadata (bool): Whether detected language
+            metadata is attached to records.
+    """    
     policy: ChunkPolicy = field(default_factory=ChunkPolicy)
     tokenizer_name: Optional[str] = None
     attach_language_metadata: bool = True
@@ -211,12 +304,37 @@ class FileProcessingConfig:
 
 @dataclass(slots=True)
 class PromptConfig:
+    """Settings used when generating prompt-oriented outputs.
+
+    Attributes:
+        heading_fmt (str): Format string for per-chunk headings.
+        include_prompt_file (bool): Whether to include a combined prompt
+            file alongside JSONL outputs.
+    """
     heading_fmt: str = "### {path} [chunk {chunk}]"
     include_prompt_file: bool = True
 
 
 @dataclass(slots=True)
 class SinkConfig:
+    """Top-level configuration for output sinks.
+
+    Attributes:
+        specs (list[SinkSpec]): Declarative sink specifications used by
+            factories.
+        sinks (Sequence[Sink]): Concrete sink instances, expected to be
+            empty on purely declarative configs.
+        context (RepoContext | None): Optional repository context passed
+            to sinks.
+        output_dir (Path): Base directory for sink outputs.
+        primary_jsonl_name (str | None): Basename of the primary JSONL
+            sink, if any.
+        prompt (PromptConfig): Settings controlling prompt output.
+        compress_jsonl (bool): Whether to gzip-compress JSONL outputs.
+        jsonl_basename (str): Basename used for JSONL files.
+        defaults (dict[str, dict[str, Any]]): Per-kind default options
+            keyed by SinkSpec.kind.
+    """    
     specs: List["SinkSpec"] = field(default_factory=list)
     sinks: Sequence[Sink] = field(default_factory=tuple)
     context: Optional[RepoContext] = None
@@ -231,6 +349,20 @@ class SinkConfig:
 
 @dataclass(slots=True)
 class DatasetCardConfig:
+    """Configuration for generating dataset cards.
+
+    Attributes:
+        enabled (bool): Whether to emit a dataset card.
+        split_name (str): Default split name associated with the
+            generated dataset.
+        license (str | Sequence[str] | None): License identifier or
+            identifiers for the dataset.
+        task_categories (str | Sequence[str] | None): High-level task
+            categories (e.g. "text-generation").
+        task_ids (str | Sequence[str] | None): Fine-grained task ids.
+        tags (str | Sequence[str] | None): Additional tags for the
+            dataset card.
+    """    
     enabled: bool = True
     split_name: str = "train"
     license: Optional[Union[str, Sequence[str]]] = None
@@ -267,15 +399,15 @@ class SinkSpec:
 
 @dataclass(slots=True)
 class HttpConfig:
-    """
-    HTTP client settings used by higher-level helpers and factories.
+    """HTTP client settings used by higher-level helpers and factories.
 
-    - ``client`` can hold a pre-built SafeHttpClient instance. When set, it will be reused by
-      ``build_client()`` and passed to factories.
-    - ``as_global`` controls whether the builder installs this client as the
-      module-wide default via ``set_global_http_client``. For CLI-style one-shot runs, leaving this
-      True is convenient. For tests or long-lived processes, prefer ``as_global=False`` and pass the
-      client explicitly.
+    - ``client`` can hold a pre-built SafeHttpClient instance. When set,
+    it will be reused by ``build_client()`` and passed to factories.
+    - ``as_global`` controls whether the builder installs this client as
+    the module-wide default via ``set_global_http_client``. For
+    CLI-style one-shot runs, leaving this True is convenient. For
+    tests or long-lived processes, prefer ``as_global=False`` and
+    pass the client explicitly.
     """
     timeout: float = 60.0
     max_redirects: int = 5
@@ -302,8 +434,10 @@ class HttpConfig:
 
 @dataclass(slots=True)
 class QCHeuristics:
-    """
-    Tunable thresholds/weights used by quality scoring. Defaults match existing hard-coded behavior.
+    """Tunable thresholds and weights used by quality scoring.
+
+    Defaults match existing hard-coded behavior and can be overridden
+    per-run via ``QCConfig.scorer_options["heuristics"]``.
     """
 
     target_code_min: int = 2000
@@ -333,27 +467,33 @@ class QCHeuristics:
 
 @dataclass(slots=True)
 class QCConfig:
-    """
-    Configuration for quality scoring and gating.
+    """Configuration for quality scoring and gating.
 
     Set ``enabled=True`` and pick a ``mode`` from :class:`QCMode`:
 
-    - ``INLINE``: score records during extraction and drop those failing thresholds.
-    - ``ADVISORY``: score inline but never drop; adds QC metadata for review.
-    - ``POST``: skip inline scoring; run QC by re-reading the JSONL output.
-    - ``OFF``: disable QC entirely.
+    * ``INLINE``: Score records during extraction and drop those failing
+    thresholds.
+    * ``ADVISORY``: Score inline but never drop; adds QC metadata for
+    review.
+    * ``POST``: Skip inline scoring; run QC by re-reading the JSONL
+    output.
+    * ``OFF``: Disable QC entirely.
 
     Semantics:
-    - enabled=False → QC is off regardless of mode.
-    - enabled=True with mode in {"inline", "advisory"} → requires either a resolved scorer (qc.scorer) or a scorer id (qc.scorer_id) at config time; the builder resolves scorer_id later and fails if QC extras are missing.
-    - enabled=True with mode="post" → scorer optional; if QC extras are missing, QC is skipped with a warning.
-    - default scorer id is ``DEFAULT_QC_SCORER_ID`` (currently "jsonl_default"), provided by the default QC plugin.
+    * ``enabled=False`` → QC is off regardless of mode.
+    * ``enabled=True`` with mode in {"inline", "advisory"} → requires
+    either a resolved scorer (``qc.scorer``) or a scorer id
+    (``qc.scorer_id``) at config time; the builder resolves
+    ``scorer_id`` later and fails if QC extras are missing.
+    * ``enabled=True`` with mode="post" → scorer optional; if QC extras
+    are missing, QC is skipped with a warning.
+
     Concurrency:
-    - ``parallel_post`` enables post-QC scoring via process_items_parallel.
-    - ``post_*`` knobs override pipeline concurrency for post-QC; when None, they inherit from PipelineConfig.
-
+    * ``parallel_post`` enables post-QC scoring via
+    ``process_items_parallel``.
+    * ``post_*`` knobs override pipeline concurrency for post-QC; when
+    None, they inherit from :class:`PipelineConfig`.
     """
-
     enabled: bool = False
     write_csv: bool = False
     csv_suffix: str = "_quality.csv"
@@ -370,11 +510,22 @@ class QCConfig:
     post_submit_window: Optional[int] = None
 
     def normalize_mode(self) -> str:
+        """Normalize the configured QC mode and update the instance.
+
+        Returns:
+            str: Normalized QC mode string.
+        """    
         normalized = QCMode.normalize(self.mode)
         self.mode = normalized
         return normalized
 
     def validate(self) -> None:
+        """Validate the QC configuration and raise on inconsistencies.
+
+        This checks the interaction between ``enabled``, ``mode``,
+        scorer fields, heuristic options, and numeric thresholds, raising
+        ValueError or TypeError when the configuration is invalid.
+        """    
         mode = self.normalize_mode()
         if self.enabled and mode == QCMode.OFF:
             raise ValueError("QC enabled but mode is 'off'; disable qc.enabled or choose an active mode.")
@@ -428,13 +579,16 @@ class QCConfig:
 
 @dataclass(slots=True)
 class LoggingConfig:
-    """Controls the package logger; set propagate=True/logger_name to integrate with host apps."""
+    """Controls the package logger; set propagate=True/logger_name to
+    integrate with host apps.
+    """
     level: int | str = "INFO"
     propagate: bool = False
     fmt: Optional[str] = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logger_name: str = PACKAGE_LOGGER_NAME
 
     def apply(self) -> None:
+        """Apply this logging configuration to the package logger."""    
         configure_logging(
             level=self.level,
             propagate=self.propagate,
@@ -452,12 +606,22 @@ T = TypeVar("T")
 
 @dataclass(slots=True)
 class RunMetadata:
+    """Metadata describing a single Repocapsule run.
+
+    This captures paths to primary outputs plus arbitrary user-defined
+    key/value pairs under ``extra``.
+    """    
     primary_jsonl: Optional[str] = None
     prompt_path: Optional[str] = None
     repo_url: Optional[str] = None
     extra: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
+        """Convert the metadata to a JSON-serializable dictionary.
+
+        Only non-None core fields are included; ``extra`` is
+        shallow-copied.
+        """        
         data: Dict[str, Any] = {}
         if self.primary_jsonl is not None:
             data["primary_jsonl"] = self.primary_jsonl
@@ -471,6 +635,15 @@ class RunMetadata:
 
     @classmethod
     def from_dict(cls, data: Optional[Mapping[str, Any]]) -> "RunMetadata":
+        """Create a RunMetadata instance from a mapping.
+
+        Args:
+            data (Mapping[str, Any] | None): Optional mapping previously
+                produced by :meth:`to_dict`.
+
+        Returns:
+            RunMetadata: Parsed metadata object.
+        """        
         if not data:
             return cls()
         extra = dict(data.get("extra") or {})
@@ -478,6 +651,18 @@ class RunMetadata:
         return cls(extra=extra, **{k: v for k, v in known.items() if v is not None})
 
     def merged(self, mapping: Mapping[str, Any]) -> "RunMetadata":
+        """Return a new metadata object merged with values from mapping.
+
+        Core attributes on this instance are only filled in when
+        missing; keys in ``mapping`` that are not core fields are added
+        to the ``extra`` dictionary if they do not already exist.
+
+        Args:
+            mapping (Mapping[str, Any]): Additional metadata values.
+
+        Returns:
+            RunMetadata: New merged metadata instance.
+        """        
         updated = RunMetadata(
             primary_jsonl=self.primary_jsonl,
             prompt_path=self.prompt_path,
@@ -499,6 +684,21 @@ class RunMetadata:
         return updated
 
     def get(self, key: str, default: Any = None) -> Any:
+        """Return a metadata value by key with a default.
+
+        This mirrors ``dict.get`` but understands the three core field
+        names ``"primary_jsonl"``, ``"prompt_path"``, and
+        ``"repo_url"``, falling back to the ``extra`` mapping for other
+        keys.
+
+        Args:
+            key (str): Metadata key to retrieve.
+            default (Any, optional): Default value if the key is not
+                present.
+
+        Returns:
+            Any: Stored value or ``default`` if the key is missing.
+        """        
         if key == "primary_jsonl":
             return self.primary_jsonl if self.primary_jsonl is not None else default
         if key == "prompt_path":
@@ -510,15 +710,15 @@ class RunMetadata:
 
 @dataclass(slots=True)
 class RepocapsuleConfig:
-    """
-    Declarative spec for a Repocapsule run.
+    """Declarative spec for a Repocapsule run.
 
-    This object must remain purely declarative/serializable: it can hold only
-    configuration knobs and derived scalar/string/path values. Anything that is
-    callable, holds open resources, or maintains runtime state (HTTP clients,
-    Source/Sink instances, file extractors, bytes handlers, QC scorers, plugins,
-    executors, etc.) must live in PipelineRuntime or other ephemeral wiring,
-    never on this spec. Derived declarative fields such as normalized modes,
+    This object must remain purely declarative and serializable: it can
+    hold only configuration knobs and derived scalar/string/path values.
+    Anything that is callable, holds open resources, or maintains
+    runtime state (HTTP clients, Source/Sink instances, file
+    extractors, bytes handlers, QC scorers, plugins, executors, etc.)
+    must live in PipelineRuntime or other ephemeral wiring, never on
+    this spec. Derived declarative fields such as normalized modes,
     resolved primary JSONL names, or output directories are allowed.
     """
     sources: SourceConfig = field(default_factory=SourceConfig)
@@ -533,6 +733,12 @@ class RepocapsuleConfig:
     dataset_card: DatasetCardConfig = field(default_factory=DatasetCardConfig)
 
     def __post_init__(self) -> None:
+        """Normalize nested config objects after initialization.
+
+        This ensures metadata and dataset_card are concrete config
+        instances and enforces declarative-only constraints on sources
+        and sinks.
+        """
         if not isinstance(self.metadata, RunMetadata):
             self.metadata = RunMetadata.from_dict(dict(self.metadata or {}))
         if not isinstance(self.dataset_card, DatasetCardConfig):
@@ -543,9 +749,23 @@ class RepocapsuleConfig:
             raise ValueError("sinks.sinks must be empty in declarative specs; use sinks.specs instead.")
 
     def with_context(self, ctx: RepoContext) -> RepocapsuleConfig:
+        """Return a shallow copy with the given RepoContext attached.
+
+        Args:
+            ctx (RepoContext): Repository context to propagate to sinks.
+
+        Returns:
+            RepocapsuleConfig: New config sharing all other fields.
+        """        
         return replace(self, sinks=replace(self.sinks, context=ctx))
 
     def validate(self) -> None:
+        """Validate the configuration for internal consistency.
+
+        This validates paths, QC settings, and executor kind, normalizing
+        ``pipeline.executor_kind`` to one of ``{"thread", "process",
+        "auto"}`` and raising ValueError when an invalid value is used.
+        """        
         self._validate_paths()
         # QC validation is structural here (scorer object or scorer_id present); builder still resolves scorer_id.
         self.qc.validate()
@@ -558,6 +778,11 @@ class RepocapsuleConfig:
         self.pipeline.executor_kind = kind
 
     def _validate_paths(self) -> None:
+        """Ensure that primary_jsonl and prompt_path, if set, differ.
+
+        Raises:
+            ValueError: If both paths resolve to the same file.
+        """        
         meta = self.metadata
         p_jsonl = meta.primary_jsonl
         prompt = meta.prompt_path
@@ -583,6 +808,15 @@ class RepocapsuleConfig:
         return _dataclass_to_dict(self)
 
     def to_json(self, path: Path | str, *, indent: int = 2) -> str:
+        """Serialize the configuration to JSON and write it to disk.
+
+        Args:
+            path (Path | str): Target file path.
+            indent (int): Indentation level passed to ``json.dumps``.
+
+        Returns:
+            str: String path to the written file.
+        """        
         data = self.to_dict()
         target = Path(path)
         target.write_text(json.dumps(data, indent=indent, sort_keys=True), encoding="utf-8")
@@ -590,10 +824,27 @@ class RepocapsuleConfig:
 
     @classmethod
     def from_dict(cls: Type[T], data: Mapping[str, Any]) -> T:
+        """Instantiate a RepocapsuleConfig from a mapping.
+
+        Args:
+            data (Mapping[str, Any]): Mapping produced by
+                :meth:`to_dict` or loaded from JSON/TOML.
+
+        Returns:
+            RepocapsuleConfig: Parsed configuration instance.
+        """        
         return _dataclass_from_dict(cls, data)
 
     @classmethod
     def from_json(cls: Type[T], path: Path | str) -> T:
+        """Load a configuration from a JSON file.
+
+        Args:
+            path (Path | str): Path to the JSON document.
+
+        Returns:
+            RepocapsuleConfig: Parsed configuration instance.
+        """
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(payload)
 
@@ -620,8 +871,14 @@ class RepocapsuleConfig:
 
 
 def load_config_from_path(path: str | Path) -> RepocapsuleConfig:
-    """
-    Convenience loader that picks a parser based on file extension (.toml or .json).
+    """Load a RepocapsuleConfig from a JSON or TOML file.
+    Args:
+        path (Path | str): Path to a ``.toml`` or ``.json`` config
+            file.
+    Returns:
+        RepocapsuleConfig: Parsed configuration instance.
+    Raises:
+        ValueError: If the file extension is not ``.toml`` or ``.json``.
     """
     p = Path(path)
     suffix = p.suffix.lower()
@@ -687,6 +944,16 @@ def _serialize_value(value: Any) -> Any:
 
 
 def _dataclass_from_dict(cls: Type[T], data: Mapping[str, Any] | None) -> T:
+    """Instantiate a dataclass of type `cls` from a mapping.
+
+    Args:
+        cls (type[T]): Dataclass type to construct.
+        data (Mapping[str, Any] | None): Source mapping, or None to use
+            the type's default constructor.
+
+    Returns:
+        T: New dataclass instance.
+    """    
     if data is None:
         return cls()  # type: ignore[call-arg]
     type_hints = get_type_hints(cls)
@@ -701,6 +968,12 @@ def _dataclass_from_dict(cls: Type[T], data: Mapping[str, Any] | None) -> T:
 
 
 def _coerce_value(expected_type: Any, value: Any) -> Any:
+    """Coerce `value` into the shape implied by `expected_type`.
+
+
+    This handles nested dataclasses, container types, unions, and Paths,
+    recursing into sequences and mappings when necessary.
+    """    
     base_type, _ = _strip_optional(expected_type)
     if value is None:
         return None
@@ -727,6 +1000,16 @@ def _coerce_value(expected_type: Any, value: Any) -> Any:
 
 
 def _strip_optional(typ: Any) -> Tuple[Any, bool]:
+    """Strip Optional from a type annotation.
+
+
+    Args:
+        typ (Any): Type annotation that may be a Union including ``None``.
+
+    Returns:
+        tuple[Any, bool]: A pair ``(base_type, is_optional)`` where
+        ``is_optional`` is True if ``None`` was present in the union.
+    """    
     origin = get_origin(typ)
     if origin is Union:
         args = [arg for arg in get_args(typ) if arg is not type(None)]
@@ -738,6 +1021,13 @@ def _strip_optional(typ: Any) -> Tuple[Any, bool]:
 
 
 def is_dataclass_type(typ: Any) -> bool:
+    """Return True if `typ` is a dataclass type (not an instance).
+
+
+    This helper is tolerant of non-type inputs and wraps
+    :func:`dataclasses.is_dataclass` in a try/except to avoid
+    propagating unexpected errors.
+    """    
     try:
         return isinstance(typ, type) and is_dataclass(typ)
     except Exception:

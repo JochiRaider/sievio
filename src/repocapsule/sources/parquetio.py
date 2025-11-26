@@ -1,3 +1,7 @@
+# parquetio.py
+# SPDX-License-Identifier: MIT
+"""Parquet helpers for detecting payloads and yielding text/meta records."""
+
 from __future__ import annotations
 
 from typing import Iterable, Optional, Any, Dict, Sequence
@@ -19,6 +23,15 @@ _PARQUET_MAGIC = b"PAR1"
 
 
 def sniff_parquet(data: bytes, rel: str) -> bool:
+    """Heuristically detects Parquet content from a filename or magic bytes.
+
+    Args:
+        data (bytes): File bytes to inspect.
+        rel (str): Relative path or filename for extension checking.
+
+    Returns:
+        bool: True if the payload appears to be Parquet.
+    """
     name = (rel or "").lower()
     if name.endswith(".parquet"):
         return True
@@ -33,6 +46,19 @@ def _iter_rows_from_table(
     text_column: str = DEFAULT_TEXT_COLUMN,
     meta_column: str = DEFAULT_META_COLUMN,
 ) -> Iterable[Record]:
+    """Yields records from a PyArrow table using text/meta columns.
+
+    Args:
+        table (pa.Table): Table containing Parquet rows.
+        rel (str): Path hint used when constructing metadata.
+        ctx (RepoContext | None): Optional context for default metadata.
+        text_column (str): Column name containing textual content.
+        meta_column (str): Column name containing metadata dictionaries.
+
+    Returns:
+        Iterable[Record]: Records with text and merged metadata, or an
+            empty tuple when required columns are missing.
+    """
     if text_column not in table.column_names or meta_column not in table.column_names:
         log.info("Parquet handler skipping %s: missing columns %s/%s", rel, text_column, meta_column)
         return ()
@@ -73,6 +99,18 @@ def handle_parquet(
     ctx: Optional[RepoContext],
     chunk_policy: Optional[ChunkPolicy],
 ) -> Optional[Iterable[Record]]:
+    """Reads Parquet bytes and emits records, ignoring chunk policy.
+
+    Args:
+        data (bytes): Raw Parquet payload.
+        rel (str): Path hint for logging and metadata.
+        ctx (RepoContext | None): Optional context for metadata defaults.
+        chunk_policy (ChunkPolicy | None): Unused for Parquet rows.
+
+    Returns:
+        Iterable[Record] | None: Iterator over parsed records, or None if
+            the payload cannot be read.
+    """
     # ChunkPolicy is intentionally ignored; Parquet rows are treated as final chunks.
     try:
         table = pq.read_table(pa.BufferReader(data))
@@ -89,6 +127,17 @@ def iter_parquet_records(
     text_column: str = DEFAULT_TEXT_COLUMN,
     meta_column: str = DEFAULT_META_COLUMN,
 ) -> Iterable[Record]:
+    """Iterates records from Parquet files or directories of Parquet data.
+
+    Args:
+        path_or_paths (str | Path | Sequence[str | Path]): File or
+            directory paths to read.
+        text_column (str): Column name containing textual content.
+        meta_column (str): Column name containing metadata dictionaries.
+
+    Returns:
+        Iterable[Record]: Generator of records with text and metadata.
+    """
     def _coerce_paths(p: str | Path | Sequence[str | Path]) -> list[Path]:
         if isinstance(p, (str, Path)):
             return [Path(p)]

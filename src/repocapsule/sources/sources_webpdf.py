@@ -1,5 +1,7 @@
 # sources_webpdf.py
 # SPDX-License-Identifier: MIT
+"""Sources for downloading PDFs via direct links or webpage scraping."""
+
 from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence, Dict, List, Set, Tuple
@@ -29,6 +31,17 @@ class _PdfDownloadTask:
     url: str
 
 def _ensure_http_url(url: str) -> str:
+    """Validates and normalizes an HTTP(S) URL for PDF ingestion.
+
+    Args:
+        url (str): URL to validate.
+
+    Returns:
+        str: Original URL if it passes validation.
+
+    Raises:
+        ValueError: If the URL scheme is unsupported or contains credentials.
+    """
     parsed = urlparse(url)
     scheme = (parsed.scheme or "").lower()
     if scheme not in _ALLOWED_SCHEMES:
@@ -42,6 +55,7 @@ def _ensure_http_url(url: str) -> str:
     return url
 
 def _sanitize_name(name: str, fallback: str = "document.pdf") -> str:
+    """Generates a safe filename from a URL or header value."""
     # Keep just a safe basename; replace weird characters.
     base = posixpath.basename(name) or fallback
     base = unquote(base)
@@ -62,7 +76,14 @@ _CDISP_RE = re.compile(
 )
 
 def _filename_from_content_disposition(hval: Optional[str]) -> Optional[str]:
-    """parser for Content-Disposition filename/filename*."""
+    """Parses a Content-Disposition header for filename fields.
+
+    Args:
+        hval (str | None): Header value to inspect.
+
+    Returns:
+        str | None: Filename or None if not present.
+    """
     if not hval:
         return None
     m = _CDISP_RE.search(hval)
@@ -87,12 +108,14 @@ def _filename_from_content_disposition(hval: Optional[str]) -> Optional[str]:
 
 
 def _name_from_url(u: str) -> str:
+    """Derives a filename from the path portion of a URL."""
     path = urlparse(u).path
     name = posixpath.basename(path) or "document.pdf"
     return name
 
 
 def _looks_like_pdf(head: bytes) -> bool:
+    """Checks whether a byte prefix matches PDF magic bytes."""
     # PDF files begin with "%PDF-" magic
     return head.startswith(b"%PDF-")
 
@@ -101,23 +124,16 @@ log = get_logger(__name__)
 
 
 class WebPdfListSource(Source):
-    """
-    Fetch a list of web-hosted PDFs and yield them as FileItem objects.
+    """Downloads web-hosted PDFs and yields them as FileItem objects.
 
-    Parameters
-    ----------
-    urls : sequence of str
-        Direct links to PDFs.
-    timeout : int
-        Per-request timeout (seconds).
-    max_pdf_bytes : int
-        Hard cap; downloads abort once this many bytes are read.
-    require_pdf : bool
-        If True, skip responses that don't *sniff* like a PDF.
-    add_prefix : str | None
-        Optional folder prefix to place before each emitted filename.
-    retries : int
-        Simple retry count with backoff (2^attempt seconds).
+    Attributes:
+        urls (Sequence[str]): Direct PDF links to fetch.
+        timeout (int): Per-request timeout in seconds.
+        max_pdf_bytes (int): Hard cap on downloaded bytes.
+        require_pdf (bool): Whether to skip responses that do not sniff
+            like a PDF.
+        add_prefix (str | None): Optional folder prefix for filenames.
+        retries (int): Retry count with exponential backoff.
     """
 
     def __init__(
@@ -132,6 +148,18 @@ class WebPdfListSource(Source):
         config: Optional[PdfSourceConfig] = None,
         client: Optional[safe_http.SafeHttpClient] = None,
     ) -> None:
+        """Initializes the list source with fetch configuration.
+
+        Args:
+            urls (Sequence[str]): Direct PDF URLs to download.
+            timeout (int | None): Per-request timeout override.
+            max_pdf_bytes (int | None): Hard cap on downloaded bytes.
+            require_pdf (bool | None): Skip non-PDF responses when True.
+            add_prefix (str | None): Optional prefix for emitted paths.
+            retries (int | None): Number of download retries.
+            config (PdfSourceConfig | None): Optional source configuration.
+            client (safe_http.SafeHttpClient | None): HTTP client to use.
+        """
         cfg = config or PdfSourceConfig()
         self._pdf_config = cfg
         self.urls = list(urls)
@@ -152,6 +180,7 @@ class WebPdfListSource(Source):
         self._download_executor_kind = cfg.download_executor_kind or "thread"
 
     def _request(self, url: str) -> urllib.request.Request:
+        """Builds a GET request for the given URL with standard headers."""
         safe_url = _ensure_http_url(url)
         return urllib.request.Request(
             safe_url,
@@ -163,7 +192,18 @@ class WebPdfListSource(Source):
         )
 
     def _download(self, url: str) -> tuple[bytes, Dict[str, str], int]:
-        """Stream a URL into bytes with size cap; return (data, headers)."""
+        """Streams a URL into bytes with a size cap.
+
+        Args:
+            url (str): Target URL to fetch.
+
+        Returns:
+            tuple[bytes, Dict[str, str], int]: Downloaded data, response
+                headers, and original file size if declared.
+
+        Raises:
+            RuntimeError: If the download fails or exceeds configured caps.
+        """
         try:
             with self._client.open_with_retries(
                 self._request(url),
@@ -233,6 +273,7 @@ class WebPdfListSource(Source):
         self,
         result,
     ) -> tuple[bytes, Dict[str, str], int]:
+        """Normalizes download output to a uniform tuple shape."""
         if isinstance(result, tuple):
             if len(result) == 3:
                 data, headers, file_size = result
@@ -253,6 +294,7 @@ class WebPdfListSource(Source):
         used_names: Set[str],
         file_bytes: int,
     ) -> Optional[FileItem]:
+        """Builds a FileItem from downloaded PDF content."""
         cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
         name = _sanitize_name(cd_name or _name_from_url(url))
         if not name.lower().endswith(".pdf"):
@@ -287,6 +329,7 @@ class WebPdfListSource(Source):
         )
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Yields downloaded PDFs as FileItem objects."""
         used_names: Set[str] = set()
         total_urls = len(self.urls)
         success_count = 0
@@ -410,25 +453,7 @@ class _PdfLinkScraper(HTMLParser):
 
 
 class WebPagePdfSource(Source):
-    """
-    Scrape a single HTML page for PDF links, then download them via WebPdfListSource.
-
-    Parameters
-    ----------
-    page_url : str
-        The web page to scan for PDF links.
-    same_domain : bool
-        Keep only links on the same host as `page_url` (default True).
-    max_links : int
-        Cap the number of discovered links we attempt to fetch.
-    match_regex : str | None
-        Optional regex; only keep links whose URL matches.
-    include_ambiguous : bool
-        If True, include links without a .pdf suffix; the downstream
-        WebPdfListSource will still sniff for real PDFs.
-    timeout, max_pdf_bytes, require_pdf, add_prefix, retries :
-        Passed through to WebPdfListSource.
-    """
+    """Scrapes a single HTML page for PDF links and downloads them."""
 
     def __init__(
         self,
@@ -446,6 +471,23 @@ class WebPagePdfSource(Source):
         config: Optional[PdfSourceConfig] = None,
         client: Optional[safe_http.SafeHttpClient] = None,
     ) -> None:
+        """Initializes the page scraper with discovery and download settings.
+
+        Args:
+            page_url (str): Page URL to scan for PDF links.
+            same_domain (bool): Restrict links to the same host.
+            max_links (int | None): Maximum links to fetch.
+            match_regex (str | None): Regex that links must satisfy.
+            include_ambiguous (bool | None): Include links without .pdf
+                suffixes when True.
+            timeout (int | None): Per-request timeout override.
+            max_pdf_bytes (int | None): Hard cap on downloaded bytes.
+            require_pdf (bool | None): Skip non-PDF responses when True.
+            add_prefix (str | None): Optional path prefix for outputs.
+            retries (int | None): Download retry count.
+            config (PdfSourceConfig | None): Optional source config.
+            client (safe_http.SafeHttpClient | None): HTTP client to use.
+        """
         cfg = config or PdfSourceConfig()
         self._pdf_config = cfg
         self.page_url = page_url
@@ -467,6 +509,7 @@ class WebPagePdfSource(Source):
         self._client = resolved_client
 
     def _req(self, url: str) -> urllib.request.Request:
+        """Builds an HTML request with the configured User-Agent."""
         safe_url = _ensure_http_url(url)
         return urllib.request.Request(
             safe_url,
@@ -475,6 +518,7 @@ class WebPagePdfSource(Source):
         )
 
     def _fetch_html(self) -> str:
+        """Fetches the HTML content of the configured page."""
         with self._client.open_with_retries(
             self._req(self.page_url),
             timeout=self.timeout,
@@ -498,6 +542,14 @@ class WebPagePdfSource(Source):
             return raw.decode("utf-8", errors="replace")
 
     def _discover_pdf_links(self, html: str) -> List[str]:
+        """Extracts candidate PDF links from HTML content.
+
+        Args:
+            html (str): HTML source to scan for links.
+
+        Returns:
+            list[str]: Resolved PDF URLs that meet filtering rules.
+        """
         scraper = _PdfLinkScraper()
         scraper.feed(html)
 
@@ -533,6 +585,7 @@ class WebPagePdfSource(Source):
         return found
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Yields FileItems for PDFs discovered on the target page."""
         try:
             html = self._fetch_html()
         except Exception as exc:

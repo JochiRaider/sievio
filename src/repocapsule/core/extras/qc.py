@@ -1,3 +1,10 @@
+"""Quality control scoring utilities for JSONL datasets.
+
+This module provides quality scoring for text records using heuristics,
+optional perplexity models, and duplicate detection via SimHash and MinHash.
+It also includes helpers to score JSONL files and export CSV summaries.
+"""
+
 # qc.py
 # SPDX-License-Identifier: MIT
 
@@ -46,6 +53,8 @@ _DEFAULT_MINHASH_JACCARD = 0.82
 
 @dataclass(slots=True)
 class JSONLScoreStats:
+    """Counters and error examples collected during JSONL QC scoring."""
+
     total_lines: int = 0
     parsed_ok: int = 0
     scored_ok: int = 0
@@ -54,6 +63,14 @@ class JSONLScoreStats:
     error_examples: List[Dict[str, Any]] = field(default_factory=list)
 
     def record_error(self, line_no: int, kind: str, exc: Exception, line: str) -> None:
+        """Record an error and optionally stash a snippet for inspection.
+
+        Args:
+            line_no (int): 1-based line number in the source file.
+            kind (str): Category of the error, either "parse" or "score".
+            exc (Exception): Exception that was raised.
+            line (str): Raw line content for context.
+        """
         if kind == "parse":
             self.parse_errors += 1
         elif kind == "score":
@@ -71,6 +88,7 @@ class JSONLScoreStats:
         )
 
     def to_dict(self) -> Dict[str, Any]:
+        """Return a JSON-serializable view of the current counters."""
         return {
             "total_lines": self.total_lines,
             "parsed_ok": self.parsed_ok,
@@ -82,16 +100,18 @@ class JSONLScoreStats:
 
 
 class JSONLQualityScorer:
-    """
-    Quality scorer that blends heuristics, optional perplexity, and near-dup detection.
+    """Quality scorer blending heuristics, perplexity, and near-dup detection.
 
     Near-dup detection uses two mechanisms:
-    - Simhash compared against a fixed-size recent window (deque) with a Hamming threshold.
-    - MinHash + LSH for approximate global dedup; tunable via minhash_* parameters.
+    - SimHash compared against a fixed-size recent window with a Hamming threshold.
+    - MinHash with LSH for approximate global deduplication, tunable via
+      minhash_* parameters.
 
-    ``near_dup`` is true when either Simhash or MinHash flags a neighbor. ``dup_family_id`` picks
-    ``minhash_dup_of`` when available, else ``simhash_dup_of``, else the record's doc_id for stability.
+    near_dup is true when either SimHash or MinHash flags a neighbor. The
+    dup_family_id prefers the MinHash duplicate id, then the SimHash duplicate
+    id, and falls back to the record doc_id for stability.
     """
+
     def __init__(
         self,
         *,
@@ -110,6 +130,28 @@ class JSONLQualityScorer:
         gopher_weight: float = 0.10,
         heuristics: object | None = None,
     ):
+        """Initialize the scorer configuration and optional models.
+
+        Args:
+            lm_model_id (str | None): Language model identifier for perplexity.
+            device (str): Device for the language model, typically "cuda" or
+                "cpu".
+            dtype (str): Torch dtype string for the language model.
+            simhash_hamm_thresh (int): Hamming distance threshold for SimHash.
+            simhash_window (int): Sliding window size for SimHash comparisons.
+            local_files_only (bool): Whether to restrict model loading to local
+                files.
+            enable_minhash (bool): Whether to enable MinHash duplicate detection.
+            minhash_perms (int): Number of MinHash permutations.
+            minhash_bands (int): Number of LSH bands.
+            minhash_shingle_k (int): Shingle size for MinHash signatures.
+            minhash_jaccard_thresh (float): Jaccard threshold for MinHash
+                duplicates.
+            enable_gopher (bool): Whether to include Gopher quality scoring
+                when available.
+            gopher_weight (float): Weight applied to the Gopher quality score.
+            heuristics (object | None): Optional heuristic overrides.
+        """
         self._init_kwargs = {
             "lm_model_id": lm_model_id,
             "device": device,
@@ -182,11 +224,14 @@ class JSONLQualityScorer:
         self.last_stats = None
 
     def reset_stats(self) -> None:
+        """Reset scoring statistics for the next run."""
         self.last_stats = JSONLScoreStats()
 
     def clone_for_parallel(self) -> "JSONLQualityScorer":
-        """
-        Return a fresh scorer instance with identical configuration but independent state.
+        """Return a fresh scorer with identical configuration and separate state.
+
+        Returns:
+            JSONLQualityScorer: Independent scorer using the same configuration.
         """
         kwargs = dict(getattr(self, "_init_kwargs", {}) or {})
         if not kwargs:
@@ -194,16 +239,19 @@ class JSONLQualityScorer:
         return JSONLQualityScorer(**kwargs)
 
     def score_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
-        """
-        Score a single record and emit QC metrics.
+        """Compute QC metrics for a single record and return the enriched dict.
 
-        Simhash: compute 64-bit simhash and compare against a recent window (maxlen simhash_window)
-        using ``self.sim_thresh`` as the Hamming cutoff; the closest neighbor distance is stored
-        in ``ham_min`` and drives ``near_dup_sim``.
-        MinHash: build a signature and query LSH; ``add_and_check`` returns (is_dup, jaccard, dup_of)
-        which map to ``near_dup_minhash``, ``minhash_jaccard``, and ``minhash_dup_of``.
-        Overall ``near_dup`` is the OR of both signals and down-weights the quality score by a
-        language-dependent factor.
+        SimHash computes a 64-bit hash and compares against a recent window using
+        the configured Hamming threshold. MinHash builds a signature, queries LSH,
+        and reports possible global duplicates. Duplicate signals down-weight the
+        quality score by a language-dependent factor.
+
+        Args:
+            rec (dict[str, Any]): Record containing text and a meta mapping.
+
+        Returns:
+            dict[str, Any]: QC metrics, duplicate indicators, and passthrough
+                meta.
         """
         text = rec.get("text", "")
         meta = rec.get("meta", {})
@@ -310,6 +358,7 @@ class JSONLQualityScorer:
         }
 
     def reset_state(self) -> None:
+        """Clear duplicate detection state for a fresh scoring pass."""
         self.sim_seen.clear()
         if self.lsh is not None:
             self.lsh.reset()
@@ -320,7 +369,18 @@ class JSONLQualityScorer:
         *,
         fail_on_error: bool = False,
     ) -> list[Dict[str, Any]]:
-        """Score a JSONL file, supporting both plain and gzip-compressed JSONL (*.jsonl.gz)."""
+        """Score a JSONL file, including gzip-compressed *.jsonl.gz inputs.
+
+        Args:
+            jsonl_path (str): Path to the JSONL file.
+            fail_on_error (bool): Whether to raise on parse or scoring errors.
+
+        Returns:
+            list[dict[str, Any]]: QC result rows for each record.
+
+        Raises:
+            RuntimeError: If fail_on_error is True and parsing or scoring fails.
+        """
         stats = JSONLScoreStats()
         self.last_stats = stats
         rows: list[Dict[str, Any]] = []
@@ -357,6 +417,15 @@ class JSONLQualityScorer:
 
 
 def write_csv(rows: Iterable[Dict[str, Any]], out_csv: str) -> str:
+    """Write QC rows to CSV using a fixed column order.
+
+    Args:
+        rows (Iterable[dict[str, Any]]): QC result rows.
+        out_csv (str): Destination CSV path.
+
+    Returns:
+        str: The path written to.
+    """
     cols = [
         "score",
         "perplexity",
@@ -417,8 +486,24 @@ def score_jsonl_to_csv(
     simhash_hamm_thresh: int = 4,
     local_files_only: bool = False,
 ) -> str:
-    """
-    Score a JSONL file and write a CSV next to it. Returns the CSV path.
+    """Score a JSONL file and write a CSV alongside it.
+
+    Args:
+        jsonl_path (str): Path to the JSONL file to score.
+        out_csv (str | None): Optional destination CSV path; defaults beside
+            input.
+        lm_model_id (str | None): Language model identifier for perplexity
+            scoring.
+        device (str): Device for the language model, typically "cuda" or
+            "cpu".
+        dtype (str): Torch dtype string for the language model.
+        simhash_hamm_thresh (int): Hamming distance threshold for SimHash
+            duplicates.
+        local_files_only (bool): Whether to restrict model loading to local
+            files.
+
+    Returns:
+        str: Path to the written CSV file.
     """
     base, _ = os.path.splitext(jsonl_path)
     out_csv = out_csv or f"{base}_quality.csv"
@@ -445,9 +530,20 @@ def score_jsonl_to_csv(
 
 
 class DefaultQualityScorerFactory:
+    """Factory that builds JSONLQualityScorer instances for registry use."""
+
     id = DEFAULT_QC_SCORER_ID
 
     def build(self, options: Mapping[str, Any]) -> "JSONLQualityScorer":
+        """Instantiate a JSONLQualityScorer using QCHeuristics options.
+
+        Args:
+            options (Mapping[str, Any]): Configuration mapping passed by the
+                registry.
+
+        Returns:
+            JSONLQualityScorer: Configured scorer instance.
+        """
         heur_opt = options.get("heuristics")
         if isinstance(heur_opt, QCHeuristics):
             heuristics = heur_opt
@@ -467,6 +563,7 @@ except Exception:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
+    """Deprecated console entry point; use the library API instead."""
     raise SystemExit(
         "repocapsule.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."
     )

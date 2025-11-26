@@ -1,4 +1,6 @@
 # sinks.py
+# SPDX-License-Identifier: MIT
+"""Sinks for writing repository records to various file formats."""
 from __future__ import annotations
 
 from pathlib import Path
@@ -9,9 +11,16 @@ from ..core.interfaces import RepoContext, Record
 
 
 class _BaseJSONLSink:
-    """Shared logic for JSONL sinks."""
+    """Shared JSONL sink logic with optional header support."""
 
     def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+        """Configure a JSONL sink.
+
+        Args:
+            out_path (str | os.PathLike[str]): Destination file path.
+            header_record (Mapping[str, Any] | None): Optional record
+                written once at the start of the file.
+        """
         self._path = Path(out_path)
         self._fp = None
         self._tmp_path: Optional[Path] = None
@@ -19,6 +28,7 @@ class _BaseJSONLSink:
         self._header_written = False
 
     def open(self, context: Optional[RepoContext] = None) -> None:
+        """Create a temp file for writing and emit the header if set."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # If we've already written a header (e.g., during the main pipeline run)
         # and the file exists, append instead of clobbering the existing dataset.
@@ -36,10 +46,12 @@ class _BaseJSONLSink:
             self._header_written = True
 
     def write(self, record: Dict[str, Any]) -> None:
+        """Write a single JSON record as a compact line."""
         assert self._fp is not None
         self._fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
 
     def close(self) -> None:
+        """Close any open handle and move the temp file into place."""
         if not self._fp:
             return
         try:
@@ -55,20 +67,28 @@ class _BaseJSONLSink:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """Ensure resources are closed when used as a context manager."""
         self.close()
 
     def _open_handle(self, path: Path):
+        """Return a write handle for a fresh file path."""
         raise NotImplementedError
 
     def _open_append_handle(self, path: Path):
+        """Return an append handle for an existing file path."""
         raise NotImplementedError
 
     def set_header_record(self, record: Optional[Mapping[str, Any]]) -> None:
+        """Replace the header record to be written on the next open call."""
         self._header_record = dict(record) if record else None
         self._header_written = False
 
     def finalize(self, records: Iterable[Record]) -> None:
-        """Default finalize writes records as normal JSONL entries."""
+        """Write records directly, appending if needed.
+
+        Args:
+            records (Iterable[Record]): Records to write without buffering.
+        """
         fp = self._fp
         temp_opened = False
         if fp is None:
@@ -106,22 +126,35 @@ class GzipJSONLSink(_BaseJSONLSink):
     def _open_append_handle(self, path: Path):
         return gzip.open(path, "at", encoding="utf-8", newline="")
 
+
 class PromptTextSink:
-    """Writes human-readable prompt text (format as you prefer)."""
+    """Write human-readable prompt text for chunked documents."""
 
     def __init__(self, out_path: str | os.PathLike[str], *, heading_fmt: str = "### {path} [chunk {chunk}]"):
+        """Configure the destination and heading format.
+
+        Args:
+            out_path (str | os.PathLike[str]): Destination file path.
+            heading_fmt (str): Template for headings using path and chunk.
+        """
         self._path = Path(out_path)
         self._heading_fmt = heading_fmt
         self._fp = None
         self._tmp_path: Optional[Path] = None
 
     def open(self, context: Optional[RepoContext] = None) -> None:
+        """Create a temp file for writing prompt text output."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name = f"{self._path.name}.tmp"
         self._tmp_path = self._path.parent / tmp_name
         self._fp = open(self._tmp_path, "w", encoding="utf-8", newline="")
 
     def write(self, record: Dict[str, Any]) -> None:
+        """Write a heading and its associated text block.
+
+        Args:
+            record (Dict[str, Any]): Record containing text and metadata.
+        """
         assert self._fp is not None
         meta = record.get("meta", {})
         rel = meta.get("path", "unknown")
@@ -131,6 +164,7 @@ class PromptTextSink:
         self._fp.write(f"{heading}\n{text}\n\n")
 
     def close(self) -> None:
+        """Close any open handle and move the temp file into place."""
         if not self._fp:
             return
         try:
@@ -142,26 +176,28 @@ class PromptTextSink:
             self._tmp_path = None
 
     def __enter__(self) -> "PromptTextSink":
+        """Open the sink for use as a context manager."""
         self.open()
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
+        """Ensure resources are closed when used as a context manager."""
         self.close()
 
 
 class NoopSink:
-    """
-    A trivial Sink you can subclass; provides no-op lifecycle methods.
-    Useful in tests or as a mixin when only ``write`` needs custom behavior.
-    """
+    """Trivial sink with no-op lifecycle hooks for tests or mixins."""
 
     def open(self, context: Optional[RepoContext] = None) -> None:  # noqa: D401
+        """Perform no setup."""
         pass
 
     def write(self, record: Record) -> None:  # pragma: no cover - for completeness
+        """Raise to indicate subclasses must implement writes."""
         raise NotImplementedError("NoopSink.write must be overridden")
 
     def close(self) -> None:  # noqa: D401
+        """Perform no teardown."""
         pass
 
 

@@ -1,6 +1,8 @@
 # jsonl_source.py
 # SPDX-License-Identifier: MIT
 
+"""JSONL source that re-chunks text records into file-like items."""
+
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -19,12 +21,16 @@ __all__ = ["JSONLTextSource"]
 
 @dataclass
 class JSONLTextSource(Source):
-    """
-    Treat existing JSONL lines as pseudo-files for re-chunking.
+    """Treats JSONL lines as pseudo-files for re-chunking.
 
-    - Expects each line to be a JSON object; invalid JSON or non-dicts are skipped.
-    - Uses ``text_key`` (default: "text") to extract content; missing or non-string values are skipped.
-    - Intentionally forgiving for heterogeneous JSONL streams; only lines with usable text are emitted.
+    Each line should be a JSON object. Lines that are invalid JSON, not
+    dictionaries, or missing the configured text field are skipped to
+    keep processing forgiving for heterogeneous streams.
+
+    Attributes:
+        paths (Sequence[Path]): JSONL or JSONL.GZ files to read.
+        context (RepoContext | None): Optional repository context.
+        text_key (str): Field name containing text content to emit.
     """
 
     paths: Sequence[Path]
@@ -32,6 +38,8 @@ class JSONLTextSource(Source):
     text_key: str = "text"
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Yields FileItems constructed from JSONL records."""
+
         for path in self.paths:
             opener = _open_jsonl_gz if "".join(path.suffixes[-2:]).lower() == ".jsonl.gz" else _open_jsonl
             try:
@@ -59,6 +67,8 @@ class JSONLTextSource(Source):
 
 
 def _extract_text(record: Dict[str, Any], key: str) -> Optional[str]:
+    """Extracts a string value from the given record by key."""
+
     val = record.get(key)
     if isinstance(val, str):
         return val
@@ -66,6 +76,8 @@ def _extract_text(record: Dict[str, Any], key: str) -> Optional[str]:
 
 
 def _derive_path(record: Dict[str, Any], fallback_name: str, lineno: int) -> str:
+    """Derives a path-like label for a record, falling back to line number."""
+
     meta = record.get("meta")
     if isinstance(meta, dict):
         path_val = meta.get("path")
@@ -75,8 +87,12 @@ def _derive_path(record: Dict[str, Any], fallback_name: str, lineno: int) -> str
 
 
 def _open_jsonl(path: Path):
+    """Opens an uncompressed JSONL file for reading."""
+
     return open(path, "r", encoding="utf-8")
 
 
 def _open_jsonl_gz(path: Path):
+    """Opens a gzip-compressed JSONL file for reading."""
+
     return gzip.open(path, "rt", encoding="utf-8")

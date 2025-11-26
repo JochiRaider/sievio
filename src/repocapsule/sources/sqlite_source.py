@@ -1,5 +1,6 @@
 # sqlite_source.py
 # SPDX-License-Identifier: MIT
+"""Source for emitting text records from SQLite queries or tables."""
 
 from __future__ import annotations
 
@@ -24,6 +25,24 @@ _READ_CHUNK = 64 * 1024
 
 @dataclass
 class SQLiteSource(Source):
+    """Extracts text data from SQLite databases as file-like items.
+
+    Attributes:
+        db_path (Path): Local path to the SQLite database file.
+        context (RepoContext | None): Optional repository context.
+        table (str | None): Table name to select from when no SQL is provided.
+        sql (str | None): Custom SQL query to execute.
+        text_columns (Sequence[str]): Columns to concatenate into text.
+        id_column (str | None): Column used to form stable item paths.
+        where (str | None): Optional WHERE clause for table mode.
+        batch_size (int): Number of rows to fetch per batch.
+        db_url (str | None): URL to download the database if missing.
+        download_timeout (float | None): Timeout for database download.
+        download_max_bytes (int | None): Cap for downloaded database size.
+        retries (int): Retry count for downloads.
+        client (safe_http.SafeHttpClient | None): HTTP client to use.
+    """
+
     db_path: Path
     context: Optional[RepoContext] = None
     table: Optional[str] = None
@@ -39,6 +58,7 @@ class SQLiteSource(Source):
     client: Optional[safe_http.SafeHttpClient] = None
 
     def __post_init__(self) -> None:
+        """Normalizes configuration after initialization."""
         if isinstance(self.text_columns, str):
             self.text_columns = (self.text_columns,)
         else:
@@ -49,6 +69,7 @@ class SQLiteSource(Source):
             self.batch_size = 1000
 
     def iter_files(self) -> Iterable[FileItem]:
+        """Yields FileItems for each row returned by the configured query."""
         try:
             db_path = self._ensure_db_local()
         except FileNotFoundError:
@@ -84,6 +105,7 @@ class SQLiteSource(Source):
             log.warning("Failed to read SQLite DB %s: %s", db_path, exc)
 
     def _ensure_db_local(self) -> Path:
+        """Ensures the database file is available locally, downloading if needed."""
         if self.db_path.exists():
             return self.db_path
         if not self.db_url:
@@ -94,6 +116,7 @@ class SQLiteSource(Source):
         raise FileNotFoundError(self.db_path)
 
     def _build_query(self) -> Tuple[str, Optional[str]]:
+        """Constructs the SQL query and a label for result paths."""
         if self.sql:
             return self.sql, "query"
         if self.table:
@@ -112,6 +135,7 @@ class SQLiteSource(Source):
     def _row_to_text_and_path(
         self, row: sqlite3.Row, idx: int, table_or_label: str
     ) -> Optional[Tuple[bytes, str]]:
+        """Converts a database row into encoded text and a relative path."""
         parts: list[str] = []
         for col in self.text_columns:
             try:
@@ -138,6 +162,7 @@ class SQLiteSource(Source):
         return data, rel_path
 
     def _download_db(self) -> None:
+        """Downloads the SQLite database from the configured URL."""
         if not self.db_url:
             raise FileNotFoundError(self.db_path)
         client = self.client or safe_http.get_global_http_client()

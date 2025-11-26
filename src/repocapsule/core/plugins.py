@@ -1,5 +1,7 @@
 # plugins.py
 # SPDX-License-Identifier: MIT
+"""Plugin discovery helpers for registering sources, sinks, and scorers."""
+
 from __future__ import annotations
 
 from importlib import metadata
@@ -26,11 +28,20 @@ def load_entrypoint_plugins(
     scorer_registry: QualityScorerRegistry,
     group: str = "repocapsule.plugins",
 ) -> None:
-    """
-    Discover and load plugins from Python entry points.
+    """Discover and load plugin entry points.
 
-    Plugins should expose a callable that accepts the registries and performs registrations.
-    Failures are logged and skipped to keep the pipeline resilient.
+    Plugins must expose a callable that accepts the registries and performs
+    registrations. Failures are logged and ignored to keep the pipeline
+    resilient.
+
+    Args:
+        source_registry (SourceRegistry): Registry to register sources.
+        sink_registry (SinkRegistry): Registry to register sinks.
+        bytes_registry (BytesHandlerRegistry): Registry to register bytes
+            handlers.
+        scorer_registry (QualityScorerRegistry): Registry to register quality
+            scorers.
+        group (str): Entry-point group name to search for plugins.
     """
     try:
         entry_points = metadata.entry_points()

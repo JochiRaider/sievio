@@ -1,5 +1,6 @@
 # registries.py
 # SPDX-License-Identifier: MIT
+"""Registries for sources, sinks, byte handlers, and quality scorers."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -35,12 +36,27 @@ if TYPE_CHECKING:  # pragma: no cover - type-only deps
 
 @dataclass
 class SourceRegistry:
+    """Registry for source factories keyed by their ids."""
+
     _factories: Dict[str, SourceFactory] = field(default_factory=dict)
 
     def register(self, factory: SourceFactory) -> None:
+        """Register a source factory."""
         self._factories[factory.id] = factory
 
     def build_all(self, ctx: SourceFactoryContext, specs: Sequence[SourceSpec]) -> List[Source]:
+        """Instantiate sources for each spec using the registered factories.
+
+        Args:
+            ctx (SourceFactoryContext): Shared context for factory builds.
+            specs (Sequence[SourceSpec]): Source specifications to realize.
+
+        Returns:
+            List[Source]: Concrete sources produced by the factories.
+
+        Raises:
+            ValueError: If a spec references an unknown source kind.
+        """
         out: List[Source] = []
         for spec in specs:
             factory = self._factories.get(spec.kind)
@@ -52,12 +68,32 @@ class SourceRegistry:
 
 @dataclass
 class SinkRegistry:
+    """Registry for sink factories and related metadata merges."""
+
     _factories: Dict[str, SinkFactory] = field(default_factory=dict)
 
     def register(self, factory: SinkFactory) -> None:
+        """Register a sink factory."""
         self._factories[factory.id] = factory
 
     def build_all(self, ctx: SinkFactoryContext, specs: Sequence[SinkSpec]) -> Tuple[List[Sink], Mapping[str, Any], SinkFactoryContext]:
+        """Instantiate sinks for each spec and merge factory metadata.
+
+        The context may be updated by successive factories; the final context
+        is returned for downstream consumers.
+
+        Args:
+            ctx (SinkFactoryContext): Initial sink factory context.
+            specs (Sequence[SinkSpec]): Sink specifications to realize.
+
+        Returns:
+            Tuple[List[Sink], Mapping[str, Any], SinkFactoryContext]: Tuple
+                containing sinks, merged metadata, and the final factory
+                context.
+
+        Raises:
+            ValueError: If a spec references an unknown sink kind.
+        """
         sinks: List[Sink] = []
         merged_meta: Dict[str, Any] = {}
         current_ctx = ctx
@@ -80,17 +116,23 @@ class SinkRegistry:
 
 
 class BytesHandlerRegistry:
+    """Registry for handlers operating on raw bytes inputs."""
+
     def __init__(self) -> None:
         self._handlers: List[Tuple[Callable[[bytes, str], bool], Callable[..., Optional[Iterable[Any]]]]] = []
 
     def register(self, sniff: Callable[[bytes, str], bool], handler: Callable[..., Optional[Iterable[Any]]]) -> None:
+        """Register a handler with a sniff predicate."""
         self._handlers.append((sniff, handler))
 
     def handlers(self) -> Tuple[Tuple[Callable[[bytes, str], bool], Callable[..., Optional[Iterable[Any]]]], ...]:
+        """Return registered (sniff, handler) pairs."""
         return tuple(self._handlers)
 
 
 class QualityScorerFactory(Protocol):
+    """Protocol describing quality scorer factories."""
+
     id: str
 
     def build(self, options: Mapping[str, Any]) -> QualityScorer:
@@ -98,15 +140,19 @@ class QualityScorerFactory(Protocol):
 
 
 class QualityScorerRegistry:
+    """Registry for quality scorer factories with safe construction."""
+
     def __init__(self) -> None:
         self._factories: Dict[str, QualityScorerFactory] = {}
         self.log = get_logger(__name__)
         # DEFAULT_QC_SCORER_ID is used when qc.scorer_id is None and a default scorer is registered.
 
     def register(self, factory: QualityScorerFactory) -> None:
+        """Register a quality scorer factory."""
         self._factories[factory.id] = factory
 
     def get(self, factory_id: Optional[str] = None) -> Optional[QualityScorerFactory]:
+        """Return a scorer factory by id or the first registered one."""
         if factory_id is not None:
             return self._factories.get(factory_id)
         if not self._factories:
@@ -120,6 +166,16 @@ class QualityScorerRegistry:
         *,
         factory_id: Optional[str] = None,
     ) -> Optional[QualityScorer]:
+        """Safely build a quality scorer instance.
+
+        Args:
+            options (Mapping[str, Any]): Configuration passed to the factory.
+            factory_id (Optional[str]): Identifier for the desired factory.
+                Defaults to the first registered factory when omitted.
+
+        Returns:
+            Optional[QualityScorer]: Constructed scorer or ``None`` on error.
+        """
         factory = self.get(factory_id)
         if factory is None:
             return None
@@ -130,10 +186,12 @@ class QualityScorerRegistry:
             return None
 
     def ids(self) -> Tuple[str, ...]:
+        """Return ids of registered quality scorer factories."""
         return tuple(self._factories.keys())
 
 
 def default_source_registry() -> SourceRegistry:
+    """Build a SourceRegistry populated with the default factories."""
     from .factories import (
         LocalDirSourceFactory,
         GitHubZipSourceFactory,
@@ -154,6 +212,7 @@ def default_source_registry() -> SourceRegistry:
 
 
 def default_sink_registry() -> SinkRegistry:
+    """Build a SinkRegistry populated with the default factories."""
     from .factories import DefaultJsonlPromptSinkFactory, ParquetDatasetSinkFactory
 
     reg = SinkRegistry()

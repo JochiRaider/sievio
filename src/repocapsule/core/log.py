@@ -1,5 +1,11 @@
 # log.py
 # SPDX-License-Identifier: MIT
+"""Utilities for package-wide logging configuration.
+
+Installs a NullHandler on the package logger to avoid noisy warnings from
+importing clients and exposes helpers for runtime configuration and temporary
+level overrides.
+"""
 
 from __future__ import annotations
 
@@ -23,7 +29,15 @@ logging.getLogger(PACKAGE_LOGGER_NAME).addHandler(logging.NullHandler())
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
-    """Return a logger. If `name` is None, return the package logger."""
+    """Return a named logger scoped to repocapsule.
+
+    Args:
+        name (str | None): Fully qualified logger name. Defaults to the
+            package logger when omitted.
+
+    Returns:
+        logging.Logger: Logger instance for the requested name.
+    """
     return logging.getLogger(name or PACKAGE_LOGGER_NAME)
 
 
@@ -36,15 +50,21 @@ def configure_logging(
     propagate: bool = False,
     logger_name: str = PACKAGE_LOGGER_NAME,
 ) -> logging.Logger:
-    """Attach a StreamHandler to a repocapsule logger (idempotent-ish).
+    """Configure a stream handler for a repocapsule logger.
 
-    - `level` can be an int or a logging level name (e.g., "INFO").
-    - `stream` defaults to `sys.stderr`.
-    - If a StreamHandler is already present, we keep it and only adjust level.
-    - Set `propagate=True` if you want records to flow into your application's
-      existing logging tree; otherwise repocapsule logs stay self-contained.
-    - `logger_name` defaults to the package logger but can be changed when
-      embedding repocapsule inside a larger service.
+    Args:
+        level (int | str): Logging level or level name. Defaults to
+            logging.INFO.
+        stream (IO[str] | None): Target stream; defaults to sys.stderr.
+        fmt (str | None): Log format string. Defaults to a basic format when
+            omitted.
+        datefmt (str | None): Date format string for the handler.
+        propagate (bool): Whether log records bubble up to ancestor loggers.
+        logger_name (str): Logger name to configure. Defaults to the package
+            logger.
+
+    Returns:
+        logging.Logger: Logger configured with a single StreamHandler.
     """
     logger = get_logger(logger_name or PACKAGE_LOGGER_NAME)
 
@@ -70,7 +90,15 @@ def configure_logging(
 
 @contextmanager
 def temp_level(level: int | str, name: Optional[str] = None):
-    """Temporarily set a logger's level within a context manager."""
+    """Temporarily set a logger level inside a context manager.
+
+    Args:
+        level (int | str): Logging level or level name to apply.
+        name (str | None): Logger name. Defaults to the package logger.
+
+    Yields:
+        logging.Logger: Logger with the temporary level applied.
+    """
     logger = get_logger(name or PACKAGE_LOGGER_NAME)
     old = logger.level
     if isinstance(level, str):

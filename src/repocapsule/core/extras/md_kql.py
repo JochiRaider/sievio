@@ -1,3 +1,5 @@
+"""Extract KQL snippets from Markdown and convert them to records."""
+
 # md_kql.py
 # SPDX-License-Identifier: MIT
 
@@ -25,6 +27,17 @@ __all__ = [
 
 @dataclass
 class KQLBlock:
+    """KQL code block with location and optional metadata.
+
+    Attributes:
+        text (str): KQL source text.
+        start (int): Character offset where the block starts.
+        end (int): Exclusive character offset where the block ends.
+        lang (str | None): Language tag if present on a fence.
+        title (str | None): Nearest preceding heading title, if found.
+        tables (list[str] | None): Best-effort table name guesses.
+    """
+
     text: str
     start: int  # character offset in source markdown
     end: int    # exclusive
@@ -74,6 +87,7 @@ _IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*")
 
 
 def is_probable_kql(text: str) -> bool:
+    """Return True if the text appears to contain a KQL query."""
     if not text:
         return False
     t = text.strip()
@@ -103,6 +117,7 @@ def is_probable_kql(text: str) -> bool:
 # --------------------------
 
 def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, Optional[str], int, int]]:
+    """Yield fenced code blocks with language and character offsets."""
     lines = md.splitlines(keepends=True)
     i = 0
     pos = 0
@@ -129,6 +144,7 @@ def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, Optional[str], int, int]
 
 
 def _iter_indented_blocks(md: str) -> Iterator[tuple[str, int, int]]:
+    """Yield indented code blocks with character offsets."""
     lines = md.splitlines(keepends=True)
     i = 0
     pos = 0
@@ -149,6 +165,7 @@ def _iter_indented_blocks(md: str) -> Iterator[tuple[str, int, int]]:
 
 
 def _find_heading_before(md: str, char_index: int, *, max_lines_back: int = 5) -> Optional[str]:
+    """Locate the nearest heading above a character index within a window."""
     # Walk backwards from char_index up to N lines to find a heading
     head = None
     i = char_index
@@ -168,6 +185,7 @@ def _find_heading_before(md: str, char_index: int, *, max_lines_back: int = 5) -
 
 
 def _clean_block_text(t: str) -> str:
+    """Normalize indentation and trailing whitespace for a code block."""
     # Trim common leading indentation and trailing whitespace/newlines
     lines = t.splitlines()
     if not lines:
@@ -187,13 +205,23 @@ accept_indented_blocks: bool = True,
 min_lines: int = 2,
 skip_indented_inside_fences: bool = True,
  ) -> List[KQLBlock]:
-    """Return KQL blocks found in Markdown.
-    Policy changes:
-    • Each **fenced** block (```kql / ```kusto, or unlabeled that looks like KQL)
-    is treated as a **complete query unit**.
-    • **Indented** code is considered only *outside* fenced regions
-    when ``skip_indented_inside_fences`` is True (default). This avoids
-    double-extracting lines that are already part of a fence.
+    """Extract likely KQL code blocks from Markdown content.
+
+    Fenced blocks labeled as KQL (or unlabeled but heuristically KQL) are
+    treated as complete queries. Indented blocks are considered only outside
+    fences when skip_indented_inside_fences is True to avoid duplicates.
+
+    Args:
+        md_text (str): Markdown source text.
+        accept_unlabeled_fences (bool): Whether to infer KQL from unlabeled
+            fenced code blocks.
+        accept_indented_blocks (bool): Whether to scan indented code blocks.
+        min_lines (int): Minimum number of lines required to keep a block.
+        skip_indented_inside_fences (bool): Skip indented blocks that fall
+            within fenced ranges.
+
+    Returns:
+        list[KQLBlock]: Extracted blocks with offsets and metadata.
     """
     found: list[KQLBlock] = []
     # 1) Fenced blocks (and remember spans)
@@ -241,6 +269,14 @@ skip_indented_inside_fences: bool = True,
 # ----------------------------
 
 def guess_kql_tables(query: str) -> list[str]:
+    """Best-effort extraction of table names from a KQL query head.
+
+    Args:
+        query (str): KQL query text.
+
+    Returns:
+        list[str]: Candidate table identifiers in order of appearance.
+    """
     q = strip_kql_comments(query)
     q = q.strip()
     if not q:
@@ -304,6 +340,7 @@ def guess_kql_tables(query: str) -> list[str]:
 
 
 def strip_kql_comments(q: str) -> str:
+    """Remove single-line // comments from a KQL query."""
     # Remove // line comments; keep content otherwise.
     out_lines = []
     for ln in q.splitlines():
@@ -313,6 +350,8 @@ def strip_kql_comments(q: str) -> str:
     return "\n".join(out_lines)
 
 class KqlFromMarkdownExtractor:
+    """Extractor that builds records from KQL found in Markdown files."""
+
     name = "kql-md"
 
     def __init__(
@@ -322,6 +361,15 @@ class KqlFromMarkdownExtractor:
         accept_unlabeled_fences: bool = True,
         accept_indented_blocks: bool = True,
     ) -> None:
+        """Configure extraction heuristics.
+
+        Args:
+            min_lines (int): Minimum number of lines required to keep a block.
+            accept_unlabeled_fences (bool): Whether to infer KQL from unlabeled
+                fenced code blocks.
+            accept_indented_blocks (bool): Whether to scan indented code
+                blocks.
+        """
         self.min_lines = min_lines
         self.accept_unlabeled_fences = accept_unlabeled_fences
         self.accept_indented_blocks = accept_indented_blocks
@@ -333,6 +381,16 @@ class KqlFromMarkdownExtractor:
         path: str,
         context: Optional[RepoContext] = None,
     ) -> Optional[Iterable[Record]]:
+        """Extract KQL records from Markdown-like files.
+
+        Args:
+            text (str): File contents.
+            path (str): Relative or absolute path of the file.
+            context (RepoContext | None): Optional repository metadata.
+
+        Returns:
+            Iterable[Record] | None: Records if KQL is found, else None.
+        """
         # Only care about markdown-like files
         pl = path.lower()
         if not (pl.endswith(".md") or pl.endswith(".mdx") or pl.endswith(".markdown")):
@@ -383,6 +441,14 @@ _IDENTITY_HINTS = {"mdi", "defender-for-identity", "azure-atp"}
 
 
 def derive_category_from_rel(rel_path: str) -> str:
+    """Derive a coarse category from path segments for metadata tagging.
+
+    Args:
+        rel_path (str): Repository-relative path.
+
+    Returns:
+        str: Category label such as "mde", "sentinel", or "generic".
+    """
     s = rel_path.replace("\\", "/").lower()
     parts = set([p for p in re.split(r"[/_.-]", s) if p])
     if parts & _DEFENDER_HINTS:

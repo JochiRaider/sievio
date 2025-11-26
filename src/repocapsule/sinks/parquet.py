@@ -1,3 +1,7 @@
+# parquet.py
+# SPDX-License-Identifier: MIT
+"""Parquet sink for writing records to files or partitioned datasets."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -13,14 +17,16 @@ log = get_logger(__name__)
 
 
 class ParquetDatasetSink(Sink):
-    """
-    Write records to a Parquet file or dataset.
+    """Write records to a Parquet file or dataset.
 
-    Records are buffered into Arrow Tables with two primary columns:
-    - ``text_field`` (default: ``"text"``)
-    - ``meta_field`` (default: ``"meta"``) stored as a struct mirroring the meta dict
-    Optional ``partition_by`` keys are lifted out of the meta dict into top-level
-    columns so ``pyarrow.parquet.write_to_dataset`` can partition on them.
+    Records are buffered into Arrow tables with two primary columns:
+    - text_field (default: "text")
+    - meta_field (default: "meta") stored as a struct mirroring the
+      meta dict
+
+    Optional partition_by keys are lifted out of the meta dict into
+    top-level columns so pyarrow.parquet.write_to_dataset can partition
+    on them.
     """
 
     def __init__(
@@ -34,6 +40,18 @@ class ParquetDatasetSink(Sink):
         row_group_size: Optional[int] = None,
         overwrite: bool = True,
     ) -> None:
+        """Initialize the sink configuration.
+
+        Args:
+            path (str | Path): Target file path or dataset directory.
+            text_field (str): Column name for text content.
+            meta_field (str): Column name for metadata struct values.
+            partition_by (Iterable[str] | None): Meta keys to elevate to
+                top-level columns for dataset partitioning.
+            compression (str): Parquet compression codec name.
+            row_group_size (int | None): Maximum records per row group.
+            overwrite (bool): Whether to replace existing output.
+        """
         self._target = Path(path)
         self._is_dataset = False
         self._text_field = text_field or "text"
@@ -49,6 +67,12 @@ class ParquetDatasetSink(Sink):
         self._append_existing = False
 
     def open(self, context: Optional[RepoContext] = None) -> None:
+        """Prepare the sink for writing.
+
+        Args:
+            context (RepoContext | None): Repository context for this
+                write session.
+        """
         self._context = context
         self._buffer.clear()
         self._writer = None
@@ -76,6 +100,13 @@ class ParquetDatasetSink(Sink):
                     self._append_existing = True
 
     def write(self, record: Record) -> None:
+        """Buffer a record and flush when the row group is full.
+
+        Calls are ignored after the sink is closed.
+
+        Args:
+            record (Record): Record to add to the buffer.
+        """
         if self._closed:
             log.warning("Write called on closed ParquetDatasetSink; ignoring record.")
             return
@@ -84,10 +115,16 @@ class ParquetDatasetSink(Sink):
             self._flush_buffer()
 
     def finalize(self, records: Iterable[Record]) -> None:
+        """Write a sequence of records using the same buffering logic.
+
+        Args:
+            records (Iterable[Record]): Records to enqueue for writing.
+        """
         for rec in records:
             self.write(rec)
 
     def close(self) -> None:
+        """Flush any buffered data and release resources."""
         if self._closed:
             return
         try:
@@ -105,6 +142,7 @@ class ParquetDatasetSink(Sink):
     # Internals
     # ------------------------------------------------------------------
     def _flush_buffer(self) -> None:
+        """Write buffered records to disk and clear the buffer."""
         if not self._buffer:
             return
         table = self._build_table(self._buffer)
@@ -136,6 +174,14 @@ class ParquetDatasetSink(Sink):
         self._buffer.clear()
 
     def _build_table(self, rows: Sequence[Record]) -> pa.Table:
+        """Convert buffered records into an Arrow table.
+
+        Args:
+            rows (Sequence[Record]): Records to convert.
+
+        Returns:
+            pa.Table: Table with text, metadata, and partition columns.
+        """
         out_rows: list[dict[str, Any]] = []
         for rec in rows:
             text_val: Any = ""
