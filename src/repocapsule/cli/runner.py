@@ -16,7 +16,7 @@ from ..core.factories import (
 )
 from ..core.interfaces import RepoContext
 from ..core.licenses import detect_license_in_tree, apply_license_to_context
-from ..core.builder import build_pipeline_plan, PipelineOverrides
+from ..core.builder import build_pipeline_plan, build_engine, PipelineOverrides
 from ..core.pipeline import PipelineEngine
 from ..sources.githubio import get_repo_info, parse_github_url, RepoSpec, detect_license_for_github_repo
 from ..core.log import get_logger
@@ -83,9 +83,7 @@ def convert(config: RepocapsuleConfig | PipelineEngine, *, overrides: PipelineOv
     if isinstance(config, PipelineEngine):
         return run_engine(config)
 
-    plan = build_pipeline_plan(config, overrides=overrides)
-    cfg = plan.spec
-    engine = PipelineEngine(plan)
+    engine = build_engine(config, overrides=overrides)
     return run_engine(engine)
 
 

@@ -12,12 +12,13 @@ from .registries import (
     SinkRegistry,
     BytesHandlerRegistry,
     QualityScorerRegistry,
+    SafetyScorerRegistry,
 )
 from .log import get_logger
 
 log = get_logger(__name__)
 
-PluginRegistrar = Callable[[SourceRegistry, SinkRegistry, BytesHandlerRegistry, QualityScorerRegistry], None]
+PluginRegistrar = Callable[..., None]
 
 
 def load_entrypoint_plugins(
@@ -26,6 +27,7 @@ def load_entrypoint_plugins(
     sink_registry: SinkRegistry,
     bytes_registry: BytesHandlerRegistry,
     scorer_registry: QualityScorerRegistry,
+    safety_scorer_registry: SafetyScorerRegistry,
     group: str = "repocapsule.plugins",
 ) -> None:
     """Discover and load plugin entry points.
@@ -41,6 +43,8 @@ def load_entrypoint_plugins(
             handlers.
         scorer_registry (QualityScorerRegistry): Registry to register quality
             scorers.
+        safety_scorer_registry (SafetyScorerRegistry): Registry to register
+            safety scorers.
         group (str): Entry-point group name to search for plugins.
     """
     try:
@@ -57,6 +61,9 @@ def load_entrypoint_plugins(
             log.warning("Failed to import plugin %s: %s", ep.name, exc)
             continue
         try:
-            func(source_registry, sink_registry, bytes_registry, scorer_registry)
+            try:
+                func(source_registry, sink_registry, bytes_registry, scorer_registry, safety_scorer_registry)
+            except TypeError:
+                func(source_registry, sink_registry, bytes_registry, scorer_registry)
         except Exception as exc:  # noqa: BLE001
             log.warning("Plugin %s execution failed: %s", ep.name, exc)

@@ -10,6 +10,7 @@ from repocapsule.core.plugins import load_entrypoint_plugins
 from repocapsule.core.registries import (
     BytesHandlerRegistry,
     QualityScorerRegistry,
+    SafetyScorerRegistry,
     SinkRegistry,
     SourceRegistry,
     RegistryBundle,
@@ -18,6 +19,7 @@ from repocapsule.core.registries import (
     default_sink_registry,
     default_source_registry,
     quality_scorer_registry,
+    safety_scorer_registry,
 )
 from repocapsule.core.config import RepocapsuleConfig, SourceSpec, SinkSpec
 from repocapsule.core.interfaces import SourceFactoryContext, SinkFactoryContext
@@ -68,6 +70,7 @@ def test_load_entrypoint_plugins_logs_failures(monkeypatch, caplog):
             sink_registry=SinkRegistry(),
             bytes_registry=BytesHandlerRegistry(),
             scorer_registry=QualityScorerRegistry(),
+            safety_scorer_registry=SafetyScorerRegistry(),
         )
 
     assert good_called.value is True
@@ -92,7 +95,7 @@ def test_sink_registry_unknown_kind_raises():
     registry = default_sink_registry()
     cfg = RepocapsuleConfig()
     cfg.sinks.specs = (SinkSpec(kind="does_not_exist", options={}),)
-    ctx = SinkFactoryContext(repo_context=None, sink_config=cfg.sinks)
+    ctx = SinkFactoryContext(repo_context=None, sink_config=cfg.sinks, sink_defaults=cfg.sinks.defaults)
     with pytest.raises(ValueError):
         registry.build_all(ctx, cfg.sinks.specs)
 
@@ -120,6 +123,7 @@ def test_default_registries_populates_defaults():
     assert {"default_jsonl_prompt", "parquet_dataset"}.issubset(bundle.sinks._factories)
     assert bundle.bytes is bytes_handler_registry
     assert bundle.scorers is quality_scorer_registry
+    assert bundle.safety_scorers is safety_scorer_registry
 
 
 def test_default_registries_load_plugins_calls_loader(monkeypatch):
@@ -139,6 +143,7 @@ def test_default_registries_load_plugins_calls_loader(monkeypatch):
     assert calls[0]["sink_registry"] is bundle.sinks
     assert calls[0]["bytes_registry"] is bundle.bytes
     assert calls[0]["scorer_registry"] is bundle.scorers
+    assert calls[0]["safety_scorer_registry"] is bundle.safety_scorers
 
 
 class DummySource:
@@ -196,6 +201,7 @@ def test_build_pipeline_plan_uses_custom_bundle(monkeypatch, tmp_path):
         sinks=sink_reg,
         bytes=BytesHandlerRegistry(),
         scorers=QualityScorerRegistry(),
+        safety_scorers=SafetyScorerRegistry(),
     )
 
     def fail_default_registries(*args, **kwargs):
@@ -226,6 +232,7 @@ def test_build_pipeline_plan_per_registry_override_wins_over_bundle(monkeypatch,
         sinks=sink_reg,
         bytes=BytesHandlerRegistry(),
         scorers=QualityScorerRegistry(),
+        safety_scorers=SafetyScorerRegistry(),
     )
 
     def fail_default_registries(*args, **kwargs):

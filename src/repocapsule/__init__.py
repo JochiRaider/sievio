@@ -66,7 +66,6 @@ except Exception:  # PackageNotFoundError or any runtime env oddities
 # ---------------------------------------------------------------------------
 from .core.config import RepocapsuleConfig, QCHeuristics, load_config_from_path
 from .core.records import (
-    LanguageConfig,
     build_record,
     RecordMeta,
     RunSummaryMeta,
@@ -132,12 +131,15 @@ from .sources.githubio import (
     download_zipball_to_temp,
     iter_zip_members,
 )
-from .core.records import (
+from .core.language_id import (
+    LanguageConfig,
     CODE_EXTS,
     DOC_EXTS,
     EXT_LANG,
     guess_lang_from_path,
     is_code_file,
+)
+from .core.records import (
     sha256_text,
 )
 from .core.convert import (

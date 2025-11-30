@@ -11,6 +11,7 @@ from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
 from .config import RepocapsuleConfig
 from .interfaces import RunLifecycleHook, RunContext, RunSummaryView, RunArtifacts
+from .language_id import CODE_EXTS, DOC_EXTS
 from .log import get_logger
 from .qc_utils import open_jsonl_maybe_gz
 from .records import is_summary_record
@@ -44,6 +45,7 @@ _SIZE_BUCKETS: list[tuple[int, str]] = [
     (100_000_000_000, "10B<n<100B"),
 ]
 
+# language is canonical for human language; lang remains as a legacy/code-language fallback.
 _LANG_META_KEYS = ("language", "lang")
 
 
@@ -319,19 +321,123 @@ def _derive_tags_from_stats(stats: Mapping[str, Any]) -> list[str] | None:
     if not isinstance(ext_counts, Mapping):
         return None
     tags: set[str] = set()
-    code_exts = {".py", ".js", ".ts", ".go", ".java", ".c", ".cpp", ".rs", ".cs", ".rb"}
-    doc_exts = {".md", ".mdx", ".txt", ".rst"}
     for ext, count in ext_counts.items():
         if not count:
             continue
         ext_lc = str(ext).lower()
-        if ext_lc in code_exts:
+        if ext_lc in CODE_EXTS:
             tags.add("modality:code")
-        elif ext_lc in doc_exts:
+        elif ext_lc in DOC_EXTS:
             tags.add("modality:text")
         else:
             tags.add("modality:other")
     return sorted(tags) if tags else None
+
+
+def _coerce_numeric(value: Any) -> float | None:
+    """Best-effort numeric coercion for stats values."""
+    if isinstance(value, bool):
+        return 1.0 if value else 0.0
+    if isinstance(value, (int, float)):
+        return float(value)
+    try:
+        return float(value)
+    except Exception:
+        return None
+
+
+def _aggregate_signal_stats(fragments: Sequence["CardFragment"]) -> dict[str, dict[str, Any]] | None:
+    """Merge per-fragment QC signal stats into aggregated metrics."""
+    merged: dict[str, dict[str, Any]] = {}
+    for frag in fragments:
+        stats = frag.extra.get("stats") if isinstance(frag.extra, Mapping) else None
+        if not isinstance(stats, Mapping):
+            continue
+        qc_stats = stats.get("qc")
+        if not isinstance(qc_stats, Mapping):
+            continue
+        signal_stats = qc_stats.get("signal_stats")
+        if not isinstance(signal_stats, Mapping):
+            continue
+        for name, payload in signal_stats.items():
+            if not isinstance(payload, Mapping):
+                continue
+            count_val = payload.get("count")
+            try:
+                count = int(count_val or 0)
+            except Exception:
+                count = 0
+            if count <= 0:
+                continue
+            mean_val = _coerce_numeric(payload.get("mean"))
+            if mean_val is None:
+                continue
+            stdev_val = payload.get("stdev")
+            stdev = _coerce_numeric(stdev_val) if stdev_val is not None else None
+            min_val = _coerce_numeric(payload.get("min"))
+            max_val = _coerce_numeric(payload.get("max"))
+
+            entry = merged.get(name)
+            if entry is None:
+                entry = merged[name] = {"count": 0, "sum": 0.0, "sum_sq": 0.0, "min": None, "max": None}
+            entry["count"] += count
+            entry["sum"] += mean_val * count
+            variance = (stdev * stdev) if stdev is not None else 0.0
+            entry["sum_sq"] += (variance + mean_val * mean_val) * count
+            if min_val is not None:
+                entry["min"] = min_val if entry["min"] is None else min(entry["min"], min_val)
+            if max_val is not None:
+                entry["max"] = max_val if entry["max"] is None else max(entry["max"], max_val)
+
+    if not merged:
+        return None
+
+    aggregated: dict[str, dict[str, Any]] = {}
+    for name, payload in merged.items():
+        count = payload.get("count") or 0
+        if count <= 0:
+            continue
+        mean = payload["sum"] / count if count else 0.0
+        var = max(payload["sum_sq"] / count - mean * mean, 0.0) if count else 0.0
+        aggregated[name] = {
+            "count": count,
+            "mean": mean,
+            "min": payload.get("min"),
+            "max": payload.get("max"),
+            "stdev": var ** 0.5,
+        }
+    return aggregated if aggregated else None
+
+
+def _format_signal_stats_for_card(signal_stats: Mapping[str, Any] | None) -> str:
+    """Render a compact quality-signals summary for the dataset card."""
+    if not isinstance(signal_stats, Mapping) or not signal_stats:
+        return "[More Information Needed]"
+
+    def _format_entry(name: str, label: str) -> str | None:
+        entry = signal_stats.get(name)
+        if not isinstance(entry, Mapping) or not entry.get("count"):
+            return None
+        mean = _coerce_numeric(entry.get("mean"))
+        min_val = _coerce_numeric(entry.get("min"))
+        max_val = _coerce_numeric(entry.get("max"))
+
+        def fmt(val: float | None) -> str:
+            if val is None:
+                return "n/a"
+            return f"{val:.2f}" if isinstance(val, float) else str(val)
+
+        return f"- {label}: mean={fmt(mean)}, min={fmt(min_val)}, max={fmt(max_val)}"
+
+    lines = [
+        _format_entry("len_tok", "Tokens per record"),
+        _format_entry("ascii_ratio", "ASCII ratio"),
+        _format_entry("repetition", "Repetition"),
+        _format_entry("gopher_quality", "Gopher quality"),
+        _format_entry("perplexity", "Perplexity"),
+    ]
+    rendered = [line for line in lines if line]
+    return "\n".join(rendered) if rendered else "[More Information Needed]"
 
 
 def build_card_fragment_for_run(
@@ -736,6 +842,7 @@ DATASET_CARD_TEMPLATE = """---
   - [Dataset Summary](#dataset-summary)
   - [Supported Tasks and Leaderboards](#supported-tasks-and-leaderboards)
   - [Languages](#languages)
+  - [Quality Signals](#quality-signals)
 - [Dataset Structure](#dataset-structure)
   - [Data Instances](#data-instances)
   - [Data Fields](#data-fields)
@@ -769,6 +876,9 @@ DATASET_CARD_TEMPLATE = """---
 
 ### Languages
 {languages_section}
+
+### Quality Signals
+{quality_signals_section}
 
 ## Dataset Structure
 
@@ -846,6 +956,7 @@ def render_dataset_card(
         "dataset_summary_section": _default_summary(fields),
         "supported_tasks_section": _default_supported_tasks(fields),
         "languages_section": _default_languages_section(fields),
+        "quality_signals_section": "[More Information Needed]",
         "data_instances_section": _default_data_instances_section(),
         "data_fields_section": _default_data_fields_section(fields),
         "data_splits_section": _default_data_splits_section(fields),
@@ -868,4 +979,7 @@ def build_dataset_card_from_fragments(
     """Build and render a dataset card from fragment sidecar files."""
     fragments = [load_card_fragment(Path(p)) for p in fragment_paths]
     fields = merge_fragments(fragments, overrides=overrides)
-    return render_dataset_card(fields, body_overrides=body_overrides)
+    signal_stats = _aggregate_signal_stats(fragments)
+    overrides_combined = dict(body_overrides or {})
+    overrides_combined.setdefault("quality_signals_section", _format_signal_stats_for_card(signal_stats))
+    return render_dataset_card(fields, body_overrides=overrides_combined)

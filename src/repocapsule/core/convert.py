@@ -15,6 +15,7 @@ from .decode import decode_bytes
 from .factories import UnsupportedBinary
 from ..sources.fs import read_file_prefix
 from .interfaces import FileExtractor, FileItem, RepoContext, Record, StreamingExtractor
+from .language_id import classify_path_kind
 from .log import get_logger
 from .records import build_record
 
@@ -100,30 +101,6 @@ class RecordBuilderContext:
 # Shape of the callable adapter the pipeline passes into this module
 # (it wraps interfaces.Extractor.extract and returns an Iterable[Record])
 ExtractorFn = Callable[[str, str], Optional[Iterable[Record]]]
-
-_MD_EXTS = {".md", ".mdx", ".markdown"}
-_RST_EXTS = {".rst"}
-_DOC_EXTS = _MD_EXTS | _RST_EXTS | {".adoc", ".txt"}
-
-
-def _infer_mode_and_fmt(rel_path: str) -> Tuple[str, Optional[str]]:
-    """Infer chunking mode and markup format from the file extension.
-
-    Args:
-        rel_path (str): Repository-relative path.
-
-    Returns:
-        Tuple[str, str | None]: Mode ("doc" or "code") and optional format.
-    """
-    ext = Path(rel_path).suffix.lower()
-    if ext in _MD_EXTS:
-        return "doc", "md"
-    if ext in _RST_EXTS:
-        return "doc", "rst"
-    if ext in _DOC_EXTS:
-        return "doc", None
-    return "code", None
-
 
 def _build_record_context(config: ConfigForRecords, context: Optional[RepoContext]) -> RecordBuilderContext:
     """Build a RecordBuilderContext from config and repository context.
@@ -301,7 +278,7 @@ def iter_records_for_file(
                 continue
             extractor_recs.extend(dict(rec) for rec in out)
 
-    mode, fmt = _infer_mode_and_fmt(rel_path)
+    mode, fmt = classify_path_kind(rel_path)
     chunk_dicts = list(
         iter_chunk_dicts(
             text,

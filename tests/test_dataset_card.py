@@ -4,9 +4,11 @@ import json
 import pytest
 
 from repocapsule.core.config import RepocapsuleConfig
+from repocapsule.core.builder import build_pipeline_plan
 from repocapsule.core.pipeline import PipelineStats
 from repocapsule.core.dataset_card import (
     CardFragment,
+    DatasetCardHook,
     build_dataset_card_from_fragments,
     build_card_fragment_for_run,
     load_card_fragment,
@@ -86,6 +88,36 @@ def test_render_dataset_card_contains_yaml_and_sections(tmp_path: Path) -> None:
     assert "size_categories:" in card_md
     assert "## Dataset Description" in card_md
     assert "### Dataset Summary" in card_md
+    assert "### Quality Signals" in card_md
+
+
+def test_dataset_card_renders_quality_signals_section(tmp_path: Path) -> None:
+    frag = CardFragment(
+        file="signals.jsonl",
+        split="train",
+        num_examples=2,
+        num_bytes=10,
+        language=["en"],
+        multilinguality="monolingual",
+        license="MIT",
+        extra={
+            "stats": {
+                "qc": {
+                    "signal_stats": {
+                        "len_tok": {"count": 2, "mean": 100, "min": 90, "max": 110, "stdev": 10},
+                        "ascii_ratio": {"count": 2, "mean": 0.9, "min": 0.8, "max": 1.0, "stdev": 0.1},
+                    }
+                }
+            }
+        },
+    )
+    frag_path = tmp_path / "signals.jsonl.card.json"
+    frag_path.write_text(json.dumps(frag.to_dict()), encoding="utf-8")
+
+    card_md = build_dataset_card_from_fragments([frag_path], overrides={"pretty_name": "Signals Demo"})
+
+    assert "Tokens per record: mean=100.00" in card_md
+    assert "ASCII ratio: mean=0.90" in card_md
 
 
 def test_write_card_fragment_for_run(tmp_path: Path) -> None:
@@ -103,3 +135,22 @@ def test_write_card_fragment_for_run(tmp_path: Path) -> None:
     data = load_card_fragment(sidecar_path)
     assert data.file == "data.jsonl"
     assert data.num_examples == 1
+
+
+def test_dataset_card_enabled_by_default() -> None:
+    cfg = RepocapsuleConfig()
+
+    plan = build_pipeline_plan(cfg, load_plugins=False)
+
+    hooks = plan.runtime.lifecycle_hooks
+    assert any(isinstance(h, DatasetCardHook) for h in hooks)
+
+
+def test_dataset_card_disabled_skips_hook() -> None:
+    cfg = RepocapsuleConfig()
+    cfg.dataset_card.enabled = False
+
+    plan = build_pipeline_plan(cfg, load_plugins=False)
+
+    hooks = plan.runtime.lifecycle_hooks
+    assert not any(isinstance(h, DatasetCardHook) for h in hooks)

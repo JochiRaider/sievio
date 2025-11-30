@@ -25,9 +25,11 @@ from .interfaces import (
     SourceFactory,
     SinkFactory,
     QualityScorer,
+    SafetyScorer,
     SourceFactoryContext,
     SinkFactoryContext,
     RunLifecycleHook,
+    SafetyScorerFactory,
 )
 from .log import get_logger
 
@@ -113,6 +115,7 @@ class SinkRegistry:
             current_ctx = SinkFactoryContext(
                 repo_context=result.sink_config.context or current_ctx.repo_context,
                 sink_config=result.sink_config,
+                sink_defaults=current_ctx.sink_defaults,
             )
         return sinks, merged_meta, current_ctx
 
@@ -192,6 +195,47 @@ class QualityScorerRegistry:
         return tuple(self._factories.keys())
 
 
+class SafetyScorerRegistry:
+    """Registry for safety scorer factories with safe construction."""
+
+    def __init__(self) -> None:
+        self._factories: Dict[str, SafetyScorerFactory] = {}
+        self.log = get_logger(__name__)
+
+    def register(self, factory: SafetyScorerFactory) -> None:
+        """Register a safety scorer factory."""
+        self._factories[factory.id] = factory
+
+    def get(self, factory_id: str | None = None) -> SafetyScorerFactory | None:
+        """Return a scorer factory by id or the first registered one."""
+        if factory_id is not None:
+            return self._factories.get(factory_id)
+        if not self._factories:
+            return None
+        first_key = next(iter(self._factories))
+        return self._factories[first_key]
+
+    def build(
+        self,
+        options: Mapping[str, Any],
+        *,
+        factory_id: str | None = None,
+    ) -> SafetyScorer | None:
+        """Safely build a safety scorer instance."""
+        factory = self.get(factory_id)
+        if factory is None:
+            return None
+        try:
+            return factory.build(options)
+        except Exception as exc:
+            self.log.warning("Safety scorer factory %s failed: %s", factory_id or "<default>", exc)
+            return None
+
+    def ids(self) -> Tuple[str, ...]:
+        """Return ids of registered safety scorer factories."""
+        return tuple(self._factories.keys())
+
+
 class LifecycleHookFactory(Protocol):
     """Protocol describing lifecycle hook factories."""
 
@@ -254,6 +298,7 @@ def default_sink_registry() -> SinkRegistry:
 # Shared registries that can be reused across runs.
 bytes_handler_registry = BytesHandlerRegistry()
 quality_scorer_registry = QualityScorerRegistry()
+safety_scorer_registry = SafetyScorerRegistry()
 
 
 @dataclass(slots=True)
@@ -268,6 +313,7 @@ class RegistryBundle:
     sinks: SinkRegistry
     bytes: BytesHandlerRegistry
     scorers: QualityScorerRegistry
+    safety_scorers: SafetyScorerRegistry
 
 
 def default_registries(*, load_plugins: bool = True) -> RegistryBundle:
@@ -278,6 +324,7 @@ def default_registries(*, load_plugins: bool = True) -> RegistryBundle:
     sink_reg = default_sink_registry()
     bytes_reg = bytes_handler_registry
     scorer_reg = quality_scorer_registry
+    safety_reg = safety_scorer_registry
 
     if load_plugins:
         load_entrypoint_plugins(
@@ -285,6 +332,7 @@ def default_registries(*, load_plugins: bool = True) -> RegistryBundle:
             sink_registry=sink_reg,
             bytes_registry=bytes_reg,
             scorer_registry=scorer_reg,
+            safety_scorer_registry=safety_reg,
         )
 
     return RegistryBundle(
@@ -292,6 +340,7 @@ def default_registries(*, load_plugins: bool = True) -> RegistryBundle:
         sinks=sink_reg,
         bytes=bytes_reg,
         scorers=scorer_reg,
+        safety_scorers=safety_reg,
     )
 
 
@@ -308,4 +357,6 @@ __all__ = [
     "default_registries",
     "bytes_handler_registry",
     "quality_scorer_registry",
+    "safety_scorer_registry",
+    "SafetyScorerRegistry",
 ]

@@ -80,12 +80,32 @@ def test_tracker_summary_roundtrip(tracker_basic):
     assert tracker2.top_dup_families() == tracker_basic.top_dup_families()
 
 
+def test_tracker_signal_stats_numeric_and_bool():
+    tracker = QCSummaryTracker(min_score=None)
+
+    tracker.observe({"score": 90.0, "ascii_ratio": 0.4, "parse_ok": True}, apply_gates=False)
+    tracker.observe({"score": 91.0, "ascii_ratio": 0.6, "parse_ok": False}, apply_gates=False)
+
+    ascii_stats = tracker.signal_stats["ascii_ratio"].as_dict()
+    parse_stats = tracker.signal_stats["parse_ok"].as_dict()
+
+    assert ascii_stats["count"] == 2
+    assert ascii_stats["mean"] == pytest.approx(0.5)
+    assert ascii_stats["min"] == pytest.approx(0.4)
+    assert ascii_stats["max"] == pytest.approx(0.6)
+
+    assert parse_stats["count"] == 2
+    assert parse_stats["mean"] == pytest.approx(0.5)
+    assert parse_stats["min"] == 0
+    assert parse_stats["max"] == 1
+
+
 def make_controller(*, min_score=60.0, drop_near_dups=False, enforce_drops=True, qc_rows=()):
     cfg = QCConfig(
         enabled=True,
         min_score=min_score,
         drop_near_dups=drop_near_dups,
-        mode=QCMode.INLINE,
+        mode=QCMode.INLINE if enforce_drops else QCMode.ADVISORY,
     )
     stats = DummyStats()
     scorer = DummyScorer(qc_rows)
@@ -100,7 +120,14 @@ def make_controller(*, min_score=60.0, drop_near_dups=False, enforce_drops=True,
 
 
 def test_inline_qc_accept_attachs_meta_and_keeps_when_passing():
-    qc_row = {"score": 90.0, "tokens": 123, "near_dup": False, "dup_family_id": "famX", "ascii_ratio": 0.9}
+    qc_row = {
+        "score": 90.0,
+        "tokens": 123,
+        "len": 456,
+        "near_dup": False,
+        "dup_family_id": "famX",
+        "ascii_ratio": 0.9,
+    }
     controller, stats = make_controller(qc_rows=[qc_row])
     record = {"text": "hello", "meta": {"path": "foo.py", "chunk_id": 1, "n_chunks": 1}}
 
@@ -116,6 +143,8 @@ def test_inline_qc_accept_attachs_meta_and_keeps_when_passing():
     assert meta["tokens"] == qc_row["tokens"]
     assert "extra" in meta and "qc_signals" in meta["extra"]
     assert meta["extra"]["qc_signals"].get("ascii_ratio") == qc_row["ascii_ratio"]
+    assert meta["extra"]["qc_signals"].get("len_tok") == qc_row["tokens"]
+    assert meta["extra"]["qc_signals"].get("len_char") == qc_row["len"]
     assert meta["near_dup"] is False
     assert meta["dup_family_id"] == "famX"
 

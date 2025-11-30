@@ -167,11 +167,13 @@ jsonl_basename = "data"       # Default basename for JSONL when factories derive
 # Per-kind defaults keyed by SinkSpec.kind; mostly useful for plugins or to
 # avoid repetition across multiple specs.
 [sinks.defaults.default_jsonl_prompt]
+compress_jsonl = true
+# include_prompt_file = true
 # heading_fmt = "### {path} [chunk {chunk}]"
 
 [sinks.defaults.parquet_dataset]
 # compression = "zstd"
-# row_group_size = 8000
+# row_group_size = 100000
 
 [sinks.prompt]
 heading_fmt = "### {path} [chunk {chunk}]"  # Template for headings in the prompt text sink
@@ -190,7 +192,7 @@ path = "out/data.parquet"    # Target Parquet file or dataset directory
 text_field = "text"          # Field name for chunk text column in Parquet
 meta_field = "meta"          # Field name for metadata column in Parquet
 partition_by = ["repo"]      # Optional list of metadata keys to partition the dataset by
-row_group_size = 5000        # Target row group size for Parquet writes
+row_group_size = 100000      # Target row group size for Parquet writes
 compression = "snappy"       # Parquet compression codec (e.g., "snappy", "zstd", "gzip")
 overwrite = true             # Overwrite an existing Parquet target when true
 

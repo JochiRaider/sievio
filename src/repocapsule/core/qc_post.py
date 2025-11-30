@@ -14,13 +14,14 @@ from .factories import make_qc_scorer
 from .interfaces import RunLifecycleHook, RunContext, RunArtifacts
 from .log import get_logger
 from .qc_controller import QCSummaryTracker, summarize_qc_rows, _derive_csv_path
+from .records import filter_qc_meta
 from .qc_utils import open_jsonl_maybe_gz
 
 log = get_logger(__name__)
 
 
 class PostQCHook(RunLifecycleHook):
-    """Run post-hoc QC scoring after the pipeline completes."""
+    """Run post-hoc quality screening/QC scoring after the pipeline completes."""
 
     def __init__(self, qc_cfg: QCConfig, scorer, *, executor_hint: Any | None = None) -> None:
         self._qc_cfg = qc_cfg
@@ -65,6 +66,9 @@ def run_qc_over_jsonl(
     executor_hint: Any | None = None,
     write_csv: bool | None = None,
     csv_suffix: str | None = None,
+    write_signals_sidecar: bool | None = None,
+    signals_suffix: str | None = None,
+    signals_format: str | None = None,
 ) -> Tuple[Dict[str, Any], List[Dict[str, Any]] | None]:
     """
     Score a JSONL file with the provided scorer and return a summary plus rows.
@@ -83,7 +87,11 @@ def run_qc_over_jsonl(
         drop_near_dups=bool(qc_cfg.drop_near_dups),
     )
     should_write_csv = qc_cfg.write_csv if write_csv is None else bool(write_csv)
-    rows_for_csv: Optional[List[Dict[str, Any]]] = [] if should_write_csv else None
+    should_write_signals = qc_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
+    signals_format_val = (signals_format or qc_cfg.signals_format or "csv").lower()
+    if signals_format_val not in {"csv", "parquet"}:
+        raise ValueError("signals_format must be 'csv' or 'parquet'.")
+    rows_for_csv: Optional[List[Dict[str, Any]]] = [] if (should_write_csv or should_write_signals) else None
 
     def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
         for row in rows:
@@ -158,6 +166,16 @@ def run_qc_over_jsonl(
         out_csv = _derive_csv_path(jsonl_path, csv_suffix if csv_suffix is not None else qc_cfg.csv_suffix)
         if should_write_csv and out_csv:
             emit_qc_csv(rows, jsonl_path_str, out_csv)
+        if should_write_signals:
+            derived_suffix = signals_suffix if signals_suffix is not None else qc_cfg.signals_suffix
+            if not derived_suffix:
+                derived_suffix = "_signals.parquet" if signals_format_val == "parquet" else "_signals.csv"
+            out_signals = _derive_csv_path(jsonl_path, derived_suffix)
+            if out_signals:
+                if signals_format_val == "parquet":
+                    emit_qc_signals_parquet(rows, jsonl_path_str, out_signals)
+                else:
+                    emit_qc_signals_csv(rows, jsonl_path_str, out_signals)
 
     _log_post_qc_summary(summary)
     return summary, rows_result
@@ -185,6 +203,9 @@ def _run_post_qc(
         executor_hint=executor_hint,
         write_csv=qc_cfg.write_csv,
         csv_suffix=qc_cfg.csv_suffix,
+        write_signals_sidecar=qc_cfg.write_signals_sidecar,
+        signals_suffix=qc_cfg.signals_suffix,
+        signals_format=qc_cfg.signals_format,
     )
     return summary
 
@@ -281,6 +302,64 @@ def emit_qc_csv(rows: Sequence[Dict[str, Any]], jsonl_path: str, out_csv: str) -
         _score_jsonl_to_csv(jsonl_path, out_csv)
     else:
         raise RuntimeError("QC CSV helpers unavailable; reinstall optional dependencies.")
+
+
+def _collect_signal_rows(rows: Sequence[Dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+    """Return fieldnames and per-row signal dicts with doc_id."""
+    signal_keys: set[str] = set()
+    raw_signals: list[tuple[Any, Dict[str, Any]]] = []
+    for row in rows:
+        _, signals = filter_qc_meta(row)
+        raw_signals.append((row.get("doc_id"), signals))
+        signal_keys.update(signals.keys())
+    fieldnames = ["doc_id", *sorted(signal_keys)]
+    out_rows: list[dict[str, Any]] = []
+    for doc_id, signals in raw_signals:
+        payload = {key: None for key in fieldnames}
+        payload["doc_id"] = doc_id
+        for key, value in signals.items():
+            payload[key] = value
+        out_rows.append(payload)
+    return fieldnames, out_rows
+
+
+def emit_qc_signals_csv(
+    rows: Sequence[Dict[str, Any]],
+    jsonl_path: str,
+    out_csv: str,
+) -> None:
+    """Write per-record QC signals to a CSV sidecar keyed by doc_id."""
+    import csv
+
+    if not rows:
+        return
+
+    fieldnames, signal_rows = _collect_signal_rows(rows)
+
+    with open(out_csv, "w", newline="", encoding="utf-8") as f:
+        writer = csv.DictWriter(f, fieldnames=fieldnames)
+        writer.writeheader()
+        for row in signal_rows:
+            writer.writerow(row)
+
+
+def emit_qc_signals_parquet(
+    rows: Sequence[Dict[str, Any]],
+    jsonl_path: str,
+    out_parquet: str,
+) -> None:
+    """Write per-record QC signals to a Parquet sidecar."""
+    if not rows:
+        return
+    try:
+        import pyarrow as pa  # type: ignore
+        import pyarrow.parquet as pq  # type: ignore
+    except Exception as exc:
+        raise RuntimeError("PyArrow is required for Parquet signal sidecars; install repocapsule[parquet].") from exc
+
+    fieldnames, signal_rows = _collect_signal_rows(rows)
+    table = pa.Table.from_pylist(signal_rows).select(fieldnames)
+    pq.write_table(table, out_parquet)
 
 
 def _score_jsonl_sequential(

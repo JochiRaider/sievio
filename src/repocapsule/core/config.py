@@ -17,11 +17,12 @@ except ModuleNotFoundError:  # pragma: no cover
     except Exception:  # pragma: no cover
         tomllib = None  # type: ignore[assignment]
 from collections.abc import Sequence as ABCSequence
-from dataclasses import dataclass, field, replace, is_dataclass, fields
+from dataclasses import dataclass, field, replace, is_dataclass, fields, asdict
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints, List
+from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints, List, Literal
 
 from .chunk import ChunkPolicy
+from .language_id import LanguageConfig
 from .interfaces import Extractor, FileExtractor, RepoContext, Source, Sink, Record, QualityScorer
 from .log import configure_logging, PACKAGE_LOGGER_NAME
 from .safe_http import SafeHttpClient
@@ -260,6 +261,23 @@ class ChunkConfig:
 
 
 @dataclass(slots=True)
+class LanguageIDConfig:
+    """Settings for human-language detection."""
+
+    enabled: bool = True
+    backend: str = "baseline"
+
+
+@dataclass(slots=True)
+class CodeLanguageConfig:
+    """Settings for code-language detection and hints."""
+
+    enabled: bool = True
+    backend: str = "baseline"
+    hints: LanguageConfig = field(default_factory=LanguageConfig)
+
+
+@dataclass(slots=True)
 class PipelineConfig:
     """
     Controls pipeline concurrency and processing behavior.
@@ -344,7 +362,7 @@ class SinkConfig:
     compress_jsonl: bool = False
     jsonl_basename: str = "data"
     # Generic per-kind defaults for sinks, keyed by SinkSpec.kind.
-    defaults: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    defaults: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Merge with spec.options via build_config_from_defaults_and_options.
 
 
 @dataclass(slots=True)
@@ -466,6 +484,56 @@ class QCHeuristics:
 
 
 @dataclass(slots=True)
+class SafetyConfig:
+    """
+    Safety/PII filtering configuration layered alongside QC screening.
+
+    Safety uses QCMode-style strings ("inline", "advisory", "post", "off")
+    but its mode is independent of QCConfig.mode. QC controls quality gating;
+    SafetyConfig.mode together with annotate_only control safety gating.
+    """
+
+    enabled: bool = False
+    # Reuse QCMode strings for now: "inline", "advisory", "post", "off"
+    mode: str = QCMode.INLINE
+    scorer: Any | None = None
+    scorer_id: str | None = None
+    scorer_options: dict[str, Any] = field(default_factory=dict)
+
+    # High-level toggles/thresholds (config only; scorer decides details)
+    toxicity_threshold: float | None = None
+    allowed_licenses: list[str] | None = None
+    annotate_only: bool = False  # if True, never drop on safety
+    fail_on_error: bool = False
+
+    def normalize_mode(self) -> str:
+        mode = QCMode.normalize(self.mode)
+        self.mode = mode
+        return mode
+
+    def validate(self, qc_cfg: "QCConfig") -> None:
+        """Validate interplay with QC settings.
+
+        SafetyConfig.mode is independent of QCConfig.mode. This method does not
+        enforce that they match.
+        """
+
+        mode = self.normalize_mode()
+        if self.scorer_options is None or not isinstance(self.scorer_options, dict):
+            raise TypeError("qc.safety.scorer_options must be a mapping (use {} for defaults).")
+        if self.enabled and mode == QCMode.OFF:
+            raise ValueError(
+                "qc.safety.enabled=True but qc.safety.mode='off'; disable safety or choose 'inline'/'advisory'."
+            )
+        if self.enabled and mode == QCMode.POST:
+            raise ValueError(
+                "qc.safety.mode='post' is not supported yet. Use 'inline' for gating during extraction or 'advisory' for annotate-only safety."
+            )
+        # Safety scorer options stay as mappings for now; when a typed default is
+        # added, normalize it via build_config_from_defaults_and_options just like QC heuristics.
+
+
+@dataclass(slots=True)
 class QCConfig:
     """Configuration for quality scoring and gating.
 
@@ -475,8 +543,9 @@ class QCConfig:
     thresholds.
     * ``ADVISORY``: Score inline but never drop; adds QC metadata for
     review.
-    * ``POST``: Skip inline scoring; run QC by re-reading the JSONL
-    output.
+    * ``POST``: Do not enforce QC gates inline; QC thresholds are
+    enforced only in a post-QC pass. QC may still evaluate inline when
+    required (for example, to supply features to safety scoring).
     * ``OFF``: Disable QC entirely.
 
     Semantics:
@@ -485,8 +554,9 @@ class QCConfig:
     either a resolved scorer (``qc.scorer``) or a scorer id
     (``qc.scorer_id``) at config time; the builder resolves
     ``scorer_id`` later and fails if QC extras are missing.
-    * ``enabled=True`` with mode="post" → scorer optional; if QC extras
-    are missing, QC is skipped with a warning.
+    * ``enabled=True`` with mode="post" → QC gating happens only in the
+    post-hoc pass; QC may still compute inline when needed. A scorer is
+    optional; if QC extras are missing, QC is skipped with a warning.
 
     Concurrency:
     * ``parallel_post`` enables post-QC scoring via
@@ -497,9 +567,13 @@ class QCConfig:
     enabled: bool = False
     write_csv: bool = False
     csv_suffix: str = "_quality.csv"
+    write_signals_sidecar: bool = False
+    signals_suffix: str | None = None
+    signals_format: Literal["csv", "parquet"] = "csv"
     scorer: Optional[Any] = None  # optional extra
     scorer_id: Optional[str] = None  # None → registry default (first registered scorer)
     scorer_options: Dict[str, Any] = field(default_factory=dict)
+    heuristics: Optional[QCHeuristics] = None  # Convenience mirror of scorer_options["heuristics"] when normalized.
     fail_on_error: bool = False
     min_score: Optional[float] = 60.0
     drop_near_dups: bool = False
@@ -508,6 +582,7 @@ class QCConfig:
     post_executor_kind: Optional[str] = None
     post_max_workers: Optional[int] = None
     post_submit_window: Optional[int] = None
+    safety: SafetyConfig = field(default_factory=SafetyConfig)
 
     def normalize_mode(self) -> str:
         """Normalize the configured QC mode and update the instance.
@@ -538,16 +613,26 @@ class QCConfig:
         if self.scorer_options is None or not isinstance(self.scorer_options, dict):
             raise TypeError("qc.scorer_options must be a mapping (use {} for defaults).")
         using_default = self.scorer_id is None or self.scorer_id == DEFAULT_QC_SCORER_ID
-        heur_opt = self.scorer_options.get("heuristics")
-        if heur_opt is not None and using_default:
-            h = heur_opt
-            if not isinstance(h, QCHeuristics):
-                try:
-                    h = QCHeuristics(**dict(h))  # type: ignore[arg-type]
-                except Exception as exc:
-                    raise TypeError(
-                        f"qc.scorer_options.heuristics must be QCHeuristics-compatible; got {type(heur_opt).__name__}"
-                    ) from exc
+        if using_default:
+            raw_heuristics = self.scorer_options.get("heuristics")
+            if raw_heuristics is None:
+                heur_mapping: Mapping[str, Any] = {}
+            elif isinstance(raw_heuristics, QCHeuristics):
+                heur_mapping = asdict(raw_heuristics)
+            elif isinstance(raw_heuristics, Mapping):
+                heur_mapping = raw_heuristics
+            else:
+                raise TypeError(
+                    f"qc.scorer_options.heuristics must be QCHeuristics-compatible; got {type(raw_heuristics).__name__}"
+                )
+            default_heuristics = asdict(QCHeuristics())
+            h = build_config_from_defaults_and_options(
+                QCHeuristics,
+                defaults=default_heuristics,
+                options=heur_mapping,
+            )
+            self.scorer_options["heuristics"] = h
+            self.heuristics = h
             numeric_positive = [
                 ("target_code_min", h.target_code_min),
                 ("target_code_max", h.target_code_max),
@@ -575,6 +660,12 @@ class QCConfig:
                     continue
                 if not (0.0 <= value <= 1.0):
                     raise ValueError(f"qc.scorer_options.heuristics.{name} must be between 0 and 1; got {value!r}.")
+        else:
+            self.heuristics = None
+        if self.signals_format not in {"csv", "parquet"}:
+            raise ValueError("qc.signals_format must be 'csv' or 'parquet'.")
+        if hasattr(self, "safety") and isinstance(self.safety, SafetyConfig):
+            self.safety.validate(self)
 
 
 @dataclass(slots=True)
@@ -720,10 +811,15 @@ class RepocapsuleConfig:
     must live in PipelineRuntime or other ephemeral wiring, never on
     this spec. Derived declarative fields such as normalized modes,
     resolved primary JSONL names, or output directories are allowed.
+
+    Safety and PII filtering is configured under ``qc.safety`` and
+    follows the same execution modes as general QC.
     """
     sources: SourceConfig = field(default_factory=SourceConfig)
     decode: DecodeConfig = field(default_factory=DecodeConfig)
     chunk: ChunkConfig = field(default_factory=ChunkConfig)
+    language: LanguageIDConfig = field(default_factory=LanguageIDConfig)
+    code_lang: CodeLanguageConfig = field(default_factory=CodeLanguageConfig)
     pipeline: PipelineConfig = field(default_factory=PipelineConfig)
     sinks: SinkConfig = field(default_factory=SinkConfig)
     http: HttpConfig = field(default_factory=HttpConfig)
@@ -743,6 +839,10 @@ class RepocapsuleConfig:
             self.metadata = RunMetadata.from_dict(dict(self.metadata or {}))
         if not isinstance(self.dataset_card, DatasetCardConfig):
             self.dataset_card = DatasetCardConfig(**dict(self.dataset_card or {}))
+        if not isinstance(self.language, LanguageIDConfig):
+            self.language = LanguageIDConfig(**dict(self.language or {}))
+        if not isinstance(self.code_lang, CodeLanguageConfig):
+            self.code_lang = CodeLanguageConfig(**dict(self.code_lang or {}))
         if self.sources.sources:
             raise ValueError("sources.sources must be empty in declarative specs; use sources.specs instead.")
         if self.sinks.sinks:
@@ -894,8 +994,79 @@ _SKIP_FIELDS: Dict[Type[Any], set[str]] = {
     SinkConfig: {"sinks"},
     PipelineConfig: {"extractors", "bytes_handlers", "file_extractor"},
     HttpConfig: {"client"},
-    QCConfig: {"scorer"},
+    QCConfig: {"scorer", "heuristics"},
 }
+
+C = TypeVar("C")
+
+
+def validate_options_for_dataclass(
+    cfg_type: Type[C],
+    *,
+    options: Mapping[str, Any] | None,
+    ignore_keys: Iterable[str] = (),
+    context: str | None = None,
+) -> None:
+    """
+    Validate that options only contain known dataclass fields or ignore_keys.
+
+    Raises:
+        ValueError: If unknown option keys are present.
+    """
+    if not options:
+        return
+
+    field_names = {f.name for f in fields(cfg_type)}
+    allowed = field_names | set(ignore_keys)
+    unknown = sorted(k for k in options.keys() if k not in allowed)
+
+    if unknown:
+        label = context or cfg_type.__name__
+        allowed_list = ", ".join(sorted(allowed))
+        unknown_list = ", ".join(unknown)
+        raise ValueError(
+            f"Unsupported options for {label}: {unknown_list}. "
+            f"Allowed keys: {allowed_list}"
+        )
+
+
+def build_config_from_defaults_and_options(
+    cfg_type: Type[C],
+    *,
+    defaults: Mapping[str, Any] | None,
+    options: Mapping[str, Any] | None,
+    ignore_keys: Iterable[str] = (),
+) -> C:
+    """
+    Construct a config dataclass from per-kind defaults + per-spec options.
+
+    This helper is the canonical way to layer `defaults` + `options` into typed
+    config objects for sources, sinks, QC, and scorers. Keep factories lean: let
+    this function perform the merge and filtering, only pulling constructor-only
+    keys (paths, URLs, identifiers) directly from `spec.options`.
+
+    - ``defaults`` typically comes from e.g. RepocapsuleConfig.sources.defaults[kind]
+      or RepocapsuleConfig.sinks.defaults[kind].
+    - ``options`` comes from a specific SourceSpec/SinkSpec/etc.
+    - ``ignore_keys`` is for keys that belong to the factory constructor
+      but not the dataclass itself (e.g., 'root_dir', 'url').
+
+    Only keys matching dataclass field names are applied; unknown keys
+    are silently ignored here (factory may log them separately).
+    """
+    merged: dict[str, Any] = dict(defaults or {})
+
+    field_names = {f.name for f in fields(cfg_type)}
+
+    if options:
+        ignore = set(ignore_keys)
+        for key, value in options.items():
+            if key in ignore:
+                continue
+            if key in field_names:
+                merged[key] = value
+
+    return cfg_type(**merged)  # type: ignore[arg-type]
 
 
 def _dataclass_to_dict(obj: Any) -> Dict[str, Any]:

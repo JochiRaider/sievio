@@ -12,7 +12,7 @@ from __future__ import annotations
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Iterable, Any, Callable
+from typing import Optional, Sequence, Tuple, Iterable, Any, Callable, Mapping, TYPE_CHECKING
 
 from .config import RepocapsuleConfig, QCMode, SinkConfig, RunMetadata, QCConfig
 from .interfaces import (
@@ -24,11 +24,12 @@ from .interfaces import (
     SourceFactoryContext,
     SinkFactoryContext,
     QualityScorer,
+    SafetyScorer,
     RunLifecycleHook,
 )
 from .safe_http import SafeHttpClient
 from .log import get_logger
-from .factories import make_bytes_handlers, make_qc_scorer
+from .factories import make_bytes_handlers, make_qc_scorer, make_safety_scorer
 from .convert import DefaultExtractor
 from .chunk import ChunkPolicy
 from .records import build_run_header_record
@@ -41,16 +42,29 @@ from .registries import (
     QualityScorerRegistry,
     RegistryBundle,
     default_registries,
+    SafetyScorerRegistry,
 )
-from .qc_controller import InlineQCController, InlineQCHook
+from .qc_controller import InlineQCHook
 from .qc_post import PostQCHook
 from .concurrency import resolve_pipeline_executor_config
+from .language_id import (
+    DEFAULT_LANGCFG,
+    LanguageConfig,
+    CodeLanguageDetector,
+    LanguageDetector,
+    make_code_language_detector,
+    make_language_detector,
+)
 
 log = get_logger(__name__)
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
 BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy]], Optional[Iterable[Record]]]
+
+if TYPE_CHECKING:  # pragma: no cover
+    # Import middleware protocols only for typing to avoid cycles.
+    from .interfaces import RecordMiddleware, FileMiddleware
 
 
 @dataclass(slots=True)
@@ -69,18 +83,43 @@ class PipelineOverrides:
         qc_scorer (QualityScorer | None): Quality scorer to use for
             inline or post-hoc QC instead of resolving via the scorer
             registry.
+        safety_scorer (SafetyScorer | None): Safety scorer to use for
+            inline/advisory safety instead of resolving via the registry.
         file_extractor (FileExtractor | None): File extractor to use in
             place of DefaultExtractor.
+        language_detector (LanguageDetector | None): Override for
+            human-language detector.
+        code_language_detector (CodeLanguageDetector | None): Override
+            for code-language detector.
         bytes_handlers (Sequence[tuple[Sniff, BytesHandler]] | None):
             Bytes handlers to use instead of handlers built from the
             registry. When provided, these completely replace
             registry-built handlers.
+        record_middlewares (Sequence[RecordMiddlewareLike] | None):
+            Per-record middlewares applied by PipelineEngine before
+            records reach sinks.
+        file_middlewares (Sequence[FileMiddlewareLike] | None):
+            Per-file middlewares applied after each file is processed,
+            observing or transforming the record iterator.
     """
 
     http_client: SafeHttpClient | None = None
     qc_scorer: QualityScorer | None = None
+    safety_scorer: SafetyScorer | None = None
     file_extractor: FileExtractor | None = None
+    language_detector: LanguageDetector | None = None
+    code_language_detector: CodeLanguageDetector | None = None
     bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] | None = None
+    # Middleware overrides are runtime-only; they are wired onto
+    # PipelineEngine instances via apply_overrides_to_engine.
+    record_middlewares: "Sequence[RecordMiddlewareLike] | None" = None
+    file_middlewares: "Sequence[FileMiddlewareLike] | None" = None
+
+
+# Public type aliases kept here to avoid importing middleware protocols
+# at runtime in hot paths while still giving callers precise signatures.
+RecordMiddlewareLike = "RecordMiddleware | Callable[[Record], Optional[Record]]"
+FileMiddlewareLike = "FileMiddleware | Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]"
 
 
 @dataclass(slots=True)
@@ -111,6 +150,10 @@ class PipelineRuntime:
             emitting QC CSV reports.
         post_qc_scorer (QualityScorer | None): Scorer used for post-hoc
             QC runs when mode is QCMode.POST.
+        language_detector (LanguageDetector | None): Human language
+            detector used for tagging records.
+        code_language_detector (CodeLanguageDetector | None): Code
+            language detector used for tagging records.
     """
 
     http_client: Optional[SafeHttpClient]
@@ -123,6 +166,8 @@ class PipelineRuntime:
     fail_fast: bool = False
     qc_scorer_for_csv: QualityScorer | None = None
     post_qc_scorer: QualityScorer | None = None
+    language_detector: LanguageDetector | None = None
+    code_language_detector: CodeLanguageDetector | None = None
 
 
 @dataclass(slots=True)
@@ -158,13 +203,13 @@ class PipelinePreparationResult:
 
 @dataclass(slots=True)
 class QCPreparationResult:
-    """Bundle normalized QC configuration and resolved scorers.
+    """Bundle normalized QC configuration and screening hooks.
 
     Attributes:
         qc_cfg (QCConfig): Normalized QC configuration with runtime-only
             fields cleared.
         hooks (tuple[RunLifecycleHook, ...]): Lifecycle hooks used to
-            execute inline/advisory or post-hoc QC.
+            execute inline/advisory or post-hoc screening.
         scorer_for_csv (QualityScorer | None): Scorer to use when
             emitting QC CSV reports.
         post_qc_scorer (QualityScorer | None): Scorer to use for
@@ -207,6 +252,7 @@ def build_pipeline_plan(
     sink_registry: Optional[SinkRegistry] = None,
     bytes_registry: Optional[BytesHandlerRegistry] = None,
     scorer_registry: Optional[QualityScorerRegistry] = None,
+    safety_scorer_registry: Optional[SafetyScorerRegistry] = None,
     load_plugins: bool = True,
 ) -> PipelinePlan:
     """Build a PipelinePlan from a declarative RepocapsuleConfig.
@@ -239,6 +285,9 @@ def build_pipeline_plan(
         scorer_registry (QualityScorerRegistry | None): Registry
             override used to build QC scorers. Overrides
             ``registries.scorers`` when provided.
+        safety_scorer_registry (SafetyScorerRegistry | None): Registry override
+            used to build safety scorers. Overrides
+            ``registries.safety_scorers`` when provided.
         load_plugins (bool): Whether to load entry-point plugins into
             the default registries when ``registries`` is omitted. This
             flag is ignored when explicit registries are supplied.
@@ -267,6 +316,7 @@ def build_pipeline_plan(
     sink_registry = sink_registry or bundle.sinks
     bytes_registry = bytes_registry or bundle.bytes
     scorer_registry = scorer_registry or bundle.scorers
+    safety_scorer_registry = safety_scorer_registry or bundle.safety_scorers
     http_client = _prepare_http(cfg, overrides=overrides)
     source_ctx = SourceFactoryContext(
         repo_context=cfg.sinks.context,
@@ -274,11 +324,21 @@ def build_pipeline_plan(
         http_config=cfg.http,
         source_defaults=cfg.sources.defaults,
     )
-    sink_ctx = SinkFactoryContext(repo_context=cfg.sinks.context, sink_config=cfg.sinks)
+    sink_ctx = SinkFactoryContext(
+        repo_context=cfg.sinks.context,
+        sink_config=cfg.sinks,
+        sink_defaults=cfg.sinks.defaults,
+    )
     sources = _prepare_sources(cfg, source_registry, ctx=source_ctx)
     sinks_res = _prepare_sinks(cfg, sink_registry, ctx=sink_ctx)
     pipe_res = _prepare_pipeline(cfg, bytes_registry=bytes_registry, overrides=overrides)
-    qc_res = _prepare_qc(cfg, scorer_registry=scorer_registry, overrides=overrides)
+    qc_res = _prepare_qc(
+        cfg,
+        scorer_registry=scorer_registry,
+        safety_scorer_registry=safety_scorer_registry,
+        overrides=overrides,
+    )
+    lang_det, code_lang_det = _prepare_language_detectors(cfg, overrides=overrides)
     cfg.sinks = sinks_res.sinks_cfg
     cfg.metadata = sinks_res.metadata
     cfg.qc = qc_res.qc_cfg
@@ -289,8 +349,11 @@ def build_pipeline_plan(
     primary_jsonl_path = cfg.sinks.primary_jsonl_name or cfg.metadata.primary_jsonl
     lifecycle_hooks.append(RunSummaryHook())
     dc_cfg = getattr(cfg, "dataset_card", None)
-    if dc_cfg is None or getattr(dc_cfg, "enabled", True):
-        lifecycle_hooks.append(DatasetCardHook(enabled=True))
+    # Default to enabled when config is missing, but respect an explicit flag.
+    card_enabled = True if dc_cfg is None else getattr(dc_cfg, "enabled", True)
+
+    if card_enabled:
+        lifecycle_hooks.append(DatasetCardHook(enabled=card_enabled))
 
     bytes_handlers = pipe_res.bytes_handlers
     file_extractor = pipe_res.file_extractor
@@ -303,6 +366,8 @@ def build_pipeline_plan(
         lifecycle_hooks=tuple(lifecycle_hooks),
         qc_scorer_for_csv=qc_res.scorer_for_csv,
         post_qc_scorer=qc_res.post_qc_scorer,
+        language_detector=lang_det,
+        code_language_detector=code_lang_det,
     )
     exec_cfg, fail_fast = resolve_pipeline_executor_config(cfg, runtime=temp_runtime)
     runtime = replace(temp_runtime, executor_config=exec_cfg, fail_fast=fail_fast)
@@ -482,92 +547,123 @@ def _prepare_pipeline(
     )
 
 
+def _prepare_language_detectors(
+    cfg: RepocapsuleConfig,
+    overrides: PipelineOverrides | None = None,
+) -> tuple[LanguageDetector | None, CodeLanguageDetector | None]:
+    """Resolve human and code language detectors."""
+    lang_override = overrides.language_detector if overrides else None
+    code_override = overrides.code_language_detector if overrides else None
+
+    lang_cfg = getattr(cfg, "language", None)
+    lang_enabled = True if lang_cfg is None else getattr(lang_cfg, "enabled", True)
+    lang_backend = (lang_cfg.backend if lang_cfg else "baseline") if lang_enabled else "none"
+    language_detector = lang_override if lang_override is not None else make_language_detector(lang_backend)
+
+    code_cfg = getattr(cfg, "code_lang", None)
+    code_enabled = True if code_cfg is None else getattr(code_cfg, "enabled", True)
+    code_backend = (code_cfg.backend if code_cfg else "baseline") if code_enabled else "none"
+    hints: LanguageConfig | None = getattr(code_cfg, "hints", DEFAULT_LANGCFG) if code_cfg is not None else DEFAULT_LANGCFG
+    if not isinstance(hints, LanguageConfig):
+        try:
+            hints = LanguageConfig(**dict(hints or {}))
+        except Exception:
+            hints = DEFAULT_LANGCFG
+    code_language_detector = code_override if code_override is not None else make_code_language_detector(code_backend, hints)
+
+    return language_detector, code_language_detector
+
+
 def _prepare_qc(
     cfg: RepocapsuleConfig,
     *,
     scorer_registry: QualityScorerRegistry,
+    safety_scorer_registry: SafetyScorerRegistry,
     overrides: PipelineOverrides | None = None,
 ) -> QCPreparationResult:
-    """Resolve quality-control configuration and scorers for a run.
+    """Resolve screening configuration (QC + safety) and scorers for a run.
 
-    This helper normalizes QC mode, wires inline or post-hoc scorers,
-    and returns an updated QCConfig plus any factories needed by the
-    pipeline.
-
-    Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
-        scorer_registry (QualityScorerRegistry): Registry used to
-            construct QC scorers.
-        overrides (PipelineOverrides | None): Optional runtime
-            overrides.
-
-    Returns:
-        QCPreparationResult: Container with normalized QCConfig, inline
-            QC hook factory, CSV scorer, and post-QC scorer.
-
-    Raises:
-        RuntimeError: If inline or advisory QC is requested but QC
-            extras are not installed and no scorer override is provided.
-
-    Inline/advisory QC calls the scorer only via ``score_record``; JSONL
-    handling and CSV/post-QC execution are centralized in ``qc_post`` so
-    scorer implementations do not need file-level helpers.
+    This helper normalizes QC mode, wires inline/advisory screeners, and
+    returns the prepared screening hooks plus scorers used for CSV and
+    post-QC paths.
     """
     qc_cfg = cfg.qc
-    mode = qc_cfg.normalize_mode()
+    qc_cfg.normalize_mode()
     hooks: list[RunLifecycleHook] = []
     scorer_for_csv: QualityScorer | None = None
     post_qc_scorer: QualityScorer | None = None
+    safety_cfg = getattr(qc_cfg, "safety", None)
+    if safety_cfg is not None:
+        try:
+            safety_cfg.normalize_mode()
+        except Exception as exc:
+            log.debug(
+                "Failed to normalize qc.safety.mode (%r); deferring to SafetyConfig.validate: %s",
+                getattr(safety_cfg, "mode", None),
+                exc,
+            )
 
-    if not qc_cfg.enabled or mode == QCMode.OFF:
+    if not qc_cfg.enabled and (safety_cfg is None or not safety_cfg.enabled):
         qc_cfg.enabled = False
         qc_cfg.mode = QCMode.OFF
         qc_cfg.scorer = None
+        if safety_cfg is not None:
+            safety_cfg.scorer = None  # type: ignore[attr-defined]
         return QCPreparationResult(qc_cfg=qc_cfg, hooks=tuple(), scorer_for_csv=None, post_qc_scorer=None)
 
     qc_scorer = overrides.qc_scorer if overrides and overrides.qc_scorer is not None else None
+    safety_scorer: SafetyScorer | None = None
+    safety_enabled = bool(safety_cfg and safety_cfg.enabled)
 
-    if mode in {QCMode.INLINE, QCMode.ADVISORY}:
+    if safety_enabled:
+        safety_scorer = (
+            overrides.safety_scorer
+            if overrides and overrides.safety_scorer is not None
+            else make_safety_scorer(safety_cfg, registry=safety_scorer_registry)  # type: ignore[arg-type]
+        )
+
+    # Inline/advisory screeners
+    if qc_cfg.enabled and qc_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
         if qc_scorer is None:
             qc_scorer = make_qc_scorer(qc_cfg, scorer_registry=scorer_registry)
             if qc_scorer is None:
                 raise RuntimeError(
-                    "Inline/advisory QC requested but QC extras are not installed; disable qc.enabled or install QC dependencies."
+                    "Inline/advisory QC was requested, but QC extras are not installed. "
+                    "Either disable qc.enabled or install QC dependencies."
                 )
-        enforce_drops = mode == QCMode.INLINE
-        controller = InlineQCController(
-            config=qc_cfg,
-            stats=None,
-            scorer=qc_scorer,  # type: ignore[arg-type]
-            logger=log,
-            enforce_drops=enforce_drops,
-        )
         hooks.append(
             InlineQCHook(
-                controller,
-                write_csv=bool(qc_cfg.write_csv),
-                csv_suffix=qc_cfg.csv_suffix,
+                qc_cfg=qc_cfg,
+                scorer=qc_scorer,  # type: ignore[arg-type]
+                safety_cfg=safety_cfg,
+                safety_scorer=safety_scorer,
             )
         )
         if qc_cfg.write_csv:
             scorer_for_csv = qc_scorer
-        qc_cfg.scorer = None
-        return QCPreparationResult(
-            qc_cfg=qc_cfg,
-            hooks=tuple(hooks),
-            scorer_for_csv=scorer_for_csv,
-            post_qc_scorer=None,
+    elif safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
+        hooks.append(
+            InlineQCHook(
+                qc_cfg=QCConfig(enabled=False),
+                scorer=None,
+                safety_cfg=safety_cfg,
+                safety_scorer=safety_scorer,
+            )
         )
 
-    if mode == QCMode.POST:
-        post_qc_scorer = qc_scorer or make_qc_scorer(qc_cfg, new_instance=False, scorer_registry=scorer_registry)
+    # Post-QC (quality only for now)
+    if qc_cfg.enabled and qc_cfg.mode == QCMode.POST:
+        post_qc_scorer = qc_scorer or make_qc_scorer(qc_cfg, new_instance=True, scorer_registry=scorer_registry)
         if post_qc_scorer is None:
             log.warning("QC POST mode enabled but QC extras are not installed; skipping QC for this run.")
             qc_cfg.enabled = False
             qc_cfg.mode = QCMode.OFF
         else:
-            hooks.append(PostQCHook(qc_cfg, post_qc_scorer))
-        qc_cfg.scorer = None
+            hooks.append(PostQCHook(qc_cfg, post_qc_scorer, executor_hint=None))
+
+    qc_cfg.scorer = None
+    if safety_cfg is not None:
+        safety_cfg.scorer = None  # type: ignore[attr-defined]
     return QCPreparationResult(
         qc_cfg=qc_cfg,
         hooks=tuple(hooks),
@@ -610,9 +706,18 @@ def _strip_runtime_from_spec(cfg: RepocapsuleConfig) -> None:
     cfg.pipeline.file_extractor = None
     cfg.pipeline.extractors = ()
     cfg.qc.scorer = None
+    try:
+        cfg.qc.safety.scorer = None  # type: ignore[attr-defined]
+    except Exception:
+        pass
 
 
-def build_engine(config: RepocapsuleConfig, *, mutate: bool = False, overrides: PipelineOverrides | None = None):
+def build_engine(
+    config: RepocapsuleConfig,
+    *,
+    mutate: bool = False,
+    overrides: PipelineOverrides | None = None,
+):
     """Build a PipelineEngine from a declarative configuration.
 
     This is a convenience wrapper around build_pipeline_plan() that
@@ -624,14 +729,16 @@ def build_engine(config: RepocapsuleConfig, *, mutate: bool = False, overrides: 
         mutate (bool): Whether to mutate ``config`` in place when
             building the plan.
         overrides (PipelineOverrides | None): Optional runtime-only
-            overrides for HTTP client, QC scorer, file extractor, or
-            bytes handlers.
+            overrides for HTTP client, QC/safety scorers, language
+            detectors, bytes handlers, file extractor, and additional
+            record/file middlewares for cross-cutting behavior.
 
     Returns:
         PipelineEngine: Engine ready to be executed via run_pipeline()
             or PipelineEngine.run().
     """
-    from .pipeline import PipelineEngine
+    from .pipeline import PipelineEngine, apply_overrides_to_engine
 
     plan = build_pipeline_plan(config, mutate=mutate, overrides=overrides)
-    return PipelineEngine(plan)
+    engine = PipelineEngine(plan)
+    return apply_overrides_to_engine(engine, overrides)

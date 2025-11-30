@@ -6,7 +6,7 @@ import pytest
 from repocapsule.core.dataset_card import DatasetCardHook
 from repocapsule.core.interfaces import RunArtifacts, RunContext
 from repocapsule.core.pipeline import PipelineStats
-from repocapsule.core.config import RepocapsuleConfig
+from repocapsule.core.config import RepocapsuleConfig, QCConfig
 from repocapsule.core.qc_controller import InlineQCHook, QCSummaryTracker
 from repocapsule.core.qc_post import PostQCHook
 from repocapsule.core.records import RunSummaryMeta
@@ -23,10 +23,7 @@ class DummySink:
 
 class InlineStub(InlineQCHook):
     def __init__(self) -> None:
-        controller = types.SimpleNamespace(
-            tracker=QCSummaryTracker(), enforce_drops=False, reset=lambda stats: None, process_record=lambda rec: rec
-        )
-        super().__init__(controller, write_csv=False)
+        super().__init__(qc_cfg=QCConfig(enabled=False), scorer=None)
         self.artifacts_seen: list[RunArtifacts] = []
 
     def on_artifacts(self, artifacts: RunArtifacts, ctx: RunContext) -> None:

@@ -1,19 +1,28 @@
 # RepoCapsule – LLM Guide
 
-This file is meant to give LLMs a compact map of the project so they can focus on the right modules and avoid touching core wiring by accident.
+This file gives LLMs a compact map of RepoCapsule so they can work in the right modules and avoid touching core pipeline wiring by accident.
+
+For operational rules, invariants, and “how to ask an AI for help,” see `agents.md`.
+This `llms.md` focuses on architecture, module responsibilities, and where to make
+changes for different tasks.
 
 ---
 
 ## 1. High-level overview
 
-RepoCapsule is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized JSONL / Parquet datasets suitable for LLM fine-tuning and analysis.
+RepoCapsule is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized JSONL / Parquet datasets suitable for LLM pre-training, fine-tuning and analysis.
 
 At a high level:
 
 * You describe a run with `RepocapsuleConfig` (Python or TOML).
 * The **builder** turns that config into a `PipelinePlan` and `PipelineRuntime`.
 * The **pipeline engine** coordinates sources → decode → chunk → record construction → sinks.
-* Optional subsystems (QC, dataset cards, CLI runners, plugins) sit **around** the core rather than reimplementing it.
+* Optional subsystems (QC, dataset cards, language ID, safety/QC extras, CLI runners, plugins) sit **around** the core rather than reimplementing it.
+
+### Config normalization
+
+Per-kind defaults and per-spec options should always be merged into typed dataclasses before constructing sources/sinks/QC objects. This keeps factories declarative, makes new config knobs automatically tunable, and avoids hand-merging option dicts. `build_config_from_defaults_and_options` is the canonical helper for this pattern.
+- Factories should only pull constructor-only identifiers (paths/URLs/ids) directly from `spec.options` and rely on the helper for everything else (sources, sinks, QC).
 
 ---
 
@@ -21,15 +30,20 @@ At a high level:
 
 For the purposes of this guide:
 
-* **Core modules** live under `src/repocapsule/core/`.
+* **Core files** are a curated shortlist.
 
-  * These define configuration models, pipeline planning/runtime, registries, QC, dataset cards, HTTP safety, etc.
-  * Other code should generally *use* these rather than duplicating their responsibilities.
-* **Non-core**:
+  * They define configs and record schemas, pipeline planning/runtime, registries, language/QC/safety wiring, dataset cards, and top-level orchestration.
+  * They are explicitly marked as **CORE** in **3** (“Module map”) and should be treated as the architectural reference for new sources, sinks, scorers, and plugins.
+  * LLMs should usually **read but not modify** core orchestration logic (builder, pipeline engine, registries, interfaces, factories, QC/dataset-card hooks, concurrency) unless a task explicitly calls for it.
 
-  * CLI (`src/repocapsule/cli/`)
-  * Top-level package surface (`src/repocapsule/__init__.py`)
-  * Source/sink implementations, tests, and manual scripts.
+* **Non-core files** are everything else.
+
+  * These include CLI entry points, concrete source/sink implementations, optional extras/plugins, tests, scripts, and other integration glue.
+  * Non-core modules are the **preferred place** to:
+    * add or tweak behavior for a specific integration,
+    * implement new sources/sinks/scorers/safety checks that *use* the core APIs,
+    * and experiment with features without destabilizing the architecture. 
+  * When working with an LLM coding assistant, non-core files may not always be shared in full. This `llms.md` exists to give enough high-level context (responsibilities, key entry points, relationships to core) to avoid duplicated work and accidental reimplementation.
 
 ---
 
@@ -43,7 +57,7 @@ These are treated as the “core” of the system.
   Core package initializer and exports for shared constants/helpers.
 
 * `config.py`
-  Configuration models and helpers for defining `RepocapsuleConfig` and related config sections (sources, sinks, QC, chunking, etc.).
+  Configuration models and helpers for defining `RepocapsuleConfig` and related config sections (sources, sinks, QC, safety, chunking, etc.).
 
 * `records.py`
   Construction and normalization of output record dictionaries, including run headers and consistent metadata fields.
@@ -64,40 +78,52 @@ These are treated as the “core” of the system.
   High-level helpers that take file inputs (paths/bytes), run decode + chunking, and produce extractor/record dictionaries.
 
 * `factories.py`
-  Factory functions for constructing shared clients and runtime objects (HTTP clients, sources, sinks, repo contexts, output paths). Also defines exceptions like `UnsupportedBinary`.
+  Facade re-exporting factory helpers split across sinks, sources, QC, and context modules.
+
+* `factories_sinks.py`
+  Sink and output-path factories (`OutputPaths`, JSONL/Prompt sinks, Parquet dataset sink).
+
+* `factories_sources.py`
+  Source factories (`LocalDirSourceFactory`, `GitHubZipSourceFactory`, etc.) and bytes-handler wiring (`make_bytes_handlers`, `UnsupportedBinary`).
+
+* `factories_qc.py`
+  QC and safety scorer factory helpers (`make_qc_scorer`, `make_safety_scorer`).
+
+* `factories_context.py`
+  Repo context inference and HTTP client construction helpers (`make_repo_context_from_git`, `make_http_client`).
 
 * `log.py`
   Logging configuration helpers, package logger setup, and temporary level context manager.
 
 * `registries.py`
-  Registries for sources, sinks, bytes handlers, and quality scorers; central place to register built-ins and plugins.
+  Registries for sources, sinks, bytes handlers, quality scorers, and safety scorers; central place to register built-ins and plugins.
 
 * `plugins.py`
   Plugin discovery and registration helpers (entry-point based), wiring external sources/sinks/scorers into the registries.
 
 * `interfaces.py`
-  Protocols/typed interfaces shared across the system (sources, sinks, lifecycle hooks, scorers, etc.), plus core type aliases.
+  Protocols/typed interfaces shared across the system (sources, sinks, lifecycle hooks, quality/safety scorers, etc.), plus core type aliases.
 
 * `concurrency.py`
   Abstractions over thread/process executors with bounded submission windows, plus helpers to derive executor settings from `RepocapsuleConfig`.
 
 * `builder.py`
-  Orchestrates config → `PipelinePlan`/`PipelineRuntime` construction: builds sources, sinks, bytes handlers, HTTP client, lifecycle hooks, and QC wiring from a `RepocapsuleConfig`.
+  Orchestrates config → `PipelinePlan`/`PipelineRuntime` construction: builds sources, sinks, bytes handlers, HTTP client, lifecycle hooks, QC wiring, and language detectors from a `RepocapsuleConfig`. Hosts `PipelineOverrides` and `build_engine`, which is the preferred entry point for wiring runtime-only overrides (HTTP/QC/safety scorers, language detectors, bytes handlers, file extractor, and record/file middlewares) into a `PipelineEngine`. If you are changing how configs become runtime objects or how overrides/hooks/QC wiring are applied, start here.
 
 * `hooks.py`
   Built-in pipeline lifecycle hooks for run summaries/finalizers used by the builder to assemble runtime hooks.
 
 * `pipeline.py`
-  Pipeline engine that runs the ingestion loop: coordinates sources, decoding/chunking/record creation, sinks, hooks, and statistics.
+  Pipeline engine that runs the ingestion loop: coordinates sources, decoding/chunking/record creation, sinks, hooks, middleware, and statistics. Defines `PipelineEngine`, record/file middleware adapters (`add_record_middleware`, `add_file_middleware` plus `_FuncRecordMiddleware`/`_FuncFileMiddleware`), `LanguageTaggingMiddleware` (auto-attached based on configured detectors), and helpers like `run_pipeline` and `apply_overrides_to_engine` that turn a config + `PipelineOverrides` into a fully wired engine. If you need to adjust overall run flow or middleware behavior, this is usually the right place – but prefer adding middlewares/hooks over modifying the engine itself.
 
 * `qc_utils.py`
   Low-level quality-control utilities (similarity hashing, duplicate detection, basic QC heuristics and summaries).
 
 * `qc_controller.py`
-  Inline QC controller and related helpers for advisory/inline gating during the main pipeline run (e.g., `InlineQCHook`), using record-level scorers (`score_record`) only.
+  Inline screening controller and related helpers for advisory/inline gating during the main pipeline run (e.g., `InlineQCHook`), coordinating both quality and safety screeners with record-level scorers (`score_record`) only. Hosts `QualitySignals`/`filter_qc_meta` and `QCSummaryTracker.signal_stats` for schema-aligned QC signals (len_tok, ascii_ratio, repetition, gopher_quality, etc.). Safety gating is driven by `SafetyConfig.mode` + `annotate_only` (independent of QC mode) and can run without QC; `qc.safety.mode="post"` is currently rejected.
 
 * `qc_post.py`
-  Post-hoc QC lifecycle hook and reusable JSONL driver (`run_qc_over_jsonl`, `iter/collect_qc_rows_from_jsonl`) for scoring or CSV export after the main run completes.
+  Post-hoc quality screening lifecycle hook and reusable JSONL driver (`run_qc_over_jsonl`, `iter/collect_qc_rows_from_jsonl`) for scoring or CSV export after the main run completes, including optional QC signal sidecars (CSV or Parquet). `QCMode.POST` enforces gates only in this pass; safety is inline/advisory only. If you are changing QC export/sidecar behavior or running QC as a separate pass over JSONL, start here instead of modifying sinks.
 
 * `dataset_card.py`
   Builders for dataset card fragments and rendering/assembling Hugging Face–style dataset cards from run statistics and metadata.
@@ -114,6 +140,18 @@ These are treated as the “core” of the system.
 
 * `extras/qc.py`
   Optional quality-control scorers and CSV writers used when QC extras are installed, now thin adapters over the shared QC driver.
+
+* `extras/safety.py`
+  Stdlib-only baseline safety scorer (`RegexSafetyScorer`) plus a default factory registered with the safety scorer registry.
+
+* `language_id.py`
+  Central hub for language identification: extension maps (`CODE_EXTS`, `DOC_EXTS`, `EXT_LANG`), doc format hints, classify helpers, baseline human/code detectors, and factory functions to load optional backends (`extras/langid_lingua.py`, `extras/langid_pygments.py`). It is the single source of truth for code/doc language tags.
+
+* `extras/langid_lingua.py`
+  Optional Lingua-based human language detector implementing the `LanguageDetector` protocol; loaded via `make_language_detector("lingua")`.
+
+* `extras/langid_pygments.py`
+  Optional Pygments-backed code-language detector implementing the `CodeLanguageDetector` protocol; loaded via `make_code_language_detector("pygments")`.
 
 > **Note:** Additional core modules under `core/` that are not listed here yet should be added with short summaries as they are introduced or become relevant.
 
@@ -140,7 +178,7 @@ These are treated as the “core” of the system.
   High-level orchestration helpers used by the CLI and library:
 
   * Builds GitHub/local/web-PDF repo profiles.
-  * Constructs configs/output paths using core factories.
+  * Constructs configs/output paths using the core factories facade.
   * Invokes the builder and pipeline engine to execute runs.
   * Provides convenience wrappers (e.g., `convert_github`, `convert_local_dir`, `convert_web_pdf`).
 
@@ -229,6 +267,9 @@ Pytest-based test suite validating core behavior and non-core wiring.
 * `tests/test_config_builder_pipeline.py`
   End-to-end tests tying together config parsing, builder wiring, and pipeline execution.
 
+* `tests/test_pipeline_middlewares.py`
+  Focused tests for `PipelineEngine` middleware behavior (record/file middleware adapters, QC hooks) and basic sink error handling. Middleware-related override wiring should be covered here when adding new behavior to `PipelineOverrides` or `build_engine`.
+
 * `tests/test_convert.py`
   Tests for `convert.py` helpers (decode + chunk → records) and mode/format detection.
 
@@ -266,31 +307,22 @@ Pytest-based test suite validating core behavior and non-core wiring.
 
 ### 3.8 Repository root
 
-Top-level files in the repository.
-
-* `.gitattributes`
-  Git attributes configuration (e.g., line endings, linguist hints).
-
-* `.gitignore`
-  Git-ignore rules for build artifacts, virtualenvs, etc.
+Top-level files are summarized in `project_files.md`. Key ones:
 
 * `README.md`
-  Human-facing project overview, usage instructions, and feature list.
+  Human-facing project overview and usage instructions.
 
-* `example_config.toml`
-  Example `RepocapsuleConfig` in TOML form used for docs.
+* `agents.md`
+  Operational rules and invariants for AI coding assistants.
 
-* `manual_test_github.toml`
-  Example TOML config tailored for manual GitHub conversion tests.
+* `llms.md`
+  This architecture and module-responsibility guide.
+
+* `example_config.toml`, `manual_test_github.toml`
+  Example `RepocapsuleConfig` TOML files for documentation and manual tests.
 
 * `pyproject.toml`
-  Build configuration, dependencies, and project metadata for packaging.
-
-* `sample.jsonl`
-  Sample output JSONL dataset used for manual inspection and/or tests.
-
-* `project_files.md`
-  File tree for this repository.
+  Packaging configuration, dependencies, and project metadata.
 
 ---
 

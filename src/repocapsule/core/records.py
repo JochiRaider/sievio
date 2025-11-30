@@ -7,19 +7,17 @@ from __future__ import annotations
 from dataclasses import dataclass, field, fields
 from pathlib import Path
 from urllib.parse import urlparse
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, TYPE_CHECKING
+from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, TYPE_CHECKING, TypedDict, NotRequired, cast
 import hashlib
 
 from .chunk import count_tokens
+from .language_id import (
+    LanguageConfig,
+    DEFAULT_LANGCFG,
+    guess_lang_from_path,
+)
 
 __all__ = [
-    "CODE_EXTS",
-    "DOC_EXTS",
-    "EXT_LANG",
-    "LanguageConfig",
-    "DEFAULT_LANGCFG",
-    "guess_lang_from_path",
-    "is_code_file",
     "sha256_text",
     "build_record",
     "RecordMeta",
@@ -31,199 +29,8 @@ __all__ = [
     "merge_meta_defaults",
     "is_summary_record",
     "filter_qc_meta",
+    "filter_safety_meta",
 ]
-
-# -----------------------
-# Extension classifications
-# -----------------------
-# note: Keep these lower-cased; compare on Path.suffix.lower().
-CODE_EXTS: set[str] = {
-    # programming / scripting
-    ".py",
-    ".pyw",
-    ".py3",
-    ".ipynb",
-    ".ps1",
-    ".psm1",
-    ".psd1",
-    ".bat",
-    ".cmd",
-    ".sh",
-    ".bash",
-    ".zsh",
-    ".c",
-    ".h",
-    ".cpp",
-    ".hpp",
-    ".cc",
-    ".hh",
-    ".cxx",
-    ".hxx",
-    ".cs",
-    ".java",
-    ".kt",
-    ".kts",
-    ".scala",
-    ".go",
-    ".rs",
-    ".swift",
-    ".ts",
-    ".tsx",
-    ".js",
-    ".jsx",
-    ".mjs",
-    ".cjs",
-    ".rb",
-    ".php",
-    ".pl",
-    ".pm",
-    ".lua",
-    ".r",
-    ".jl",
-    ".sql",
-    ".sparql",
-    # config / structured (treated as code-ish for token ratios)
-    ".json",
-    ".jsonc",
-    ".yaml",
-    ".yml",
-    ".toml",
-    ".ini",
-    ".cfg",
-    ".xml",
-    ".xslt",
-    ".evtx",
-    # data / rules
-    ".yara",
-    ".yar",
-    ".sigma",
-    ".ndjson",
-    ".log",
-}
-
-DOC_EXTS: set[str] = {
-    ".md",
-    ".mdx",
-    ".rst",
-    ".adoc",
-    ".txt",
-}
-
-# Language hints per extension (lower-case ext -> language tag)
-EXT_LANG: Dict[str, str] = {
-    ".py": "python",
-    ".ipynb": "python",
-    ".ps1": "powershell",
-    ".psm1": "powershell",
-    ".psd1": "powershell",
-    ".bat": "batch",
-    ".cmd": "batch",
-    ".sh": "bash",
-    ".bash": "bash",
-    ".zsh": "zsh",
-    ".c": "c",
-    ".h": "c",
-    ".cpp": "cpp",
-    ".hpp": "cpp",
-    ".cc": "cpp",
-    ".hh": "cpp",
-    ".cxx": "cpp",
-    ".hxx": "cpp",
-    ".cs": "csharp",
-    ".java": "java",
-    ".kt": "kotlin",
-    ".kts": "kotlin",
-    ".scala": "scala",
-    ".go": "go",
-    ".rs": "rust",
-    ".swift": "swift",
-    ".ts": "typescript",
-    ".tsx": "typescript",
-    ".js": "javascript",
-    ".jsx": "javascript",
-    ".mjs": "javascript",
-    ".cjs": "javascript",
-    ".rb": "ruby",
-    ".php": "php",
-    ".pl": "perl",
-    ".pm": "perl",
-    ".lua": "lua",
-    ".r": "r",
-    ".jl": "julia",
-    ".sql": "sql",
-    ".sparql": "sparql",
-    ".json": "json",
-    ".jsonc": "json",
-    ".yaml": "yaml",
-    ".yml": "yaml",
-    ".toml": "toml",
-    ".ini": "ini",
-    ".cfg": "ini",
-    ".xml": "xml",
-    ".xslt": "xml",
-    ".yara": "yara",
-    ".yar": "yara",
-    ".sigma": "sigma",
-    ".ndjson": "ndjson",
-    ".log": "log",
-    ".md": "markdown",
-    ".mdx": "markdown",
-    ".rst": "restructuredtext",
-    ".adoc": "asciidoc",
-    ".txt": "text",
-    ".evtx": "windows-eventlog",
-}
-
-@dataclass
-class LanguageConfig:
-    """Configurable file-type and language hints.
-
-    Attributes:
-        code_exts (set[str]): Extensions treated as code.
-        doc_exts (set[str]): Extensions treated as documentation/text.
-        ext_lang (Dict[str, str]): Mapping of extension to language tag.
-    """
-
-    code_exts: set[str] = field(default_factory=lambda: set(CODE_EXTS))
-    doc_exts: set[str]  = field(default_factory=lambda: set(DOC_EXTS))
-    ext_lang: Dict[str, str] = field(default_factory=lambda: dict(EXT_LANG))
-
-DEFAULT_LANGCFG = LanguageConfig()
-
-
-# -----------------------
-# Basic classifiers / hints
-# -----------------------
-
-def guess_lang_from_path(path: str | Path, cfg: LanguageConfig | None = None) -> Tuple[str, str]:
-    """Return (kind, lang) for the given path.
-
-    Args:
-        path (str | Path): File path to classify.
-        cfg (LanguageConfig | None): Optional language config overrides.
-
-    Returns:
-        Tuple[str, str]: Tuple of kind ("code" or "doc") and language tag.
-    """
-    cfg = cfg or DEFAULT_LANGCFG
-    p = Path(path)    
-    ext = p.suffix.lower()
-    if ext in cfg.code_exts:
-        kind = "code"
-    elif ext in cfg.doc_exts:
-        kind = "doc"
-    else:
-        # Heuristic: treat unknowns as docs (safer for tokenization)
-        kind = "doc"
-    lang = cfg.ext_lang.get(ext, (ext[1:] if ext.startswith(".") and len(ext) > 1 else "text"))
-    return kind, lang
-
-
-def is_code_file(path: str | Path, cfg: LanguageConfig | None = None) -> bool:
-    """Return True if the path extension is recognized as code."""
-    cfg = cfg or DEFAULT_LANGCFG
-    return Path(path).suffix.lower() in cfg.code_exts
-
 
 # -----------------------
 # Hashing utilities
@@ -283,6 +90,7 @@ STANDARD_META_FIELDS: set[str] = {
 # QC scorers populate a few additional meta keys; documenting them here keeps the
 # schema discoverable for downstream tooling.
 QC_META_FIELDS: set[str] = {
+    "score",
     "qc_score",
     "qc_decision",
     "qc_drop_reason",
@@ -295,30 +103,78 @@ QC_META_FIELDS: set[str] = {
 # QC scorers may add additional metadata, but these are the only QC keys that should
 # appear at the top level of ``record["meta"]``; all other QC signals belong in
 # ``meta["extra"]`` (see ``filter_qc_meta``).
+QC_SIGNAL_EXCLUDE_FIELDS: set[str] = {
+    "path",
+    "repo",
+    "url",
+    "doc_id",
+    "chunk_id",
+    "n_chunks",
+    "source",
+}
+
+SAFETY_META_FIELDS: set[str] = {
+    "safety_decision",
+    "safety_drop_reason",
+    "safety_reason",
+    "pii_detected",
+    "toxicity",
+}
 
 
-def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+class QualitySignals(TypedDict, total=False):
+    # Length/size
+    len: int
+    tokens: int
+    len_char: int              # aliases qc_result["len"]
+    len_tok: int               # aliases qc_result["tokens"]
+    nlines: int
+    file_nlines: NotRequired[int]
+
+    # Formatting / noise heuristics
+    ascii_ratio: float
+    repetition: float
+    code_complexity: float
+    parse_ok: bool
+
+    # LM and corpus-based quality
+    perplexity: NotRequired[float]
+    gopher_quality: NotRequired[float]
+    ppl_bucket: NotRequired[str]
+
+    # Language & domain
+    lang_id: NotRequired[str]      # from meta["lang"] or language detector
+    lang_score: NotRequired[float]
+    source_domain: NotRequired[str]
+
+    # Duplication signals
+    near_dup: NotRequired[bool]
+    near_dup_simhash: NotRequired[bool]
+    near_dup_minhash: NotRequired[bool]
+    minhash_jaccard: NotRequired[float]
+    hamdist: NotRequired[int]
+    dup_family_id: NotRequired[str]
+
+
+def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], QualitySignals]:
     """Partition a QC scorer result into canonical and extra signals.
 
     Canonical QC fields are allowed at the top level of ``record["meta"]``
     and include items in ``QC_META_FIELDS`` plus ``qc_score``. Everything
     else is treated as QC signals intended for
-    ``meta["extra"]["qc_signals"]``. Token counts are skipped so callers
-    can manage them separately.
+    ``meta["extra"]["qc_signals"]``.
 
     Args:
         qc_result (Mapping[str, Any]): Raw QC scorer output.
 
     Returns:
-        Tuple[Dict[str, Any], Dict[str, Any]]: Canonical QC fields and the
+        Tuple[Dict[str, Any], QualitySignals]: Canonical QC fields and the
         remaining QC signals.
     """
     canonical: Dict[str, Any] = {}
     qc_signals: Dict[str, Any] = {}
 
     for key, value in qc_result.items():
-        if key == "tokens":
-            continue
         if key == "score":
             if value is not None:
                 canonical["qc_score"] = value
@@ -326,8 +182,39 @@ def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[s
         if key in QC_META_FIELDS:
             canonical[key] = value
             continue
+        if key in QC_SIGNAL_EXCLUDE_FIELDS:
+            continue
         qc_signals[key] = value
-    return canonical, qc_signals
+
+    # Add schema-aligned aliases
+    if "len" in qc_result:
+        qc_signals.setdefault("len_char", qc_result["len"])
+        if "len" not in qc_signals:
+            qc_signals["len"] = qc_result["len"]
+    if "tokens" in qc_result:
+        qc_signals.setdefault("len_tok", qc_result["tokens"])
+        if "tokens" not in qc_signals:
+            qc_signals["tokens"] = qc_result["tokens"]
+    if "lang" in qc_result:
+        qc_signals.setdefault("lang_id", qc_result["lang"])
+    if "near_dup" in qc_result and "near_dup" not in qc_signals:
+        qc_signals["near_dup"] = qc_result["near_dup"]
+
+    return canonical, cast(QualitySignals, qc_signals)
+
+
+def filter_safety_meta(safety_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+    """Partition a safety scorer result into canonical meta fields and signals."""
+
+    canonical: Dict[str, Any] = {}
+    safety_signals: Dict[str, Any] = {}
+
+    for key, value in safety_result.items():
+        if key in SAFETY_META_FIELDS:
+            canonical[key] = value
+            continue
+        safety_signals[key] = value
+    return canonical, safety_signals
 
 
 def _meta_to_dict(obj: Any) -> Dict[str, Any]:

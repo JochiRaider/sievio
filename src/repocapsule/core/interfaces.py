@@ -125,7 +125,7 @@ Record = Mapping[str, Any]
 
 @dataclass(slots=True, frozen=True)
 class RunSummaryView:
-    """Lightweight view of run-level stats."""
+    """Lightweight view of run-level stats (including screening summary)."""
 
     num_records: int
     ext_counts: Mapping[str, int]
@@ -169,6 +169,27 @@ class RunLifecycleHook(Protocol):
         have been computed.
         Default for many hooks is a no-op.
         """
+
+
+# -----------------------------------------------------------------------------
+# Screening (QC, safety) protocols
+# -----------------------------------------------------------------------------
+
+
+@runtime_checkable
+class InlineScreener(Protocol):
+    """Generic inline screening component (QC, safety, …)."""
+
+    id: str  # e.g. "quality", "safety"
+
+    def process_record(self, record: Record) -> Record | None:
+        """
+        Score and optionally drop a record.
+
+        Returns:
+            The record (possibly with augmented meta) or None to drop.
+        """
+        ...
 
 
 # -----------------------------------------------------------------------------
@@ -400,6 +421,36 @@ class QualityScorer(Protocol):
         """
 
 
+class SafetyScorer(Protocol):
+    """
+    Contract for safety/PII scorers focusing on normative categories.
+
+    Safety scorers should emit signals separate from general quality heuristics.
+    """
+
+    def score_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+        """Compute safety signals for a single record."""
+
+    def score_jsonl_path(self, path: str) -> Iterable[Dict[str, Any]]:  # pragma: no cover - optional
+        """Iterate safety signals for every record within a JSONL file."""
+
+    def clone_for_parallel(self) -> "SafetyScorer":  # pragma: no cover - optional
+        """Return a fresh scorer for use in parallel workers."""
+
+    def reset_state(self) -> None:  # pragma: no cover - optional
+        """Clear any retained state between runs."""
+
+
+@runtime_checkable
+class SafetyScorerFactory(Protocol):
+    """Protocol describing factories that build SafetyScorer instances."""
+
+    id: str
+
+    def build(self, options: Mapping[str, Any]) -> SafetyScorer:
+        ...
+
+
 class JsonlAwareScorer(QualityScorer, Protocol):
     """Extension for scorers that can handle JSONL files or parallel clones."""
 
@@ -548,10 +599,13 @@ class SinkFactoryContext:
         repo_context (RepoContext | None): Repository metadata shared with
             sinks.
         sink_config (SinkConfig): Effective sink configuration.
+        sink_defaults (Mapping[str, Mapping[str, Any]]): Per-sink defaults keyed
+            by SinkSpec.kind.
     """
 
     repo_context: Optional[RepoContext]
     sink_config: "SinkConfig"
+    sink_defaults: Mapping[str, Mapping[str, Any]]
 
 
 __all__ = [
@@ -568,8 +622,10 @@ __all__ = [
     "StreamingExtractor",
     "Sink",
     "QualityScorer",
+    "SafetyScorer",
     "SourceFactory",
     "SinkFactory",
+    "SafetyScorerFactory",
     "SourceFactoryContext",
     "SinkFactoryContext",
     "RecordFilter",

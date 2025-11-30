@@ -2,6 +2,7 @@ from repocapsule.core.chunk import count_tokens
 from repocapsule.core.records import (
     build_record,
     ensure_meta_dict,
+    filter_qc_meta,
     is_summary_record,
     merge_meta_defaults,
 )
@@ -96,3 +97,43 @@ def test_merge_meta_defaults_does_not_clobber_existing() -> None:
 def test_is_summary_record_checks_kind() -> None:
     assert is_summary_record({"text": "", "meta": {"kind": "run_summary"}}) is True
     assert is_summary_record({"text": "x", "meta": {"kind": "doc"}}) is False
+
+
+def test_filter_qc_meta_aliases_and_excludes() -> None:
+    qc_result = {
+        "score": 88.5,
+        "qc_decision": "keep",
+        "qc_reason": "ok",
+        "near_dup": False,
+        "dup_family_id": "fam1",
+        "tokens": 12,
+        "len": 50,
+        "ascii_ratio": 0.9,
+        "repetition": 0.1,
+        "code_complexity": 0.2,
+        "gopher_quality": 0.7,
+        "perplexity": 5.0,
+        "lang": "en",
+        "path": "should_be_excluded",
+    }
+
+    canonical, signals = filter_qc_meta(qc_result)
+
+    assert canonical["qc_score"] == 88.5
+    assert canonical["qc_decision"] == "keep"
+    assert canonical["qc_reason"] == "ok"
+    assert canonical["near_dup"] is False
+    assert canonical["dup_family_id"] == "fam1"
+
+    assert "path" not in signals
+    assert signals["ascii_ratio"] == 0.9
+    assert signals["repetition"] == 0.1
+    assert signals["code_complexity"] == 0.2
+    assert signals["gopher_quality"] == 0.7
+    assert signals["perplexity"] == 5.0
+    assert signals["len_char"] == 50
+    assert signals["len_tok"] == 12
+    assert signals["lang_id"] == "en"
+    assert signals["tokens"] == 12
+    assert signals["len"] == 50
+    assert signals["near_dup"] is False

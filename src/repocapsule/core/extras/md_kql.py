@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Iterable, Iterator, List, Optional, Sequence
 import re
 
 from ..interfaces import RepoContext, Record
 from ..records import build_record
+from ..language_id import MD_EXTS
 
 __all__ = [
     "KQLBlock",
@@ -392,8 +394,8 @@ class KqlFromMarkdownExtractor:
             Iterable[Record] | None: Records if KQL is found, else None.
         """
         # Only care about markdown-like files
-        pl = path.lower()
-        if not (pl.endswith(".md") or pl.endswith(".mdx") or pl.endswith(".markdown")):
+        ext = Path(path).suffix.lower()
+        if ext not in MD_EXTS:
             return None
 
         blocks = extract_kql_blocks_from_markdown(

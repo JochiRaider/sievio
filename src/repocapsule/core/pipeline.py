@@ -11,7 +11,7 @@ from pathlib import Path
 import pickle
 
 from .config import RepocapsuleConfig, FileProcessingConfig
-from .builder import PipelinePlan, PipelineOverrides, PipelineRuntime, build_pipeline_plan
+from .builder import PipelinePlan, PipelineOverrides, PipelineRuntime, build_pipeline_plan, build_engine
 from .interfaces import (
     Source,
     Sink,
@@ -25,6 +25,7 @@ from .interfaces import (
     RunLifecycleHook,
     RunSummaryView,
 )
+from .language_id import CodeLanguageDetector, LanguageDetector
 from .concurrency import (
     Executor,
     process_items_parallel,
@@ -33,6 +34,7 @@ from .concurrency import (
 from .convert import DefaultExtractor
 from .log import get_logger
 from .qc_controller import QCSummaryTracker
+from .records import ensure_meta_dict
 
 
 log = get_logger(__name__)
@@ -65,6 +67,72 @@ class _FuncFileMiddleware:
 
     def process(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
         return self._fn(item, records)
+
+
+class LanguageTaggingMiddleware:
+    """Attach language metadata using configured detectors."""
+
+    def __init__(self, lang_det: LanguageDetector | None, code_det: CodeLanguageDetector | None) -> None:
+        self._lang_det = lang_det
+        self._code_det = code_det
+
+    def process(self, record: Record) -> Record | None:
+        meta = ensure_meta_dict(record)
+        text = record.get("text") or ""
+        path_hint = meta.get("path")
+
+        if self._lang_det is not None and "language" not in meta:
+            try:
+                pred = self._lang_det.detect(text)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("language detector failed for %s: %s", path_hint or "<unknown>", exc)
+                pred = None
+            if pred:
+                meta.setdefault("language", pred.code)
+                meta.setdefault("language_confidence", pred.score)
+                if getattr(pred, "backend", None):
+                    meta.setdefault("language_backend", pred.backend)
+
+        if self._code_det is not None:
+            try:
+                pred_code = self._code_det.detect_code(text, filename=path_hint)
+            except Exception as exc:  # noqa: BLE001
+                log.warning("code language detector failed for %s: %s", path_hint or "<unknown>", exc)
+                pred_code = None
+            if pred_code:
+                current_lang = meta.get("lang")
+                if not current_lang or str(current_lang).lower() in {"text", "unknown"}:
+                    meta["lang"] = pred_code.lang
+                    if getattr(pred_code, "backend", None):
+                        meta["lang_backend"] = pred_code.backend
+                    meta.setdefault("lang_score", pred_code.score)
+
+        return record
+
+
+def apply_overrides_to_engine(
+    engine: "PipelineEngine",
+    overrides: "PipelineOverrides | None",
+) -> "PipelineEngine":
+    """
+    Apply runtime-only overrides that target the PipelineEngine itself.
+
+    Currently this wires record/file middlewares defined in
+    PipelineOverrides onto the engine via add_record_middleware and
+    add_file_middleware.
+    """
+    if overrides is None:
+        return engine
+
+    if getattr(overrides, "record_middlewares", None):
+        for mw in overrides.record_middlewares:  # type: ignore[attr-defined]
+            engine.add_record_middleware(mw)
+
+    if getattr(overrides, "file_middlewares", None):
+        for mw in overrides.file_middlewares:  # type: ignore[attr-defined]
+            engine.add_file_middleware(mw)
+
+    return engine
 
 
 def _coerce_record_middleware(mw: RecordMiddleware | Callable[[Record], Any]) -> RecordMiddleware:
@@ -115,7 +183,12 @@ class _ProcessFileCallable:
 # Convention: hot-path dataclasses use slots=True to reduce per-instance overhead.
 @dataclass(slots=True)
 class PipelineStats:
-    """Mutable counters and aggregates collected during pipeline execution."""
+    """Mutable counters and aggregates collected during pipeline execution.
+
+    files/bytes track items that completed extraction, middleware, and sink writes
+    without unhandled errors (not just files attempted). ``qc`` holds screening
+    (quality + safety) stats for the run.
+    """
 
     files: int = 0
     bytes: int = 0
@@ -274,6 +347,11 @@ class PipelineEngine:
         self.before_source_hooks: List[Callable[[Source], None]] = []
         self.after_source_hooks: List[Callable[[Source], None]] = []
         self._middlewares_normalized = False
+        rt = getattr(plan, "runtime", None)
+        lang_det = getattr(rt, "language_detector", None) if rt else None
+        code_lang_det = getattr(rt, "code_language_detector", None) if rt else None
+        if lang_det is not None or code_lang_det is not None:
+            self.add_record_middleware(LanguageTaggingMiddleware(lang_det, code_lang_det))
 
     def add_record_middleware(self, middleware: RecordMiddleware | Callable[[Record], Any]) -> None:
         """Register a record middleware or bare callable."""
@@ -546,11 +624,12 @@ class PipelineEngine:
             fail_fast (bool): Whether to propagate errors immediately.
         """
         try:
-            self._increment_file_stats(work.item)
             _, recs = processor(work)
             recs = self._apply_file_middlewares(work.item, recs)
             if recs is not None:
                 self._write_records(work.item, recs, sinks=sinks)
+            # Count only after successful processing (even if recs is None)
+            self._increment_file_stats(work.item)
         except Exception as exc:
             self.log.warning(
                 "Processing failed for %s: %s",
@@ -593,9 +672,7 @@ class PipelineEngine:
                 )
 
         def _items_with_stats() -> Iterable[_WorkItem]:
-            for work in items:
-                self._increment_file_stats(work.item)
-                yield work
+            yield from items
 
         def _process_one(work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
             return processor(work)
@@ -610,6 +687,8 @@ class PipelineEngine:
             recs = self._apply_file_middlewares(item, recs)
             if recs is not None:
                 self._write_records(item, recs, sinks=sinks)
+            # Count only after successful processing/writes (even if recs is None)
+            self._increment_file_stats(item)
 
         def _on_submit_error(work: _WorkItem, exc: BaseException) -> None:
             log.warning(
@@ -761,14 +840,13 @@ def run_pipeline(*, config: RepocapsuleConfig, overrides: PipelineOverrides | No
     Args:
         config (RepocapsuleConfig): Pipeline configuration object.
         overrides (PipelineOverrides | None): Optional runtime overrides
-            merged into the plan.
+            merged into the plan and engine.
 
     Returns:
         dict[str, int]: Statistics from execution as primitive values.
     """
-    plan = build_pipeline_plan(config, overrides=overrides)
-    engine = PipelineEngine(plan)
-    stats = engine.run()
-    return stats.as_dict()
+    engine = build_engine(config, overrides=overrides)
+    stats_obj = engine.run()
+    return stats_obj.as_dict()
 
-__all__ = ["run_pipeline", "PipelineStats", "PipelineEngine", "process_items_parallel"]
+__all__ = ["run_pipeline", "PipelineStats", "PipelineEngine", "process_items_parallel", "LanguageTaggingMiddleware"]

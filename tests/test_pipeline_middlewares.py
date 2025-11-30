@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from repocapsule.core.builder import build_pipeline_plan, PipelineOverrides
+from repocapsule.core.builder import build_pipeline_plan, build_engine, PipelineOverrides
 from repocapsule.core.interfaces import RepoContext
 from repocapsule.core.pipeline import PipelineEngine, _FuncRecordMiddleware
 from repocapsule.core.config import RepocapsuleConfig, SourceSpec, SinkSpec
@@ -113,11 +113,14 @@ def test_qc_hook_attaches_record_middleware(tmp_path: Path):
 
     hook = TagHook()
     engine.plan.runtime.lifecycle_hooks = (hook,)
+    # Keep engine's cached hooks in sync with the mutated runtime.
+    engine._hooks = (hook,)
 
     stats = engine.run()
     payloads = _read_payloads(engine)
 
     assert stats.records == 1
+    # Lifecycle hooks wired via PipelineRuntime are invoked by the engine.
     assert hook.started and hook.finished
     assert any(rec.get("meta", {}).get("qc_tag") is True for rec in payloads)
 
@@ -141,3 +144,80 @@ def test_sink_open_failure_increments_stats(tmp_path: Path):
 
     assert stats.sink_errors >= 1
     assert stats.records == 0
+
+
+def test_pipeline_overrides_record_middlewares_wired_by_build_engine(tmp_path: Path):
+    cfg = RepocapsuleConfig()
+    ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
+    cfg.sinks.context = ctx
+
+    src_root = tmp_path / "input_overrides"
+    src_root.mkdir()
+    (src_root / "file.py").write_text("print('hello')\n", encoding="utf-8")
+
+    cfg.sources.specs = (SourceSpec(kind="local_dir", options={"root_dir": str(src_root)}),)
+
+    out_dir = tmp_path / "out_overrides"
+    out_dir.mkdir()
+    jsonl_path = out_dir / "data.jsonl"
+    prompt_path = out_dir / "data.prompt.txt"
+
+    cfg.sinks.specs = (
+        SinkSpec(
+            kind="default_jsonl_prompt",
+            options={"jsonl_path": str(jsonl_path), "prompt_path": str(prompt_path)},
+        ),
+    )
+
+    def tag(record):
+        meta = record.setdefault("meta", {})
+        meta["override_tag"] = True
+        return record
+
+    overrides = PipelineOverrides(record_middlewares=[tag])
+    engine = build_engine(cfg, overrides=overrides)
+    stats = engine.run()
+    payloads = _read_payloads(engine)
+
+    assert stats.records == 1
+    assert any(rec.get("meta", {}).get("override_tag") is True for rec in payloads)
+
+
+def test_pipeline_overrides_file_middlewares_wired_by_build_engine(tmp_path: Path):
+    cfg = RepocapsuleConfig()
+    ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
+    cfg.sinks.context = ctx
+
+    src_root = tmp_path / "input_overrides_file"
+    src_root.mkdir()
+    (src_root / "file.py").write_text("print('hello')\n", encoding="utf-8")
+
+    cfg.sources.specs = (SourceSpec(kind="local_dir", options={"root_dir": str(src_root)}),)
+
+    out_dir = tmp_path / "out_overrides_file"
+    out_dir.mkdir()
+    jsonl_path = out_dir / "data.jsonl"
+    prompt_path = out_dir / "data.prompt.txt"
+
+    cfg.sinks.specs = (
+        SinkSpec(
+            kind="default_jsonl_prompt",
+            options={"jsonl_path": str(jsonl_path), "prompt_path": str(prompt_path)},
+        ),
+    )
+
+    def tag_from_file(item, records):
+        tagged = []
+        for rec in records:
+            meta = rec.setdefault("meta", {})
+            meta["from_file_mw"] = getattr(item, "path", None)
+            tagged.append(rec)
+        return tagged
+
+    overrides = PipelineOverrides(file_middlewares=[tag_from_file])
+    engine = build_engine(cfg, overrides=overrides)
+    stats = engine.run()
+    payloads = _read_payloads(engine)
+
+    assert stats.records == 1
+    assert any("from_file_mw" in rec.get("meta", {}) for rec in payloads)
