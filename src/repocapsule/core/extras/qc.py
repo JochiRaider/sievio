@@ -21,6 +21,7 @@ from ..log import get_logger
 from ..config import QCConfig, QCHeuristics, DEFAULT_QC_SCORER_ID, RepocapsuleConfig, QCMode
 from ..qc_controller import QCSummaryTracker
 from ..qc_post import collect_qc_rows_from_jsonl, run_qc_over_jsonl
+from ..dedup_store import GlobalDedupStore
 from ..qc_utils import (
     TEXTY_LC,
     MinHashLSH,
@@ -128,6 +129,8 @@ class JSONLQualityScorer:
         enable_gopher: bool = True,
         gopher_weight: float = 0.10,
         heuristics: object | None = None,
+        global_dedup_path: Optional[str] = None,
+        global_dedup_read_only: bool = False,
     ):
         """Initialize the scorer configuration and optional models.
 
@@ -150,23 +153,11 @@ class JSONLQualityScorer:
                 when available.
             gopher_weight (float): Weight applied to the Gopher quality score.
             heuristics (object | None): Optional heuristic overrides.
+            global_dedup_path (str | None): Optional path to a SQLite-backed
+                global dedup store.
+            global_dedup_read_only (bool): Open the global dedup store in
+                read-only mode.
         """
-        self._init_kwargs = {
-            "lm_model_id": lm_model_id,
-            "device": device,
-            "dtype": dtype,
-            "simhash_hamm_thresh": simhash_hamm_thresh,
-            "simhash_window": simhash_window,
-            "local_files_only": local_files_only,
-            "enable_minhash": enable_minhash,
-            "minhash_perms": minhash_perms,
-            "minhash_bands": minhash_bands,
-            "minhash_shingle_k": minhash_shingle_k,
-            "minhash_jaccard_thresh": minhash_jaccard_thresh,
-            "enable_gopher": enable_gopher,
-            "gopher_weight": gopher_weight,
-            "heuristics": heuristics,
-        }
         self.last_stats: JSONLScoreStats | None = None
         # Heuristic overrides: constructor args override heuristics; heuristics override baked-in defaults.
         if heuristics is not None:
@@ -198,29 +189,46 @@ class JSONLQualityScorer:
         self.sim_thresh = int(simhash_hamm_thresh)
         self.enable_minhash = bool(enable_minhash)
         self.minhash_k = int(minhash_shingle_k)
-        self.lsh = (
-            MinHashLSH(
-                n_perm=int(minhash_perms),
-                bands=int(minhash_bands),
-                jaccard_threshold=float(minhash_jaccard_thresh),
-            )
-            if self.enable_minhash
-            else None
+        self.lsh = MinHashLSH(
+            n_perm=int(minhash_perms),
+            bands=int(minhash_bands),
+            jaccard_threshold=float(minhash_jaccard_thresh),
         )
+        self.minhash_perms = self.lsh.n_perm
+        self.minhash_bands = self.lsh.bands
+        self.minhash_threshold = self.lsh.jaccard_threshold
         self.enable_gopher = bool(enable_gopher)
         self.gopher_weight = float(gopher_weight)
         self.sim_seen: deque[tuple[int, str]] = deque(maxlen=int(simhash_window))
         self.heuristics = heuristics
-        self._init_kwargs.update(
-            simhash_hamm_thresh=self.sim_thresh,
-            simhash_window=self.sim_seen.maxlen or simhash_window,
-            enable_minhash=self.enable_minhash,
-            minhash_perms=minhash_perms,
-            minhash_bands=minhash_bands,
-            minhash_shingle_k=self.minhash_k,
-            minhash_jaccard_thresh=minhash_jaccard_thresh,
-        )
-        self.last_stats = None
+        self.global_store = None
+        if global_dedup_path:
+            self.global_store = GlobalDedupStore(
+                global_dedup_path,
+                read_only=global_dedup_read_only,
+                n_perm=self.lsh.n_perm,
+                bands=self.lsh.bands,
+                jaccard_threshold=self.lsh.jaccard_threshold,
+            )
+
+        self._init_kwargs = {
+            "lm_model_id": lm_model_id,
+            "device": device,
+            "dtype": dtype,
+            "simhash_hamm_thresh": self.sim_thresh,
+            "simhash_window": self.sim_seen.maxlen or simhash_window,
+            "local_files_only": local_files_only,
+            "enable_minhash": self.enable_minhash,
+            "minhash_perms": self.lsh.n_perm,
+            "minhash_bands": self.lsh.bands,
+            "minhash_shingle_k": self.minhash_k,
+            "minhash_jaccard_thresh": self.lsh.jaccard_threshold,
+            "enable_gopher": self.enable_gopher,
+            "gopher_weight": self.gopher_weight,
+            "heuristics": heuristics,
+            "global_dedup_path": global_dedup_path,
+            "global_dedup_read_only": global_dedup_read_only,
+        }
 
     def reset_stats(self) -> None:
         """Reset scoring statistics for the next run."""
@@ -232,10 +240,7 @@ class JSONLQualityScorer:
         Returns:
             JSONLQualityScorer: Independent scorer using the same configuration.
         """
-        kwargs = dict(getattr(self, "_init_kwargs", {}) or {})
-        if not kwargs:
-            kwargs = {"heuristics": getattr(self, "heuristics", None)}
-        return JSONLQualityScorer(**kwargs)
+        return JSONLQualityScorer(**self._init_kwargs)
 
     def score_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
         """Compute QC metrics for a single record and return the enriched dict.
@@ -253,10 +258,14 @@ class JSONLQualityScorer:
                 meta.
         """
         text = rec.get("text", "")
-        meta = rec.get("meta", {})
+        meta = rec.get("meta") or {}
         lang = (meta.get("lang") or "").strip() or "Text"
         lang_l = lang.lower()
-        doc_id = str(meta.get("sha256") or hashlib.sha1(text.encode("utf-8", "ignore")).hexdigest())
+        doc_id = meta.get("doc_id") or rec.get("id")
+        if doc_id:
+            doc_id = str(doc_id)
+        else:
+            doc_id = hashlib.sha1(text.encode("utf-8")).hexdigest()
 
         N = int(meta.get("tokens") or approx_tokens(text))
         Tlo, Thi = target_band(lang_l, heuristics=self.heuristics)
@@ -279,11 +288,33 @@ class JSONLQualityScorer:
         self.sim_seen.append((sh, doc_id))
 
         near_dup_mh, mh_j, mh_of = False, 0.0, None
-        if self.enable_minhash and self.lsh is not None:
+        need_minhash = self.enable_minhash or self.global_store is not None
+        sig = None
+        if need_minhash:
+            # Global dedup forces MinHash even if local in-memory MinHash is disabled.
             sig = minhash_signature_for_text(text, k=self.minhash_k, n_perm=self.lsh.n_perm)
+        if self.enable_minhash and sig is not None:
             near_dup_mh, mh_j, mh_of = self.lsh.add_and_check(doc_id, sig)
         else:
             mh_of = None
+
+        global_dup = False
+        global_match_id = None
+        global_mh_j = 0.0
+        if self.global_store is not None and sig is not None:
+            res = self.global_store.check_and_add(
+                doc_id,
+                sig,
+                add_if_missing=True,
+            )
+            global_dup = res.is_duplicate
+            global_match_id = res.match_id
+            global_mh_j = res.score
+        if global_dup:
+            near_dup_mh = True
+            if global_match_id is not None:
+                mh_of = mh_of or global_match_id
+        mh_j = max(mh_j, global_mh_j)
 
         ppl = None
         lm_score = 0.5
@@ -306,15 +337,17 @@ class JSONLQualityScorer:
             + 0.15 * lm_score
         )
         score = base + (self.gopher_weight * goph_score if self.enable_gopher and self.gopher_weight > 0 else 0.0)
-        minhash_dup_of = mh_of if (self.enable_minhash and near_dup_mh and mh_of) else None
+        minhash_dup_of = mh_of if (near_dup_mh and mh_of) else None
         simhash_dup_of = sim_dup_of if near_dup_sim else None
         dup_family_id = minhash_dup_of or simhash_dup_of or doc_id
-        near_dup = near_dup_sim or near_dup_mh
+        near_dup = near_dup_sim or near_dup_mh or global_dup
 
         if near_dup:
             base = 0.8 if lang_l in TEXTY_LC else 0.5
             if ham_min is not None and ham_min <= max(1, self.sim_thresh // 2):
                 base *= 0.6
+            if global_dup:
+                base *= 0.5
             score *= base
 
         return {
@@ -332,6 +365,8 @@ class JSONLQualityScorer:
             "minhash_dup_of": minhash_dup_of,
             "simhash_dup_of": simhash_dup_of,
             "dup_family_id": dup_family_id,
+            "global_dup": bool(global_dup),
+            "global_dup_of": global_match_id,
             "gopher_quality": round(float(goph_score), 4),
             "gopher_flags": goph_flags,
             "hamdist": None if ham_min is None else int(ham_min),
@@ -557,14 +592,20 @@ class DefaultQualityScorerFactory:
         Returns:
             JSONLQualityScorer: Configured scorer instance.
         """
-        heur_opt = options.get("heuristics")
+        opts = dict(options or {})
+        heur_opt = opts.get("heuristics")
         if isinstance(heur_opt, QCHeuristics):
             heuristics = heur_opt
         elif isinstance(heur_opt, Mapping):
             heuristics = QCHeuristics(**dict(heur_opt))
         else:
             heuristics = None
-        return JSONLQualityScorer(heuristics=heuristics)
+        global_opts = opts.get("global_dedup", {}) or {}
+        return JSONLQualityScorer(
+            heuristics=heuristics,
+            global_dedup_path=global_opts.get("path"),
+            global_dedup_read_only=bool(global_opts.get("read_only", False)),
+        )
 
 
 try:

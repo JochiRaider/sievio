@@ -126,7 +126,7 @@ download_max_bytes = 104857600           # Maximum allowed size of the downloade
 retries = 2                              # Retries when downloading the DB fails
 
 # ---------------------------------------------------------------------------
-# Decode / chunk / pipeline behavior
+# Decode / chunk / language ID / pipeline behavior
 # ---------------------------------------------------------------------------
 [decode]
 normalize = "NFC"             # Unicode normalization (comment out to disable)
@@ -146,6 +146,15 @@ attach_language_metadata = true  # Attach language labels to chunks in record me
   semantic_doc = false        # Enable paragraph/sentence-aware splitting for long doc blocks
   # semantic_tokens_per_block = 600  # Target tokens per semantic sub-block when semantic_doc is true
 
+[language]
+enabled = true                # Enable human language identification
+backend = "baseline"          # "baseline" or "lingua" (requires [langid] extra)
+
+[code_lang]
+enabled = true                # Enable code/doc language identification
+backend = "baseline"          # "baseline" or "pygments" (requires [langid] extra)
+# hints = {}                  # Optional LanguageConfig overrides (code_exts, doc_exts, ext_lang)
+
 [pipeline]
 # extractors / bytes_handlers / file_extractor are typically wired in Python.
 max_workers = 0               # 0 → auto (os.cpu_count or 1)
@@ -162,6 +171,7 @@ output_dir = "."              # Base directory for outputs when explicit paths a
 # primary_jsonl_name is filled by builders when default_jsonl_prompt is used
 compress_jsonl = false        # Gzip-compress the primary JSONL when true
 jsonl_basename = "data"       # Default basename for JSONL when factories derive paths
+# primary_jsonl_name = "data.jsonl"  # Builder may set this automatically; override if needed
 
 [sinks.defaults]
 # Per-kind defaults keyed by SinkSpec.kind; mostly useful for plugins or to
@@ -213,6 +223,9 @@ as_global = true             # Install the built client as the global SafeHttpCl
 enabled = false              # Enable quality scoring and gating when true
 write_csv = false            # Emit a QC CSV alongside JSONL using QC scorers
 csv_suffix = "_quality.csv"  # Suffix to use for QC CSV filenames
+write_signals_sidecar = false # Emit QC signals sidecar (CSV/Parquet) when true
+signals_suffix = "_signals.csv" # Suffix for QC signals sidecar (ignored for Parquet)
+signals_format = "csv"       # "csv" or "parquet" for QC signals sidecars
 fail_on_error = false        # Raise on QC errors rather than logging and continuing
 min_score = 60.0             # Minimum QC score required to keep records (inline/advisory modes)
 drop_near_dups = false       # Drop near-duplicate records based on QC duplicate detection
@@ -222,6 +235,20 @@ parallel_post = false        # Use process-based parallelism for post-QC when tr
 # post_max_workers = 4        # Maximum workers for post-QC (defaults to pipeline.max_workers)
 # post_submit_window = 16     # Submit window for post-QC executor (defaults to pipeline.submit_window)
 # scorer_id selects a scorer (None = registry default); scorer_options passes scorer-specific settings
+
+[qc.scorer_options]
+lm_model_id = false            # Optional LM id for perplexity (requires QC extras)
+device = "cuda"               # Device for LM-based perplexity
+dtype = "bfloat16"            # Torch dtype string for LM
+local_files_only = false      # Restrict model loading to local files
+simhash_hamm_thresh = 4       # Hamming threshold for SimHash near-dup detection
+enable_minhash = true         # Enable MinHash-based duplicate detection
+minhash_perms = 128           # Number of permutations for MinHash signatures
+minhash_bands = 32            # Number of bands for MinHash LSH
+minhash_shingle_k = 5         # Byte-level shingle size for MinHash
+minhash_jaccard_thresh = 0.82 # Jaccard threshold to treat MinHash matches as near-duplicates
+enable_gopher = true          # Enable Gopher-style quality heuristic
+gopher_weight = 0.10          # Weight applied to the Gopher quality score
 
 [qc.scorer_options.heuristics]
 target_code_min = 2000       # Lower bound of target token band for code-like content
@@ -243,6 +270,21 @@ simhash_window = 128         # Window size for simhash-based near-duplicate dete
 # minhash_bands = 32          # Number of bands for MinHash LSH
 # minhash_shingle_k = 5       # Byte-level shingle size for MinHash
 # minhash_jaccard_thresh = 0.8 # Jaccard threshold to treat MinHash matches as near-duplicates
+
+[qc.scorer_options.global_dedup]
+# Optional SQLite-backed global MinHash dedup store (core/dedup_store.py); leave unset to disable.
+# path = "out/global_dedup.db"
+# read_only = false            # true to reuse a pre-seeded DB without mutating it
+
+[qc.safety]
+enabled = false              # Enable safety/PII scoring
+mode = "inline"              # "inline", "advisory", "post" (unsupported), or "off"
+annotate_only = false        # When true, never drop on safety even in inline mode
+fail_on_error = false        # Raise on safety scorer errors instead of logging
+scorer_id = "default_safety" # Safety scorer to use (None → registry default)
+# allowed_licenses = ["mit", "apache-2.0"] # Optional license allowlist
+# toxicity_threshold = 0.5     # Optional toxicity cutoff for default safety scorer
+# scorer_options = {}          # Extra options passed to the safety scorer
 
 # ---------------------------------------------------------------------------
 # Logging

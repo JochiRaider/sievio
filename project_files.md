@@ -21,7 +21,8 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 ├── scripts
 │   ├── manual_test_github.py
 │   ├── manual_test_github_toml.py
-│   └── manual_test_web_pdf.py
+│   ├── manual_test_web_pdf.py
+│   └── seed_dedup_db.py
 ├── src
 │   └── repocapsule
 │       ├── __init__.py
@@ -38,6 +39,7 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 │       │   ├── convert.py
 │       │   ├── dataset_card.py
 │       │   ├── decode.py
+│       │   ├── dedup_store.py
 │       │   ├── extras
 │       │   │   ├── __init__.py
 │       │   │   ├── langid_lingua.py
@@ -63,6 +65,8 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 │       │   ├── qc_utils.py
 │       │   ├── records.py
 │       │   ├── registries.py
+│       │   ├── sharding.py
+│       │   ├── stats_aggregate.py
 │       │   └── safe_http.py
 │       ├── sinks
 │       │   ├── __init__.py
@@ -89,13 +93,17 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
     ├── test_convert.py
     ├── test_dataset_card.py
     ├── test_decode.py
+    ├── test_dedup_store.py
     ├── test_hooks.py
     ├── test_log_and_naming.py
     ├── test_pipeline_middlewares.py
     ├── test_plugins_and_registries.py
     ├── test_qc_controller.py
     ├── test_qc_defaults.py
+    ├── test_qc_integration.py
     ├── test_qc_post.py
+    ├── test_sharding.py
+    ├── test_stats_aggregate.py
     ├── test_records.py
     ├── test_runner_finalizers.py
     └── test_safe_http.py

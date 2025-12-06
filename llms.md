@@ -145,10 +145,13 @@ These are treated as the “core” of the system.
   Optional helpers to detect and extract KQL blocks from Markdown content.
 
 * `extras/qc.py`
-  Optional quality-control scorers and CSV writers used when QC extras are installed, now thin adapters over the shared QC driver.
+  Optional quality-control scorers and CSV writers used when QC extras are installed, including the default `JSONLQualityScorer` (SimHash + MinHash LSH) and its factory. Supports an optional global MinHash dedup store shared across processes.
 
 * `extras/safety.py`
   Stdlib-only baseline safety scorer (`RegexSafetyScorer`) plus a default factory registered with the safety scorer registry.
+
+* `dedup_store.py`
+  SQLite-backed global deduplication store for MinHash LSH signatures. Enforces LSH parameters (`n_perm`, `bands`, `jaccard_threshold`) via a `metadata` table and is designed to be used by `JSONLQualityScorer` (and the `seed_dedup_db.py` script) for cross-process/global near-duplicate tracking.
 
 * `language_id.py`
   Central hub for language identification: extension maps (`CODE_EXTS`, `DOC_EXTS`, `EXT_LANG`), doc format hints, classify helpers, baseline human/code detectors, and factory functions to load optional backends (`extras/langid_lingua.py`, `extras/langid_pygments.py`). It is the single source of truth for code/doc language tags.
@@ -251,6 +254,9 @@ Manual, developer-focused scripts for end-to-end testing and experiments (not pa
 
 * `scripts/manual_test_web_pdf.py`
   Manual test for web PDF ingestion and conversion through the pipeline.
+
+* `scripts/seed_dedup_db.py`
+  CLI helper for seeding a global MinHash deduplication SQLite DB from existing JSONL/JSONL.GZ files. Uses the same doc_id and MinHash logic as `JSONLQualityScorer` and writes banded LSH data into `core/dedup_store.py`’s schema; parameters must match your QC scorer’s MinHash settings.
 
 ---
 

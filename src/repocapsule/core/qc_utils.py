@@ -426,6 +426,13 @@ class MinHashLSH:
         r = self.rows
         return (b, self._fnv1a_fold(sig[b * r : (b + 1) * r]))
 
+    def band_key(self, sig: tuple[int, ...], b: int) -> tuple[int, int]:
+        """Return the hash key for band b within a signature.
+
+        Public wrapper around internal band-key generation logic.
+        """
+        return self._band_key(sig, b)
+
     def candidates(self, sig: tuple[int, ...]) -> Iterable[str]:
         """Yield document ids that share at least one band with the signature."""
         seen: set[str] = set()

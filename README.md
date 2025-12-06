@@ -103,7 +103,7 @@ End-to-end split-and-run workflow for distributed launches:
 
 **Caveats / limitations**
 - Aggregated stats are counts-only; QC signal means/stdevs are intentionally cleared.
-- Global deduplication is not performed across shards; near-duplicate families are per-shard only.
+- Global deduplication across shards is not coordinated by the sharding helpers themselves; you can approximate global behavior by pointing all scorers at the same dedup DB (`qc.scorer_options.global_dedup.path`) and seeding it ahead of time.
 
 Library helpers for this flow live in `core/sharding.py` and `core/stats_aggregate.py`.
 
@@ -206,12 +206,22 @@ records = list(iter_records_from_bytes_with_plan(data, rel_path="foo.bin", plan=
 ## Quality control (QC)
 - `QCConfig` (`core/config.py`) controls whether QC is enabled, the mode (`inline`, `advisory`, `post`, `off` via `QCMode`), score thresholds (`min_score`), near-duplicate handling (`drop_near_dups`), error behavior (`fail_on_error`), CSV emission (`write_csv`, `csv_suffix`), per-record signals sidecars (`write_signals_sidecar`, `signals_suffix`, `signals_format`=`csv|parquet`), and post-QC concurrency overrides (`parallel_post`, `post_executor_kind`, `post_max_workers`, `post_submit_window`). `QCHeuristics` tunes target token bands, repetition window, code weights, and simhash/minhash knobs.
 - `qc.scorer_options.heuristics` is normalized into a `QCHeuristics` instance via `build_config_from_defaults_and_options`; tune defaults there and pass overrides in the mapping.
+- `qc.scorer_options.global_dedup` (optional) configures a SQLite-backed global MinHash dedup store used by the default `JSONLQualityScorer` when QC extras are installed. Set `path` to the DB file and `read_only` to `true` when you want to reuse a pre-seeded DB without mutating it. LSH parameters (`minhash_perms`, `minhash_bands`, `minhash_jaccard_thresh`) are enforced via metadata and must match the DB.
 - `safety`: nested under `QCConfig` for PII/toxicity/license gating. Safety mode is independent of QC mode even though it reuses the same strings: it can run inline or advisory even when QC is disabled, `annotate_only=true` disables safety drops for inline/advisory paths, and `mode="post"` is reserved and rejected. Enable `[qc.safety] enabled = true`, set `scorer_id = "default_safety"` (stdlib regex heuristics), and tune `allowed_licenses`, `toxicity_threshold`, or `annotate_only` to mark instead of dropping.
 - `filter_qc_meta` in `core/records.py` partitions scorer output into canonical QC fields (score, decision, near-dup ids) and `QualitySignals` (RedPajama/Dolma-style `len_tok`, `len_char`, `lang_id`, `ascii_ratio`, `repetition`, `gopher_quality`, etc.). Inline QC writes those signals to `meta["extra"]["qc_signals"]` and `QCSummaryTracker.signal_stats` aggregates means/min/max/stdev for numeric/bool signals.
 - **Inline/advisory:** For `mode="inline"` or `"advisory"`, `build_pipeline_plan` wires an `InlineQCHook` that hosts a generic screening controller (`InlineQCController`) with quality and safety screeners. It wraps a `QualityScorer` (typically `JSONLQualityScorer` from `core/extras/qc.py` when `[qc]` extras are installed), updates `QCSummaryTracker` in `PipelineStats`, attaches screening metadata to each record’s `meta`, and drops records only when a screener runs in inline/gating mode.
 - **Post-QC:** For `mode="post"`, `cli/runner.run_engine` can rescore the primary JSONL after extraction, using either an existing scorer (`QCConfig.scorer`) or one built via `make_qc_scorer`. It supports sequential or process-based scoring (`qc.parallel_post`), merges QC summaries into run summaries, and optionally writes QC CSV/sidecar signals ({primary_jsonl}_quality.csv plus `{primary_jsonl}_signals.csv`).
 - **CLI:** The `repocapsule` entry point exposes `run/local/github/card/qc` commands; `repocapsule qc` is a thin wrapper around the same QC scorer APIs (`JSONLQualityScorer`, `score_jsonl_to_csv`, `QCConfig`) and requires QC extras.
 - Parquet QC signal sidecars require PyArrow (`pip install "repocapsule[parquet]"`).
+
+Global MinHash dedup store:
+- The default `JSONLQualityScorer` can use a process-safe SQLite store (`core/dedup_store.GlobalDedupStore`) to persist MinHash LSH signatures and band keys for cross-process/global near-duplicate detection. Configure it via:
+  ```toml
+  [qc.scorer_options.global_dedup]
+  path = "out/global_dedup.db"
+  read_only = false  # true when only reading from a pre-seeded DB
+  ```
+- Use `scripts/seed_dedup_db.py` to pre-index existing JSONL/JSONL.GZ datasets into a dedup DB before running QC. The script uses the same doc_id logic as the scorer and takes `--k`, `--perm`, `--bands`, and `--threshold` flags; make sure these align with your `minhash_*` QC settings so the DB metadata matches.
 
 Rules of thumb for QC contributions:
 - Implement new scorers by conforming to `QualityScorer` and, if you want them discoverable via config/registries, by adding a `QualityScorerFactory` and registering it with `quality_scorer_registry` (see `core/extras/qc.py`).
