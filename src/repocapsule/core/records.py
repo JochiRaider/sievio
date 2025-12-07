@@ -516,32 +516,15 @@ def build_record(
         Dict[str, object]: Record with ``text`` and normalized ``meta`` payload.
     """
     rp = rel_path.replace("\\", "/")
+    cfg = langcfg or DEFAULT_LANGCFG
 
     # Derive language / estimation kind from extension when not provided
-    kind, lang_hint = guess_lang_from_path(rp, cfg=langcfg or DEFAULT_LANGCFG)
+    kind, lang_hint = guess_lang_from_path(rp, cfg=cfg)
     if not lang:
-        # Title-case common language tags for presentation
-        lang = lang_hint.capitalize() if lang_hint else "text"
-        # Better names for some
-        overrides = {
-            "ipynb": "Python",
-            "ps1": "PowerShell",
-            "psm1": "PowerShell",
-            "psd1": "PowerShell",
-            "js": "JavaScript",
-            "ts": "TypeScript",
-            "tsx": "TypeScript",
-            "jsx": "JavaScript",
-            "yml": "YAML",
-            "md": "Markdown",
-            "rst": "reStructuredText",
-            "ndjson": "NDJSON",
-            "json": "JSON",
-            "xml": "XML",
-            "ini": "INI",
-            "toml": "TOML",
-        }
-        lang = overrides.get(Path(rp).suffix.lower().lstrip("."), lang)
+        if lang_hint:
+            lang = cfg.display_names.get(lang_hint, lang_hint.capitalize())
+        else:
+            lang = "Text"
 
     # Compute byte length and token estimate (approximate by default)
     bcount = len(text.encode("utf-8", "strict"))

@@ -222,6 +222,47 @@ EXT_LANG: Dict[str, str] = {
     ".evtx": "windows-eventlog",
 }
 
+DEFAULT_DISPLAY_NAMES: Dict[str, str] = {
+    "python": "Python",
+    "powershell": "PowerShell",
+    "batch": "Batch",
+    "bash": "Bash",
+    "zsh": "Zsh",
+    "c": "C",
+    "cpp": "C++",
+    "csharp": "C#",
+    "java": "Java",
+    "kotlin": "Kotlin",
+    "scala": "Scala",
+    "go": "Go",
+    "rust": "Rust",
+    "swift": "Swift",
+    "typescript": "TypeScript",
+    "javascript": "JavaScript",
+    "ruby": "Ruby",
+    "php": "PHP",
+    "perl": "Perl",
+    "lua": "Lua",
+    "r": "R",
+    "julia": "Julia",
+    "sql": "SQL",
+    "sparql": "SPARQL",
+    "json": "JSON",
+    "yaml": "YAML",
+    "toml": "TOML",
+    "ini": "INI",
+    "xml": "XML",
+    "yara": "YARA",
+    "sigma": "Sigma",
+    "ndjson": "NDJSON",
+    "log": "Log",
+    "markdown": "Markdown",
+    "restructuredtext": "reStructuredText",
+    "asciidoc": "AsciiDoc",
+    "text": "Text",
+    "windows-eventlog": "Windows Event Log",
+}
+
 
 @dataclass(slots=True)
 class LanguageConfig:
@@ -230,6 +271,7 @@ class LanguageConfig:
     code_exts: set[str] = field(default_factory=lambda: set(CODE_EXTS))
     doc_exts: set[str] = field(default_factory=lambda: set(DOC_EXTS))
     ext_lang: Dict[str, str] = field(default_factory=lambda: dict(EXT_LANG))
+    display_names: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_DISPLAY_NAMES))
 
 
 DEFAULT_LANGCFG = LanguageConfig()
@@ -441,6 +483,7 @@ __all__ = [
     "DOC_FORMAT_BY_EXT",
     "LanguageConfig",
     "DEFAULT_LANGCFG",
+    "DEFAULT_DISPLAY_NAMES",
     "guess_lang_from_path",
     "is_code_file",
     "classify_path_kind",
