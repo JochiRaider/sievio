@@ -126,24 +126,22 @@ def test_qcconfig_scorer_options_type_enforced():
         qc.validate()
 
 
-def test_qcconfig_negative_heuristics_raises():
+def test_qcheuristics_negative_values_raise():
     h = QCHeuristics()
     h.target_code_min = 0
-    qc = QCConfig(enabled=True, mode="post", scorer_options={"heuristics": h})
 
     with pytest.raises(ValueError) as excinfo:
-        qc.validate()
-    assert "qc.scorer_options.heuristics.target_code_min" in str(excinfo.value)
+        h.validate()
+    assert "QCHeuristics.target_code_min" in str(excinfo.value)
 
 
-def test_qcconfig_weight_out_of_range_raises():
+def test_qcheuristics_weight_out_of_range_raises():
     h = QCHeuristics()
     h.code_punct_weight = 1.5
-    qc = QCConfig(enabled=True, mode="post", scorer_options={"heuristics": h})
 
     with pytest.raises(ValueError) as excinfo:
-        qc.validate()
-    assert "qc.scorer_options.heuristics.code_punct_weight" in str(excinfo.value)
+        h.validate()
+    assert "QCHeuristics.code_punct_weight" in str(excinfo.value)
 
 
 def test_pipeline_executor_kind_normalization_valid_values():

@@ -27,6 +27,7 @@ from .interfaces import (
     SafetyScorer,
     RunLifecycleHook,
     RecordMiddleware,
+    InlineScreener,
 )
 from .safe_http import SafeHttpClient
 from .log import get_logger
@@ -46,8 +47,8 @@ from .registries import (
     default_registries,
     SafetyScorerRegistry,
 )
-from .qc_controller import InlineQCHook
-from .qc_post import PostQCHook
+from .qc_controller import InlineQCHook, InlineScreeningController, QualityInlineScreener, SafetyInlineScreener, QCSummaryTracker
+from .qc_post import PostQCHook, PostSafetyHook
 from .concurrency import resolve_pipeline_executor_config
 from .language_id import (
     DEFAULT_LANGCFG,
@@ -154,6 +155,8 @@ class PipelineRuntime:
             emitting QC CSV reports.
         post_qc_scorer (QualityScorer | None): Scorer used for post-hoc
             QC runs when mode is QCMode.POST.
+        post_safety_scorer (SafetyScorer | None): Scorer used for
+            post-hoc safety runs when qc.safety.mode is QCMode.POST.
         language_detector (LanguageDetector | None): Human language
             detector used for tagging records.
         code_language_detector (CodeLanguageDetector | None): Code
@@ -171,6 +174,7 @@ class PipelineRuntime:
     fail_fast: bool = False
     qc_scorer_for_csv: QualityScorer | None = None
     post_qc_scorer: QualityScorer | None = None
+    post_safety_scorer: SafetyScorer | None = None
     language_detector: LanguageDetector | None = None
     code_language_detector: CodeLanguageDetector | None = None
 
@@ -219,11 +223,14 @@ class QCPreparationResult:
             emitting QC CSV reports.
         post_qc_scorer (QualityScorer | None): Scorer to use for
             post-hoc QC runs when mode is QCMode.POST.
+        post_safety_scorer (SafetyScorer | None): Scorer to use for
+            post-hoc safety runs when qc.safety.mode is QCMode.POST.
     """
     qc_cfg: QCConfig
     hooks: tuple[RunLifecycleHook, ...]
     scorer_for_csv: QualityScorer | None
     post_qc_scorer: QualityScorer | None
+    post_safety_scorer: SafetyScorer | None
 
 
 @dataclass(slots=True)
@@ -375,6 +382,7 @@ def build_pipeline_plan(
         lifecycle_hooks=tuple(lifecycle_hooks),
         qc_scorer_for_csv=qc_res.scorer_for_csv,
         post_qc_scorer=qc_res.post_qc_scorer,
+        post_safety_scorer=qc_res.post_safety_scorer,
         language_detector=lang_det,
         code_language_detector=code_lang_det,
     )
@@ -601,6 +609,7 @@ def _prepare_qc(
     hooks: list[RunLifecycleHook] = []
     scorer_for_csv: QualityScorer | None = None
     post_qc_scorer: QualityScorer | None = None
+    post_safety_scorer: SafetyScorer | None = None
     safety_cfg = getattr(qc_cfg, "safety", None)
     if safety_cfg is not None:
         try:
@@ -618,20 +627,39 @@ def _prepare_qc(
         qc_cfg.scorer = None
         if safety_cfg is not None:
             safety_cfg.scorer = None  # type: ignore[attr-defined]
-        return QCPreparationResult(qc_cfg=qc_cfg, hooks=tuple(), scorer_for_csv=None, post_qc_scorer=None)
+        return QCPreparationResult(
+            qc_cfg=qc_cfg, hooks=tuple(), scorer_for_csv=None, post_qc_scorer=None, post_safety_scorer=None
+        )
 
     qc_scorer = overrides.qc_scorer if overrides and overrides.qc_scorer is not None else None
     safety_scorer: SafetyScorer | None = None
-    safety_enabled = bool(safety_cfg and safety_cfg.enabled)
+    safety_requested = bool(
+        safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY, QCMode.POST}
+    )
 
-    if safety_enabled:
+    if safety_requested:
         safety_scorer = (
             overrides.safety_scorer
             if overrides and overrides.safety_scorer is not None
             else make_safety_scorer(safety_cfg, registry=safety_scorer_registry)  # type: ignore[arg-type]
         )
+        if safety_scorer is None:
+            log.warning("Safety requested but safety scorer unavailable; disabling safety for this run.")
+            try:
+                safety_cfg.enabled = False  # type: ignore[assignment]
+                safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]
+            except Exception:
+                pass
 
-    # Inline/advisory screeners
+    screeners: list[InlineScreener] = []
+    tracker_mode = qc_cfg.mode if qc_cfg.enabled else (safety_cfg.mode if safety_cfg is not None else qc_cfg.mode)
+    tracker = QCSummaryTracker(
+        enabled=qc_cfg.enabled or bool(safety_cfg and safety_cfg.enabled),
+        mode=tracker_mode,
+        min_score=qc_cfg.min_score,
+        drop_near_dups=bool(qc_cfg.drop_near_dups),
+    )
+
     if qc_cfg.enabled and qc_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
         if qc_scorer is None:
             qc_scorer = make_qc_scorer(qc_cfg, scorer_registry=scorer_registry)
@@ -640,23 +668,46 @@ def _prepare_qc(
                     "Inline/advisory QC was requested, but QC extras are not installed. "
                     "Either disable qc.enabled or install QC dependencies."
                 )
-        hooks.append(
-            InlineQCHook(
-                qc_cfg=qc_cfg,
+        screeners.append(
+            QualityInlineScreener(
+                cfg=qc_cfg,
                 scorer=qc_scorer,  # type: ignore[arg-type]
-                safety_cfg=safety_cfg,
-                safety_scorer=safety_scorer,
+                summary=tracker,
+                logger=log,
+                enforce_drops=(qc_cfg.mode == QCMode.INLINE),
             )
         )
         if qc_cfg.write_csv:
             scorer_for_csv = qc_scorer
-    elif safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
+
+    safety_inline = safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}
+    safety_post = safety_cfg and safety_cfg.enabled and safety_cfg.mode == QCMode.POST
+    if safety_inline and safety_scorer is not None:
+        screeners.append(
+            SafetyInlineScreener(
+                cfg=safety_cfg,  # type: ignore[arg-type]
+                scorer=safety_scorer,
+                summary=tracker,
+                logger=log,
+                enforce_drops=(safety_cfg.mode == QCMode.INLINE),  # type: ignore[union-attr]
+            )
+        )
+
+    if screeners:
+        controller = InlineScreeningController(
+            summary=tracker,
+            screeners=screeners,
+            logger=log,
+            qc_cfg=qc_cfg,
+            safety_cfg=safety_cfg if safety_inline else None,
+        )
         hooks.append(
             InlineQCHook(
-                qc_cfg=QCConfig(enabled=False),
-                scorer=None,
+                qc_cfg=qc_cfg,
+                scorer=qc_scorer,
                 safety_cfg=safety_cfg,
                 safety_scorer=safety_scorer,
+                controller=controller,
             )
         )
 
@@ -670,6 +721,20 @@ def _prepare_qc(
         else:
             hooks.append(PostQCHook(qc_cfg, post_qc_scorer, executor_hint=None))
 
+    if safety_post:
+        post_safety_scorer = safety_scorer or make_safety_scorer(
+            safety_cfg, new_instance=True, registry=safety_scorer_registry  # type: ignore[arg-type]
+        )
+        if post_safety_scorer is None:
+            log.warning("Safety POST mode enabled but safety extras are not installed; skipping safety for this run.")
+            try:
+                safety_cfg.enabled = False  # type: ignore[assignment]
+                safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]
+            except Exception:
+                pass
+        else:
+            hooks.append(PostSafetyHook(safety_cfg, post_safety_scorer, executor_hint=None))  # type: ignore[arg-type]
+
     qc_cfg.scorer = qc_scorer
     if safety_cfg is not None:
         safety_cfg.scorer = safety_scorer  # type: ignore[attr-defined]
@@ -678,6 +743,7 @@ def _prepare_qc(
         hooks=tuple(hooks),
         scorer_for_csv=scorer_for_csv,
         post_qc_scorer=post_qc_scorer,
+        post_safety_scorer=post_safety_scorer,
     )
 
 

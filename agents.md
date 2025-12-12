@@ -95,7 +95,7 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
    - All remote access (GitHub, PDFs, downloads, APIs) must go through the safe HTTP client/wrapper (e.g., `SafeHttpClient`), not ad-hoc `requests`/`urllib` calls.
 
 4. **QC as a layer, not baked-in**
-   - New QC logic should be expressed as scorers and heuristics, not embedded inside sources/sinks. Use the QC interfaces and registries. Safety follows `SafetyConfig.mode` + `annotate_only` independently of `QCConfig.mode` (inline safety can run even when QC is post-only; `qc.safety.mode="post"` currently only warns).
+   - New QC logic should be expressed as scorers and heuristics, not embedded inside sources/sinks. Use the QC interfaces and registries. Safety follows `SafetyConfig.mode` + `annotate_only` independently of `QCConfig.mode` (inline safety can run even when QC is post-only; POST safety runs after the pipeline to update summaries and optional reports without rewriting JSONL).
    - Global MinHash deduplication is implemented as an optional SQLite store (`core/dedup_store.GlobalDedupStore`) used by the default scorer when configured via `qc.scorer_options.global_dedup`. Do not reimplement LSH or store logic in sources/sinks; reuse the existing scorer + store APIs.
 
 5. **Sinks own output layout**

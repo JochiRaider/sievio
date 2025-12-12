@@ -126,10 +126,10 @@ These are treated as the “core” of the system.
   Low-level quality-control utilities (similarity hashing, duplicate detection, basic QC heuristics and summaries).
 
 * `qc_controller.py`
-  Inline screening controller and related helpers for advisory/inline gating during the main pipeline run (e.g., `InlineQCHook`), coordinating both quality and safety screeners with record-level scorers (`score_record`) only. Hosts `QualitySignals`/`filter_qc_meta` and `QCSummaryTracker.signal_stats` for schema-aligned QC signals (len_tok, ascii_ratio, repetition, gopher_quality, etc.). Safety gating is driven by `SafetyConfig.mode` + `annotate_only` (independent of QC mode) and can run without QC; `qc.safety.mode="post"` is currently rejected.
+  Inline screening controller and related helpers for advisory/inline gating during the main pipeline run (e.g., `InlineQCHook`), coordinating both quality and safety screeners with record-level scorers (`score_record`) only. Hosts `QualitySignals`/`filter_qc_meta` and `QCSummaryTracker.signal_stats` for schema-aligned QC signals (len_tok, ascii_ratio, repetition, gopher_quality, etc.). Safety gating is driven by `SafetyConfig.mode` + `annotate_only` (independent of QC mode) and can run without QC; POST safety is handled by a separate hook/driver after the pipeline completes.
 
 * `qc_post.py`
-  Post-hoc quality screening lifecycle hook and reusable JSONL driver (`run_qc_over_jsonl`, `iter/collect_qc_rows_from_jsonl`) for scoring or CSV export after the main run completes, including optional QC signal sidecars (CSV or Parquet). `QCMode.POST` enforces gates only in this pass; safety is inline/advisory only. If you are changing QC export/sidecar behavior or running QC as a separate pass over JSONL, start here instead of modifying sinks.
+  Post-hoc screening lifecycle hooks and reusable JSONL drivers (`run_qc_over_jsonl`, `run_safety_over_jsonl`, `iter/collect_qc_rows_from_jsonl`) for scoring or CSV export after the main run completes, including optional QC/safety signal sidecars (CSV or Parquet). `QCMode.POST` enforces gates only in this pass; POST safety evaluates decisions and updates summaries but does not rewrite the primary JSONL. If you are changing QC/safety export/sidecar behavior or running QC/safety as a separate pass over JSONL, start here instead of modifying sinks.
 
 * `dataset_card.py`
   Builders for dataset card fragments and rendering/assembling Hugging Face–style dataset cards from run statistics and metadata.
@@ -149,6 +149,22 @@ These are treated as the “core” of the system.
 
 * `extras/safety.py`
   Stdlib-only baseline safety scorer (`RegexSafetyScorer`) plus a default factory registered with the safety scorer registry.
+
+### POST safety semantics
+
+`qc.safety.mode="post"` triggers a safety pass after the main pipeline finishes. The pass reads the primary JSONL without rewriting it, evaluates safety decisions (respecting `annotate_only` for gates), and merges the safety screener summary into `PipelineStats.qc` alongside legacy safety counters. Optional outputs include a compact CSV report (`_safety.csv` suffix by default) and an optional signals sidecar (`_safety_signals.(csv|parquet)`), derived from streamed scoring results rather than mutating records in place.
+
+Example configuration:
+
+```toml
+[qc]
+enabled = false
+
+[qc.safety]
+enabled = true
+mode = "post"
+write_csv = true
+```
 
 * `dedup_store.py`
   SQLite-backed global deduplication store for MinHash LSH signatures. Enforces LSH parameters (`n_perm`, `bands`, `jaccard_threshold`) via a `metadata` table and is designed to be used by `JSONLQualityScorer` (and the `seed_dedup_db.py` script) for cross-process/global near-duplicate tracking.

@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from repocapsule.core.config import DEFAULT_QC_SCORER_ID, QCConfig, QCHeuristics
+from repocapsule.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
 from repocapsule.core.extras.qc import DefaultQualityScorerFactory, JSONLQualityScorer
 from repocapsule.cli import runner
 from repocapsule.core import builder
@@ -49,13 +49,16 @@ def test_default_scorer_id_constant_and_factory():
     assert DefaultQualityScorerFactory.id == DEFAULT_QC_SCORER_ID
 
 
-def test_qcconfig_uses_default_id_for_heuristics_validation():
+def test_default_factory_validates_heuristics():
     h = QCHeuristics()
-    qc = QCConfig(enabled=True, mode="post", scorer_options={"heuristics": h})
-    qc.validate()  # scorer_id None uses default
+    h.target_code_min = 0
+    factory = DefaultQualityScorerFactory()
 
-    qc.scorer_id = DEFAULT_QC_SCORER_ID
-    qc.validate()  # explicitly set default id also allowed
+    with pytest.raises(ValueError):
+        factory.build({"heuristics": h})
+
+    with pytest.raises(ValueError):
+        factory.build({"heuristics": {"code_punct_weight": 1.5}})
 
 
 def test_jsonl_quality_scorer_clone_preserves_config_and_state_isolated():

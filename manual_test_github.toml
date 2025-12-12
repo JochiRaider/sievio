@@ -1,5 +1,5 @@
 # manual_test_github.toml
-# Base configuration for manual_test_github.py
+# Base configuration for manual_test_github_toml.py / manual_test_web_pdf.py
 #
 # This file encodes the stable, serializable knobs for the GitHub manual smoke test.
 # The Python script stitches in runtime-only objects such as:
@@ -44,6 +44,9 @@ enabled = true
 
 # "inline", "advisory", "post", or "off" (QC_MODE = QCMode.INLINE).
 mode = "inline"
+
+# Use the default JSONL scorer (overridden at runtime in the manual script if desired).
+scorer_id = "jsonl_default"
 
 # Minimum score; below this records are dropped in inline mode (QC_MIN_SCORE = 40.0).
 min_score = 40.0
@@ -111,4 +114,4 @@ repo_url      = "https://github.com/SystemsApproach/book"
 
 [metadata.extra]
 run_label = "manual-test-github"
-notes    = "Manual GitHub smoke test using manual_test_github.py."
+notes    = "Manual GitHub smoke test using manual_test_github_toml.py."

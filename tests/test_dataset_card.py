@@ -120,6 +120,83 @@ def test_dataset_card_renders_quality_signals_section(tmp_path: Path) -> None:
     assert "ASCII ratio: mean=0.90" in card_md
 
 
+def test_dataset_card_renders_quality_signals_from_qc_summary(tmp_path: Path) -> None:
+    frag = CardFragment(
+        file="signals.jsonl",
+        split="train",
+        num_examples=2,
+        num_bytes=10,
+        language=["en"],
+        multilinguality="monolingual",
+        license="MIT",
+        extra={
+            "stats": {
+                "qc_summary": {
+                    "signal_stats": {
+                        "len_tok": {"count": 2, "mean": 50, "min": 40, "max": 60, "stdev": 10},
+                        "perplexity": {"count": 2, "mean": 20, "min": 10, "max": 30, "stdev": 5},
+                    }
+                }
+            }
+        },
+    )
+    frag_path = tmp_path / "signals.jsonl.card.json"
+    frag_path.write_text(json.dumps(frag.to_dict()), encoding="utf-8")
+
+    card_md = build_dataset_card_from_fragments([frag_path], overrides={"pretty_name": "QC Summary Demo"})
+
+    assert "Tokens per record: mean=50.00" in card_md
+    assert "Perplexity: mean=20.00" in card_md
+
+
+def test_dataset_card_includes_screening_summary_and_safety_note(tmp_path: Path) -> None:
+    frag = CardFragment(
+        file="signals.jsonl",
+        split="train",
+        num_examples=2,
+        num_bytes=10,
+        language=["en"],
+        multilinguality="monolingual",
+        license="MIT",
+        extra={
+            "stats": {
+                "qc_summary": {
+                    "signal_stats": {
+                        "len_tok": {"count": 2, "mean": 75, "min": 50, "max": 100, "stdev": 15},
+                    },
+                    "screeners": {
+                        "quality": {
+                            "scored": 3,
+                            "kept": 2,
+                            "dropped": 1,
+                            "errors": 0,
+                            "candidates": {"low_score": 1},
+                            "drops": {"low_score": 1},
+                        },
+                        "safety": {
+                            "scored": 2,
+                            "kept": 1,
+                            "dropped": 1,
+                            "errors": 1,
+                            "flags": {"pii": 2, "toxicity": 1},
+                        },
+                    },
+                }
+            }
+        },
+    )
+    frag_path = tmp_path / "signals.jsonl.card.json"
+    frag_path.write_text(json.dumps(frag.to_dict()), encoding="utf-8")
+
+    card_md = build_dataset_card_from_fragments([frag_path], overrides={"pretty_name": "Screeners Demo"})
+
+    assert "#### Screening Summary" in card_md
+    assert "#### Scalar Quality Signals" in card_md
+    assert "- quality: scored=3, kept=2, dropped=1, errors=0 (candidates: low_score=1; drops: low_score=1)" in card_md
+    assert "- safety: scored=2, kept=1, dropped=1, errors=1 (top flags: pii (2), toxicity (1))" in card_md
+    assert "Automated safety screening was applied; see Screening Summary for aggregate counts and top flag categories." in card_md
+
+
 def test_write_card_fragment_for_run(tmp_path: Path) -> None:
     jsonl_path = tmp_path / "data.jsonl"
     sample_line = {"text": "hello", "meta": {"language": "en"}}

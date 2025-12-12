@@ -27,10 +27,10 @@ from dataclasses import replace
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from pathlib import Path
-from typing import Optional, Sequence
+from typing import Any, Mapping, Optional, Sequence
 
 from repocapsule import RepocapsuleConfig, convert, load_config_from_path
-from repocapsule.core.config import DEFAULT_QC_SCORER_ID
+from repocapsule.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
 from repocapsule.cli.runner import default_paths_for_github, make_github_profile
 from repocapsule.core.builder import PipelineOverrides, build_pipeline_plan
 from repocapsule.core.chunk import ChunkPolicy
@@ -39,6 +39,7 @@ from repocapsule.core.log import configure_logging
 from repocapsule.core.pipeline import PipelineEngine
 from repocapsule.core.registries import quality_scorer_registry
 from repocapsule.core.convert import DefaultExtractor
+from repocapsule.sources.githubio import parse_github_url
 
 # Optional extractor for KQL blocks inside Markdown
 try:
@@ -65,7 +66,7 @@ except Exception:
 # URL = "https://github.com/Bert-JanP/Hunting-Queries-Detection-Rules"
 URL = "https://github.com/chinapandaman/PyPDFForm"
 # URL = "https://github.com/SystemsApproach/book"
-REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (only used for naming if spec.ref is None)
+REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (applied when URL has no ref)
 
 # Workspace root and output directory for artifacts (portable path under the repo root):
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -83,17 +84,38 @@ POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min
 # Write prompt text too? (affects how we plan output paths)
 ALSO_PROMPT_TEXT = True
 
+# Force threads to avoid pickling issues with process executors.
+PIPELINE_EXECUTOR = "thread"  # "thread" | "process" | "auto"
+
 # Optional QC scorer override (keeps the config declarative; wired via registry)
 USE_CUSTOM_QC_SCORER = True
 QC_MODEL_ID = "Qwen/Qwen2.5-1.5B"
 QC_DEVICE = "cuda"       # or "cpu"
 QC_DTYPE = "bfloat16"    # or "float32" / "float16"
 QC_LOCAL_ONLY = False
+# Disable dedup (exact + global) for this manual run.
+DISABLE_DEDUP = True
 
 
 # ──────────────────────────────────────────────────────────────────────────────
 # Helpers
 # ──────────────────────────────────────────────────────────────────────────────
+
+
+def _apply_ref(url: str, ref: Optional[str]) -> str:
+    """
+    Add a ref to a GitHub URL when one is not already present.
+
+    default_paths_for_github/make_github_profile already honor refs baked into
+    the URL (e.g., .../tree/<ref>); this helper only patches in REF when the
+    URL points at the repo root.
+    """
+    if not ref:
+        return url
+    spec = parse_github_url(url)
+    if spec is None or spec.ref:
+        return url
+    return f"https://github.com/{spec.owner}/{spec.repo}/tree/{ref}"
 
 
 def _plan_output_paths(
@@ -128,6 +150,19 @@ def _build_config(
     # Runtime-only wiring that isn't TOML-friendly.
     cfg.chunk.policy = POLICY
     cfg.qc.scorer = None
+    cfg.pipeline.executor_kind = PIPELINE_EXECUTOR
+    if DISABLE_DEDUP:
+        cfg.qc.exact_dedup = False
+        scorer_opts = dict(getattr(cfg.qc, "scorer_options", {}) or {})
+        # Heuristics mapping: disable MinHash and loosen SimHash gating.
+        heur = dict(scorer_opts.get("heuristics") or {})
+        heur["enable_minhash"] = False
+        if "simhash_hamm_thresh" not in heur:
+            heur["simhash_hamm_thresh"] = None  # use constructor default; dedup disabled via drop_near_dups
+        scorer_opts["heuristics"] = heur
+        scorer_opts["exact_dedup"] = False
+        scorer_opts.setdefault("global_dedup", {"path": None, "read_only": False})
+        cfg.qc.scorer_options = scorer_opts
     return cfg
 
 
@@ -162,7 +197,7 @@ def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
     class ManualQualityScorerFactory:
         id = "jsonl_default"  # override the default factory
 
-        def build(self, qc_cfg):
+        def build(self, options: Mapping[str, Any]):
             try:
                 from repocapsule.core.extras.qc import JSONLQualityScorer
             except Exception as exc:  # pragma: no cover - optional extra
@@ -170,12 +205,33 @@ def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
                     "QC is enabled in the config, but QC extras are not installed. "
                     "Disable qc.enabled in the TOML or install the QC dependencies."
                 ) from exc
+
+            opts = dict(options or {})
+            heur_opt = opts.get("heuristics")
+            heuristics: QCHeuristics | None
+            if heur_opt is None:
+                heuristics = None
+            elif isinstance(heur_opt, QCHeuristics):
+                heuristics = heur_opt
+            elif isinstance(heur_opt, Mapping):
+                heuristics = QCHeuristics(**dict(heur_opt))
+            else:
+                raise TypeError(
+                    f"heuristics must be QCHeuristics or a mapping when using {self.id}; got {type(heur_opt).__name__}"
+                )
+            if heuristics is not None:
+                heuristics.validate()
+
+            global_opts = opts.get("global_dedup", {}) or {}
             return JSONLQualityScorer(
-                lm_model_id=QC_MODEL_ID,
-                device=QC_DEVICE,
-                dtype=QC_DTYPE,
-                local_files_only=QC_LOCAL_ONLY,
-                heuristics=getattr(qc_cfg, "heuristics", None),
+                lm_model_id=opts.get("lm_model_id", QC_MODEL_ID),
+                device=opts.get("device", QC_DEVICE),
+                dtype=opts.get("dtype", QC_DTYPE),
+                local_files_only=bool(opts.get("local_files_only", QC_LOCAL_ONLY)),
+                heuristics=heuristics,
+                global_dedup_path=global_opts.get("path"),
+                global_dedup_read_only=bool(global_opts.get("read_only", False)),
+                exact_dedup=bool(opts.get("exact_dedup", True)),
             )
 
     quality_scorer_registry.register(ManualQualityScorerFactory())
@@ -229,10 +285,11 @@ def main() -> None:
 
     qc_enabled = bool(getattr(run_cfg.qc, "enabled", False))
     qc_mode = getattr(run_cfg.qc, "mode", "off")
+    target_url = _apply_ref(URL, REF)
 
     log.info(
         "Converting repo → %s (autoname=%s, prompt=%s, qc=%s[%s])",
-        URL,
+        target_url,
         True,
         ALSO_PROMPT_TEXT,
         "on" if qc_enabled else "off",
@@ -240,13 +297,13 @@ def main() -> None:
     )
 
     jsonl_path, prompt_path, ctx = _plan_output_paths(
-        URL,
+        target_url,
         OUT_DIR,
         with_prompt=ALSO_PROMPT_TEXT,
     )
 
     profile_cfg = make_github_profile(
-        URL,
+        target_url,
         str(jsonl_path),
         out_prompt=str(prompt_path) if prompt_path else None,
         base_config=run_cfg,

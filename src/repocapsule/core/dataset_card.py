@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import asdict, dataclass, field, is_dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -347,47 +348,28 @@ def _coerce_numeric(value: Any) -> float | None:
 
 
 def _aggregate_signal_stats(fragments: Sequence["CardFragment"]) -> dict[str, dict[str, Any]] | None:
-    """Merge per-fragment QC signal stats into aggregated metrics."""
+    """Aggregate scalar quality signals for the dataset card.
+
+    Source: qc_summary['signal_stats'] (quality only). Safety/other screeners are
+    summarized separately (counts/flags), not as scalar signals.
+    """
     merged: dict[str, dict[str, Any]] = {}
     for frag in fragments:
         stats = frag.extra.get("stats") if isinstance(frag.extra, Mapping) else None
         if not isinstance(stats, Mapping):
             continue
-        qc_stats = stats.get("qc")
+        qc_stats = stats.get("qc_summary") or stats.get("qc")
         if not isinstance(qc_stats, Mapping):
             continue
         signal_stats = qc_stats.get("signal_stats")
+        if not isinstance(signal_stats, Mapping) or not signal_stats:
+            screeners = qc_stats.get("screeners")
+            quality_stats = screeners.get("quality") if isinstance(screeners, Mapping) else None
+            signal_stats = quality_stats.get("signal_stats") if isinstance(quality_stats, Mapping) else None
         if not isinstance(signal_stats, Mapping):
             continue
         for name, payload in signal_stats.items():
-            if not isinstance(payload, Mapping):
-                continue
-            count_val = payload.get("count")
-            try:
-                count = int(count_val or 0)
-            except Exception:
-                count = 0
-            if count <= 0:
-                continue
-            mean_val = _coerce_numeric(payload.get("mean"))
-            if mean_val is None:
-                continue
-            stdev_val = payload.get("stdev")
-            stdev = _coerce_numeric(stdev_val) if stdev_val is not None else None
-            min_val = _coerce_numeric(payload.get("min"))
-            max_val = _coerce_numeric(payload.get("max"))
-
-            entry = merged.get(name)
-            if entry is None:
-                entry = merged[name] = {"count": 0, "sum": 0.0, "sum_sq": 0.0, "min": None, "max": None}
-            entry["count"] += count
-            entry["sum"] += mean_val * count
-            variance = (stdev * stdev) if stdev is not None else 0.0
-            entry["sum_sq"] += (variance + mean_val * mean_val) * count
-            if min_val is not None:
-                entry["min"] = min_val if entry["min"] is None else min(entry["min"], min_val)
-            if max_val is not None:
-                entry["max"] = max_val if entry["max"] is None else max(entry["max"], max_val)
+            _merge_signal_stat(name, payload, merged)
 
     if not merged:
         return None
@@ -407,6 +389,39 @@ def _aggregate_signal_stats(fragments: Sequence["CardFragment"]) -> dict[str, di
             "stdev": var ** 0.5,
         }
     return aggregated if aggregated else None
+
+
+def _merge_signal_stat(name: str, payload: Any, merged: dict[str, dict[str, Any]]) -> None:
+    if not isinstance(payload, Mapping):
+        return
+    count_val = payload.get("count")
+    try:
+        count = int(count_val or 0)
+    except Exception:
+        count = 0
+    if count <= 0:
+        return
+    mean_val = _coerce_numeric(payload.get("mean"))
+    if mean_val is None:
+        return
+    stdev_val = payload.get("stdev")
+    stdev = _coerce_numeric(stdev_val) if stdev_val is not None else None
+    min_val = _coerce_numeric(payload.get("min"))
+    max_val = _coerce_numeric(payload.get("max"))
+
+    entry = merged.get(name)
+    if entry is None:
+        entry = merged[name] = {"count": 0, "sum": 0.0, "sum_sq": 0.0, "min": None, "max": None}
+    entry["count"] += count
+    entry["sum"] += mean_val * count
+    variance = (stdev * stdev) if stdev is not None else 0.0
+    entry["sum_sq"] += (variance + mean_val * mean_val) * count
+    if min_val is not None:
+        entry["min"] = min_val if entry["min"] is None else min(entry["min"], min_val)
+    if max_val is not None:
+        entry["max"] = max_val if entry["max"] is None else max(entry["max"], max_val)
+
+    return
 
 
 def _format_signal_stats_for_card(signal_stats: Mapping[str, Any] | None) -> str:
@@ -438,6 +453,157 @@ def _format_signal_stats_for_card(signal_stats: Mapping[str, Any] | None) -> str
     ]
     rendered = [line for line in lines if line]
     return "\n".join(rendered) if rendered else "[More Information Needed]"
+
+
+def _aggregate_screening_summaries(fragments: Sequence["CardFragment"]) -> dict[str, Any] | None:
+    """Merge per-fragment screener stats (quality, safety, future) for the card."""
+    screeners_merged: dict[str, dict[str, Any]] = {}
+    top_safety_flags: Counter[str] = Counter()
+
+    for frag in fragments:
+        stats = frag.extra.get("stats") if isinstance(frag.extra, Mapping) else None
+        if not isinstance(stats, Mapping):
+            continue
+        qc_stats = stats.get("qc_summary") or stats.get("qc")
+        if not isinstance(qc_stats, Mapping):
+            continue
+        screeners = qc_stats.get("screeners")
+        if isinstance(screeners, Mapping):
+            for screener_id, screener_stats in screeners.items():
+                if not isinstance(screener_stats, Mapping):
+                    continue
+                merged_entry = screeners_merged.get(screener_id)
+                if merged_entry is None:
+                    merged_entry = screeners_merged[screener_id] = {
+                        "scored": 0,
+                        "kept": 0,
+                        "dropped": 0,
+                        "errors": 0,
+                        "candidates": {},
+                        "drops": {},
+                        "flags": {},
+                    }
+                for key in ("scored", "kept", "dropped", "errors"):
+                    try:
+                        merged_entry[key] += int(screener_stats.get(key) or 0)
+                    except Exception:
+                        continue
+                for bucket_key in ("candidates", "drops", "flags"):
+                    payload = screener_stats.get(bucket_key)
+                    if not isinstance(payload, Mapping):
+                        continue
+                    merged_bucket: dict[str, int] = merged_entry[bucket_key]
+                    for name, count in payload.items():
+                        try:
+                            merged_bucket[str(name)] = merged_bucket.get(str(name), 0) + int(count or 0)
+                        except Exception:
+                            continue
+
+        top_flags = qc_stats.get("top_safety_flags")
+        if isinstance(top_flags, Mapping):
+            for name, count in top_flags.items():
+                try:
+                    top_safety_flags[str(name)] += int(count or 0)
+                except Exception:
+                    continue
+
+    if not screeners_merged:
+        return None
+    summary: dict[str, Any] = {"screeners": screeners_merged}
+    if top_safety_flags:
+        summary["top_safety_flags"] = dict(top_safety_flags)
+    return summary
+
+
+def _format_screening_summary_for_card(qc_summary: Mapping[str, Any] | None) -> str:
+    """Render a generic screening summary (quality, safety, future screeners)."""
+    if not isinstance(qc_summary, Mapping):
+        return "[More Information Needed]"
+    screeners = qc_summary.get("screeners")
+    if not isinstance(screeners, Mapping) or not screeners:
+        return "[More Information Needed]"
+    top_safety_flags = qc_summary.get("top_safety_flags") if isinstance(qc_summary, Mapping) else None
+
+    def _counter_parts(payload: Mapping[str, Any] | None) -> list[str]:
+        if not isinstance(payload, Mapping):
+            return []
+        parts: list[str] = []
+        for name, count in payload.items():
+            try:
+                count_int = int(count or 0)
+            except Exception:
+                continue
+            if count_int <= 0:
+                continue
+            parts.append(f"{name}={count_int}")
+        return parts
+
+    def _format_flags(flags_map: Mapping[str, Any] | None) -> str | None:
+        if not isinstance(flags_map, Mapping):
+            return None
+        flags_counter: Counter[str] = Counter()
+        for name, count in flags_map.items():
+            try:
+                flags_counter[str(name)] += int(count or 0)
+            except Exception:
+                continue
+        if isinstance(top_safety_flags, Mapping):
+            for name, count in top_safety_flags.items():
+                try:
+                    flags_counter[str(name)] += int(count or 0)
+                except Exception:
+                    continue
+        if not flags_counter:
+            return None
+        top_flags = sorted(flags_counter.items(), key=lambda kv: (-kv[1], kv[0]))[:5]
+        rendered = ", ".join(f"{name} ({count})" for name, count in top_flags if count > 0)
+        return f"top flags: {rendered}" if rendered else None
+
+    order: list[str] = []
+    if "quality" in screeners:
+        order.append("quality")
+    if "safety" in screeners:
+        order.append("safety")
+    order.extend(sorted(k for k in screeners.keys() if k not in order))
+
+    lines: list[str] = []
+    for screener_id in order:
+        stats = screeners.get(screener_id)
+        if not isinstance(stats, Mapping):
+            continue
+        try:
+            scored = int(stats.get("scored") or 0)
+            kept = int(stats.get("kept") or 0)
+            dropped = int(stats.get("dropped") or 0)
+            errors = int(stats.get("errors") or 0)
+        except Exception:
+            continue
+        line = f"- {screener_id}: scored={scored}, kept={kept}, dropped={dropped}, errors={errors}"
+
+        extra_parts: list[str] = []
+        candidate_parts = _counter_parts(stats.get("candidates"))
+        if candidate_parts:
+            extra_parts.append(f"candidates: {', '.join(sorted(candidate_parts))}")
+        drop_parts = _counter_parts(stats.get("drops"))
+        if drop_parts:
+            extra_parts.append(f"drops: {', '.join(sorted(drop_parts))}")
+        flags_part = _format_flags(stats.get("flags")) if screener_id == "safety" else None
+        if flags_part:
+            extra_parts.append(flags_part)
+        if extra_parts:
+            line = f"{line} ({'; '.join(extra_parts)})"
+        lines.append(line)
+
+    return "\n".join(lines) if lines else "[More Information Needed]"
+
+
+def _format_quality_sections(signal_stats: Mapping[str, Any] | None, screening_summary: Mapping[str, Any] | None) -> str:
+    """Compose the quality section with screening summary + scalar signals."""
+    screening_block = _format_screening_summary_for_card(screening_summary)
+    signals_block = _format_signal_stats_for_card(signal_stats)
+    screening_section = f"#### Screening Summary\n{screening_block}"
+    signals_section = f"#### Scalar Quality Signals\n{signals_block}"
+    return f"{screening_section}\n\n{signals_section}"
 
 
 def build_card_fragment_for_run(
@@ -913,7 +1079,7 @@ DATASET_CARD_TEMPLATE = """---
 [More Information Needed]
 
 ### Personal and Sensitive Information
-[More Information Needed]
+{personal_and_sensitive_information_section}
 
 ## Considerations for Using the Data
 
@@ -956,10 +1122,11 @@ def render_dataset_card(
         "dataset_summary_section": _default_summary(fields),
         "supported_tasks_section": _default_supported_tasks(fields),
         "languages_section": _default_languages_section(fields),
-        "quality_signals_section": "[More Information Needed]",
+        "quality_signals_section": _format_quality_sections(None, None),
         "data_instances_section": _default_data_instances_section(),
         "data_fields_section": _default_data_fields_section(fields),
         "data_splits_section": _default_data_splits_section(fields),
+        "personal_and_sensitive_information_section": "[More Information Needed]",
     }
     sections.update(body_overrides)
 
@@ -980,6 +1147,15 @@ def build_dataset_card_from_fragments(
     fragments = [load_card_fragment(Path(p)) for p in fragment_paths]
     fields = merge_fragments(fragments, overrides=overrides)
     signal_stats = _aggregate_signal_stats(fragments)
+    screening_summary = _aggregate_screening_summaries(fragments)
     overrides_combined = dict(body_overrides or {})
-    overrides_combined.setdefault("quality_signals_section", _format_signal_stats_for_card(signal_stats))
+    overrides_combined.setdefault(
+        "quality_signals_section", _format_quality_sections(signal_stats, screening_summary)
+    )
+    screeners = screening_summary.get("screeners") if isinstance(screening_summary, Mapping) else None
+    if isinstance(screeners, Mapping) and "safety" in screeners:
+        overrides_combined.setdefault(
+            "personal_and_sensitive_information_section",
+            "Automated safety screening was applied; see Screening Summary for aggregate counts and top flag categories.",
+        )
     return render_dataset_card(fields, body_overrides=overrides_combined)

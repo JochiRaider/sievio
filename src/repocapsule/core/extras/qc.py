@@ -601,12 +601,18 @@ class DefaultQualityScorerFactory:
         """
         opts = dict(options or {})
         heur_opt = opts.get("heuristics")
-        if isinstance(heur_opt, QCHeuristics):
+        if heur_opt is None:
+            heuristics = None
+        elif isinstance(heur_opt, QCHeuristics):
             heuristics = heur_opt
         elif isinstance(heur_opt, Mapping):
             heuristics = QCHeuristics(**dict(heur_opt))
         else:
-            heuristics = None
+            raise TypeError(
+                f"heuristics must be QCHeuristics or a mapping when using {self.id}; got {type(heur_opt).__name__}"
+            )
+        if heuristics is not None:
+            heuristics.validate()
         global_opts = opts.get("global_dedup", {}) or {}
         return JSONLQualityScorer(
             heuristics=heuristics,

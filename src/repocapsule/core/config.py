@@ -17,7 +17,7 @@ except ModuleNotFoundError:  # pragma: no cover
     except Exception:  # pragma: no cover
         tomllib = None  # type: ignore[assignment]
 from collections.abc import Sequence as ABCSequence
-from dataclasses import dataclass, field, replace, is_dataclass, fields, asdict
+from dataclasses import dataclass, field, replace, is_dataclass, fields
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints, List, Literal
 
@@ -482,6 +482,33 @@ class QCHeuristics:
     minhash_shingle_k: int | None = None
     minhash_jaccard_thresh: float | None = None
 
+    def validate(self) -> None:
+        """Validate heuristic thresholds and weights."""
+        numeric_positive = [
+            ("target_code_min", self.target_code_min),
+            ("target_code_max", self.target_code_max),
+            ("target_log_min", self.target_log_min),
+            ("target_log_max", self.target_log_max),
+            ("target_text_min", self.target_text_min),
+            ("target_text_max", self.target_text_max),
+            ("target_other_min", self.target_other_min),
+            ("target_other_max", self.target_other_max),
+            ("repetition_k", self.repetition_k),
+            ("code_short_line_threshold", self.code_short_line_threshold),
+            ("simhash_window", self.simhash_window),
+        ]
+        for name, value in numeric_positive:
+            if value is not None and value <= 0:
+                raise ValueError(f"QCHeuristics.{name} must be positive; got {value!r}.")
+
+        weight_fields = [
+            ("code_punct_weight", self.code_punct_weight),
+            ("code_short_line_weight", self.code_short_line_weight),
+        ]
+        for name, value in weight_fields:
+            if value is not None and not (0.0 <= value <= 1.0):
+                raise ValueError(f"QCHeuristics.{name} must be between 0 and 1; got {value!r}.")
+
 
 @dataclass(slots=True)
 class SafetyConfig:
@@ -505,6 +532,15 @@ class SafetyConfig:
     allowed_licenses: list[str] | None = None
     annotate_only: bool = False  # if True, never drop on safety
     fail_on_error: bool = False
+    write_csv: bool = False
+    csv_suffix: str = "_safety.csv"
+    write_signals_sidecar: bool = False
+    signals_suffix: str | None = None
+    signals_format: Literal["csv", "parquet"] = "csv"
+    parallel_post: bool = False
+    post_executor_kind: str | None = None
+    post_max_workers: int | None = None
+    post_submit_window: int | None = None
 
     def normalize_mode(self) -> str:
         mode = QCMode.normalize(self.mode)
@@ -525,10 +561,8 @@ class SafetyConfig:
             raise ValueError(
                 "qc.safety.enabled=True but qc.safety.mode='off'; disable safety or choose 'inline'/'advisory'."
             )
-        if self.enabled and mode == QCMode.POST:
-            raise ValueError(
-                "qc.safety.mode='post' is not supported yet. Use 'inline' for gating during extraction or 'advisory' for annotate-only safety."
-            )
+        if self.signals_format not in {"csv", "parquet"}:
+            raise ValueError("qc.safety.signals_format must be 'csv' or 'parquet'.")
         # Safety scorer options stay as mappings for now; when a typed default is
         # added, normalize it via build_config_from_defaults_and_options just like QC heuristics.
 
@@ -613,56 +647,7 @@ class QCConfig:
             raise ValueError("Inline/advisory QC requires a scorer; set qc.scorer_id or install QC extras.")
         if self.scorer_options is None or not isinstance(self.scorer_options, dict):
             raise TypeError("qc.scorer_options must be a mapping (use {} for defaults).")
-        using_default = self.scorer_id is None or self.scorer_id == DEFAULT_QC_SCORER_ID
-        if using_default:
-            raw_heuristics = self.scorer_options.get("heuristics")
-            if raw_heuristics is None:
-                heur_mapping: Mapping[str, Any] = {}
-            elif isinstance(raw_heuristics, QCHeuristics):
-                heur_mapping = asdict(raw_heuristics)
-            elif isinstance(raw_heuristics, Mapping):
-                heur_mapping = raw_heuristics
-            else:
-                raise TypeError(
-                    f"qc.scorer_options.heuristics must be QCHeuristics-compatible; got {type(raw_heuristics).__name__}"
-                )
-            default_heuristics = asdict(QCHeuristics())
-            h = build_config_from_defaults_and_options(
-                QCHeuristics,
-                defaults=default_heuristics,
-                options=heur_mapping,
-            )
-            self.scorer_options["heuristics"] = h
-            self.heuristics = h
-            numeric_positive = [
-                ("target_code_min", h.target_code_min),
-                ("target_code_max", h.target_code_max),
-                ("target_log_min", h.target_log_min),
-                ("target_log_max", h.target_log_max),
-                ("target_text_min", h.target_text_min),
-                ("target_text_max", h.target_text_max),
-                ("target_other_min", h.target_other_min),
-                ("target_other_max", h.target_other_max),
-                ("repetition_k", h.repetition_k),
-                ("code_short_line_threshold", h.code_short_line_threshold),
-                ("simhash_window", h.simhash_window),
-            ]
-            for name, value in numeric_positive:
-                if value is None:
-                    continue
-                if value <= 0:
-                    raise ValueError(f"qc.scorer_options.heuristics.{name} must be positive; got {value!r}.")
-            weight_fields = [
-                ("code_punct_weight", h.code_punct_weight),
-                ("code_short_line_weight", h.code_short_line_weight),
-            ]
-            for name, value in weight_fields:
-                if value is None:
-                    continue
-                if not (0.0 <= value <= 1.0):
-                    raise ValueError(f"qc.scorer_options.heuristics.{name} must be between 0 and 1; got {value!r}.")
-        else:
-            self.heuristics = None
+        self.heuristics = None
         if "exact_dedup" not in self.scorer_options:
             self.scorer_options["exact_dedup"] = bool(self.exact_dedup)
         if self.signals_format not in {"csv", "parquet"}:
