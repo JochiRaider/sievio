@@ -60,11 +60,11 @@ except Exception:
 # ──────────────────────────────────────────────────────────────────────────────
 
 # Example GitHub repo to test:
-URL = "https://github.com/pallets/flask/tree/main/docs"
+# URL = "https://github.com/pallets/flask/tree/main/docs"
 # URL = "https://github.com/JochiRaider/URL_Research_Tool"
 # URL = "https://github.com/Bert-JanP/Hunting-Queries-Detection-Rules"
 # URL = "https://github.com/chinapandaman/PyPDFForm"
-# URL = "https://github.com/SystemsApproach/book"
+URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (applied when URL has no ref)
 
 # Workspace root and output directory for artifacts (portable path under the repo root):
