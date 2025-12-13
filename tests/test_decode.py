@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from repocapsule.core.decode import decode_bytes, read_text
+from sievio.core.decode import decode_bytes, read_text
 
 
 def test_decode_utf8_happy_path() -> None:

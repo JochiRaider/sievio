@@ -20,7 +20,7 @@ from typing import (
 if TYPE_CHECKING:  # pragma: no cover - type checking only
     from pathlib import Path
     from .config import (
-        RepocapsuleConfig,
+        SievioConfig,
         FileProcessingConfig,
         SourceSpec,
         SinkSpec,
@@ -115,7 +115,7 @@ class RepoContext:
 class RunContext:
     """Context object passed to lifecycle hooks for a pipeline run."""
 
-    cfg: "RepocapsuleConfig"
+    cfg: "SievioConfig"
     stats: "PipelineStats"
     runtime: "PipelineRuntime"
 
@@ -306,7 +306,7 @@ class FileExtractor(Protocol):
         self,
         item: FileItem,
         *,
-        config: "RepocapsuleConfig | FileProcessingConfig",
+        config: "SievioConfig | FileProcessingConfig",
         context: Optional[RepoContext] = None,
     ) -> Iterable[Record]:
         """
@@ -314,7 +314,7 @@ class FileExtractor(Protocol):
 
         Args:
             item (FileItem): File to extract data from.
-            config (RepocapsuleConfig | FileProcessingConfig): Execution
+            config (SievioConfig | FileProcessingConfig): Execution
                 configuration controlling extraction behavior.
             context (RepoContext | None): Repository metadata when available.
 
@@ -572,7 +572,7 @@ class SourceFactoryContext:
     """
     Narrowed view of cross-cutting source settings passed to SourceFactory.build.
 
-    Keeps factories decoupled from the full RepocapsuleConfig so they can be
+    Keeps factories decoupled from the full SievioConfig so they can be
     reused in other environments and by plugins.
 
     Attributes:

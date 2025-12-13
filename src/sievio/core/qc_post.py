@@ -9,7 +9,7 @@ from dataclasses import dataclass, replace, asdict
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 import json
 
-from .config import RepocapsuleConfig, QCConfig, QCMode, SafetyConfig
+from .config import SievioConfig, QCConfig, QCMode, SafetyConfig
 from .concurrency import Executor, ExecutorConfig, resolve_qc_executor_config, infer_executor_kind
 from .factories_qc import make_qc_scorer, make_safety_scorer
 from .interfaces import RunLifecycleHook, RunContext, RunArtifacts, SafetyScorer
@@ -102,7 +102,7 @@ def run_qc_over_jsonl(
     jsonl_path: str,
     qc_cfg: QCConfig,
     *,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     scorer: Any,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
@@ -225,7 +225,7 @@ def run_qc_over_jsonl(
 
 def _run_post_qc(
     jsonl_path: str,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     *,
     scorer: Any | None,
     runtime: Any | None = None,
@@ -256,7 +256,7 @@ def run_safety_over_jsonl(
     jsonl_path: str,
     safety_cfg: SafetyConfig,
     *,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     scorer: SafetyScorer,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
@@ -375,7 +375,7 @@ def run_safety_over_jsonl(
 
 def _run_post_safety(
     jsonl_path: str,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     *,
     scorer: SafetyScorer | None,
     runtime: Any | None = None,
@@ -408,7 +408,7 @@ def iter_qc_rows_from_jsonl(
     jsonl_path: str,
     *,
     qc_cfg: QCConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     scorer: Any,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
@@ -461,7 +461,7 @@ def collect_qc_rows_from_jsonl(
     jsonl_path: str,
     *,
     qc_cfg: QCConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     scorer: Any,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
@@ -549,7 +549,7 @@ def emit_qc_signals_parquet(
         import pyarrow as pa  # type: ignore
         import pyarrow.parquet as pq  # type: ignore
     except Exception as exc:
-        raise RuntimeError("PyArrow is required for Parquet signal sidecars; install repocapsule[parquet].") from exc
+        raise RuntimeError("PyArrow is required for Parquet signal sidecars; install sievio[parquet].") from exc
 
     fieldnames, signal_rows = _collect_signal_rows(rows)
     table = pa.Table.from_pylist(signal_rows).select(fieldnames)
@@ -602,7 +602,7 @@ def _score_jsonl_sequential_streaming(
 def _run_parallel_qc(
     shards: Iterable["_JsonlShard"],
     qc_cfg: QCConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     handle_rows: Callable[[int, List[Dict[str, Any]]], None],
     *,
@@ -682,7 +682,7 @@ def _run_parallel_qc(
 def _score_jsonl_parallel_collecting(
     shards: List["_JsonlShard"],
     qc_cfg: QCConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     *,
     executor_hint: Any | None = None,
@@ -705,7 +705,7 @@ def _score_jsonl_parallel_collecting(
 def _score_jsonl_parallel_streaming(
     shards: Iterable["_JsonlShard"],
     qc_cfg: QCConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
     *,
@@ -944,7 +944,7 @@ def _score_jsonl_safety_streaming(
             consume_rows(rows)
 
 
-def _resolve_safety_executor_config(cfg: RepocapsuleConfig, safety_cfg: SafetyConfig, runtime: Any | None = None) -> ExecutorConfig:
+def _resolve_safety_executor_config(cfg: SievioConfig, safety_cfg: SafetyConfig, runtime: Any | None = None) -> ExecutorConfig:
     pc = cfg.pipeline
     pipeline_max_workers = pc.max_workers or (os.cpu_count() or 1)
     pipeline_max_workers = max(1, pipeline_max_workers)
@@ -975,7 +975,7 @@ def _resolve_safety_executor_config(cfg: RepocapsuleConfig, safety_cfg: SafetyCo
 def _run_parallel_safety(
     shards: Iterable["_JsonlShard"],
     safety_cfg: SafetyConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     handle_rows: Callable[[int, List[Dict[str, Any]]], None],
     *,
@@ -1055,7 +1055,7 @@ def _run_parallel_safety(
 def _score_jsonl_safety_parallel_collecting(
     shards: List["_JsonlShard"],
     safety_cfg: SafetyConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     *,
     executor_hint: Any | None = None,
@@ -1078,7 +1078,7 @@ def _score_jsonl_safety_parallel_collecting(
 def _score_jsonl_safety_parallel_streaming(
     shards: Iterable["_JsonlShard"],
     safety_cfg: SafetyConfig,
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     runtime: Any | None,
     consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
     *,
@@ -1206,7 +1206,7 @@ def emit_safety_signals_parquet(
         import pyarrow as pa  # type: ignore
         import pyarrow.parquet as pq  # type: ignore
     except Exception as exc:
-        raise RuntimeError("PyArrow is required for Parquet safety sidecars; install repocapsule[parquet].") from exc
+        raise RuntimeError("PyArrow is required for Parquet safety sidecars; install sievio[parquet].") from exc
 
     fieldnames, signal_rows = _collect_safety_signal_rows(rows)
     table = pa.Table.from_pylist(signal_rows).select(fieldnames)

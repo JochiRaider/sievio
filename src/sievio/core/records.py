@@ -600,10 +600,10 @@ def build_record(
 # -----------------------
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .config import RepocapsuleConfig
+    from .config import SievioConfig
 
 
-def build_run_header_record(config: "RepocapsuleConfig") -> Dict[str, Any]:
+def build_run_header_record(config: "SievioConfig") -> Dict[str, Any]:
     """Build a run_header record describing configuration at run start."""
 
     meta = RunHeaderMeta(

@@ -211,7 +211,7 @@ def _recover_best_effort_with_python_evtx(data: bytes) -> Iterable[str]:
 
 def _env_wants_recovery() -> bool:
     """Return whether recovery is enabled via environment variable."""
-    return os.getenv("REPOCAPSULE_EVTX_RECOVER", "").strip().lower() in {"1", "true", "yes"}
+    return os.getenv("SIEVIO_EVTX_RECOVER", "").strip().lower() in {"1", "true", "yes"}
 
 
 def handle_evtx(
@@ -233,7 +233,7 @@ def handle_evtx(
     match the source XML. raw_xml is retained for fidelity.
 
     Optional fallback: enable recovery (allow_recovery=True or
-    REPOCAPSULE_EVTX_RECOVER=1) to scan for embedded EVTX headers and
+    SIEVIO_EVTX_RECOVER=1) to scan for embedded EVTX headers and
     attempt parsing from those offsets when primary parsing yields
     nothing.
 

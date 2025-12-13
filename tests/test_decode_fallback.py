@@ -1,5 +1,5 @@
-from repocapsule.core.decode import decode_bytes
-from repocapsule.core.records import build_record
+from sievio.core.decode import decode_bytes
+from sievio.core.records import build_record
 
 
 def test_decode_bytes_uses_cp1252_fallback():

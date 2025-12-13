@@ -1,7 +1,7 @@
 import pytest
 
-from repocapsule.core.config import SourceSpec
-from repocapsule.core.factories_sources import (
+from sievio.core.config import SourceSpec
+from sievio.core.factories_sources import (
     CsvTextSourceFactory,
     GitHubZipSourceFactory,
     LocalDirSourceFactory,
@@ -9,7 +9,7 @@ from repocapsule.core.factories_sources import (
     WebPagePdfSourceFactory,
     WebPdfListSourceFactory,
 )
-from repocapsule.core.interfaces import SourceFactoryContext
+from sievio.core.interfaces import SourceFactoryContext
 
 
 class _DummyHttpClient:

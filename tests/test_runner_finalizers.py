@@ -1,15 +1,15 @@
 import json
 
-from repocapsule.core.hooks import _dispatch_finalizers
-from repocapsule.core.config import RepocapsuleConfig
-from repocapsule.core.records import build_run_header_record
-from repocapsule.sinks.sinks import JSONLSink
+from sievio.core.hooks import _dispatch_finalizers
+from sievio.core.config import SievioConfig
+from sievio.core.records import build_run_header_record
+from sievio.sinks.sinks import JSONLSink
 
 
 def test_dispatch_finalizers_does_not_clobber_jsonl(tmp_path) -> None:
     jsonl_path = tmp_path / "data.jsonl"
     sink = JSONLSink(jsonl_path)
-    sink.set_header_record(build_run_header_record(RepocapsuleConfig()))
+    sink.set_header_record(build_run_header_record(SievioConfig()))
 
     # Simulate the main pipeline writing records.
     sink.open()

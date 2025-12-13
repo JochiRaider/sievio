@@ -107,7 +107,7 @@ def parse_github_url(url: str) -> Optional[RepoSpec]:
 # -----------------
 
 _API_BASE = "https://api.github.com"
-_USER_AGENT = "repocapsule/0.1 (+https://github.com)"
+_USER_AGENT = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
 
 
 def _auth_token() -> Optional[str]:
@@ -320,7 +320,7 @@ def download_zipball_to_temp(
                 except Exception:
                     pass  # fall back to streamed cap
 
-            fd, tmp_path = tempfile.mkstemp(prefix="repocapsule_", suffix=".zip")
+            fd, tmp_path = tempfile.mkstemp(prefix="sievio_", suffix=".zip")
             total = 0
             try:
                 with os.fdopen(fd, "wb") as f:

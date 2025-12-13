@@ -20,7 +20,7 @@ from ..core.concurrency import Executor, ExecutorConfig
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 
 
-_USER_AGENT = "repocapsule/0.1 (+https://github.com)"
+_USER_AGENT = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
 _CHUNK = 1024 * 1024  # 1 MiB
 _ALLOWED_SCHEMES = {"http", "https"}
 

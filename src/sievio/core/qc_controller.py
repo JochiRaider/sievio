@@ -649,6 +649,15 @@ class InlineScreeningController:
         self._sync_screeners()
 
     @property
+    def cfg(self) -> QCConfig | None:
+        """Expose the current QCConfig for downstream helpers (CSV/post-QC)."""
+        return self._qc_cfg
+
+    @cfg.setter
+    def cfg(self, value: QCConfig | None) -> None:
+        self._qc_cfg = value
+
+    @property
     def tracker(self) -> QCSummaryTracker:
         return self.summary
 

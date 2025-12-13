@@ -1,7 +1,7 @@
 import logging
 
-from repocapsule.core.log import configure_logging, temp_level
-from repocapsule.core.naming import (
+from sievio.core.log import configure_logging, temp_level
+from sievio.core.naming import (
     build_output_basename_github,
     build_output_basename_pdf,
     normalize_extensions,
@@ -9,7 +9,7 @@ from repocapsule.core.naming import (
 
 
 def test_configure_logging_sets_logger_level():
-    logger = logging.getLogger("repocapsule")
+    logger = logging.getLogger("sievio")
     logger.setLevel(logging.WARNING)
 
     configure_logging(level="DEBUG")
@@ -18,7 +18,7 @@ def test_configure_logging_sets_logger_level():
 
 
 def test_temp_level_changes_and_restores():
-    logger = logging.getLogger("repocapsule.test.temp")
+    logger = logging.getLogger("sievio.test.temp")
     logger.setLevel(logging.WARNING)
     original_level = logger.level
 

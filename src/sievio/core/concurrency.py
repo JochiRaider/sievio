@@ -1,6 +1,6 @@
 # concurrency.py
 # SPDX-License-Identifier: MIT
-"""Concurrency helpers and executor configuration for RepoCapsule.
+"""Concurrency helpers and executor configuration for Sievio.
 
 Wraps thread and process pool executors with a bounded submission
 window and provides helpers to infer executor settings for the main
@@ -20,7 +20,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, Iterable, Literal, Tuple, TypeVar, Optional
 import os
 
-from .config import RepocapsuleConfig
+from .config import SievioConfig
 from .log import get_logger
 
 log = get_logger(__name__)
@@ -303,7 +303,7 @@ def _extract_concurrency_hint(obj: Any) -> tuple[Optional[str], bool]:
     return preferred, bool(cpu_intensive)
 
 
-def _infer_executor_kind(cfg: RepocapsuleConfig, runtime: Any | None = None) -> str:
+def _infer_executor_kind(cfg: SievioConfig, runtime: Any | None = None) -> str:
     """
     Infer executor kind by inspecting registered components for concurrency hints.
     """
@@ -347,7 +347,7 @@ def _infer_executor_kind(cfg: RepocapsuleConfig, runtime: Any | None = None) -> 
     return "thread"
 
 
-def infer_executor_kind(cfg: RepocapsuleConfig, *, default: str = "thread", runtime: Any | None = None) -> Literal["thread", "process"]:
+def infer_executor_kind(cfg: SievioConfig, *, default: str = "thread", runtime: Any | None = None) -> Literal["thread", "process"]:
     """Return a validated executor kind for the pipeline.
 
 
@@ -355,7 +355,7 @@ def infer_executor_kind(cfg: RepocapsuleConfig, *, default: str = "thread", runt
     default when the heuristics cannot determine a valid kind.
 
     Args:
-        cfg (RepocapsuleConfig): Top-level configuration object.
+        cfg (SievioConfig): Top-level configuration object.
         default (str): Fallback executor kind to use when inference
             fails or returns an unknown value.
         runtime (Any | None): Optional runtime object used to refine
@@ -371,7 +371,7 @@ def infer_executor_kind(cfg: RepocapsuleConfig, *, default: str = "thread", runt
     return kind  # type: ignore[return-value]
 
 
-def resolve_pipeline_executor_config(cfg: RepocapsuleConfig, runtime: Any | None = None) -> tuple[ExecutorConfig, bool]:
+def resolve_pipeline_executor_config(cfg: SievioConfig, runtime: Any | None = None) -> tuple[ExecutorConfig, bool]:
     """Build executor settings for the main ingestion pipeline.
 
     The pipeline section of the configuration controls the maximum
@@ -380,7 +380,7 @@ def resolve_pipeline_executor_config(cfg: RepocapsuleConfig, runtime: Any | None
     is inferred from the configured sources and bytes handlers.
 
     Args:
-        cfg (RepocapsuleConfig): Top-level configuration object.
+        cfg (SievioConfig): Top-level configuration object.
         runtime (Any | None): Optional runtime object whose components
             may influence executor inference.
 
@@ -404,7 +404,7 @@ def resolve_pipeline_executor_config(cfg: RepocapsuleConfig, runtime: Any | None
     return exec_cfg, fail_fast
 
 
-def resolve_qc_executor_config(cfg: RepocapsuleConfig, runtime: Any | None = None) -> ExecutorConfig:
+def resolve_qc_executor_config(cfg: SievioConfig, runtime: Any | None = None) -> ExecutorConfig:
     """Build executor settings for post-extraction QC scoring.
 
 
@@ -414,7 +414,7 @@ def resolve_qc_executor_config(cfg: RepocapsuleConfig, runtime: Any | None = Non
     are resolved using the same heuristics as the main pipeline.
 
     Args:
-        cfg (RepocapsuleConfig): Top-level configuration object.
+        cfg (SievioConfig): Top-level configuration object.
         runtime (Any | None): Optional runtime object whose components
             may influence executor inference.
 

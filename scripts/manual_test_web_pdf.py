@@ -9,18 +9,18 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from pathlib import Path
 from typing import Optional, Sequence
 
-from repocapsule import RepocapsuleConfig, convert, load_config_from_path
-from repocapsule.cli.runner import default_paths_for_pdf
-from repocapsule.core.builder import build_pipeline_plan
-from repocapsule.core.chunk import ChunkPolicy
-from repocapsule.core.config import QCMode, SourceSpec, SinkSpec
-from repocapsule.core.interfaces import RepoContext
-from repocapsule.core.log import configure_logging
-from repocapsule.core.pipeline import PipelineEngine
-from repocapsule.core.registries import quality_scorer_registry
+from sievio import SievioConfig, convert, load_config_from_path
+from sievio.cli.runner import default_paths_for_pdf
+from sievio.core.builder import build_pipeline_plan
+from sievio.core.chunk import ChunkPolicy
+from sievio.core.config import QCMode, SourceSpec, SinkSpec
+from sievio.core.interfaces import RepoContext
+from sievio.core.log import configure_logging
+from sievio.core.pipeline import PipelineEngine
+from sievio.core.registries import quality_scorer_registry
 
 try:
-    from repocapsule.core.extras.qc import JSONLQualityScorer
+    from sievio.core.extras.qc import JSONLQualityScorer
 except Exception:  # optional extras
     JSONLQualityScorer = None  # type: ignore[assignment]
 
@@ -69,7 +69,7 @@ MAX_DECODE_MB: Optional[int] = None  # cap decode stage per file (MiB)
 try:
     import importlib
 
-    importlib.import_module("repocapsule.core.extras.qc")
+    importlib.import_module("sievio.core.extras.qc")
     QC_EXTRAS_AVAILABLE = True
 except Exception:
     QC_EXTRAS_AVAILABLE = False
@@ -86,7 +86,7 @@ QC_LOCAL_ONLY = False
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _build_config(base_cfg: RepocapsuleConfig) -> RepocapsuleConfig:
+def _build_config(base_cfg: SievioConfig) -> SievioConfig:
     cfg = base_cfg
     cfg.chunk.policy = POLICY
 
@@ -111,7 +111,7 @@ def _build_config(base_cfg: RepocapsuleConfig) -> RepocapsuleConfig:
     return cfg
 
 
-def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> None:
+def _maybe_disable_qc(cfg: SievioConfig, log) -> None:
     if getattr(cfg.qc, "enabled", False) and not QC_EXTRAS_AVAILABLE:
         log.warning("QC enabled but QC extras are not installed; disabling QC for this run.")
         cfg.qc.enabled = False
@@ -119,7 +119,7 @@ def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> None:
         cfg.qc.scorer = None
 
 
-def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
+def _register_qc_factory(cfg: SievioConfig, log) -> None:
     if not (getattr(cfg.qc, "enabled", False) and USE_CUSTOM_QC_SCORER):
         return
     if not QC_EXTRAS_AVAILABLE:
@@ -130,7 +130,7 @@ def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
         id = "jsonl_default"  # override the default factory
 
         def build(self, qc_cfg):
-            from repocapsule.core.extras.qc import JSONLQualityScorer
+            from sievio.core.extras.qc import JSONLQualityScorer
 
             return JSONLQualityScorer(
                 lm_model_id=QC_MODEL_ID,
@@ -170,8 +170,8 @@ def main() -> None:
     )
 
     base_cfg = load_config_from_path(CONFIG_PATH)
-    if not isinstance(base_cfg, RepocapsuleConfig):
-        raise TypeError(f"Expected RepocapsuleConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
+    if not isinstance(base_cfg, SievioConfig):
+        raise TypeError(f"Expected SievioConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
 
     cfg = _build_config(base_cfg)
     _maybe_disable_qc(cfg, log)

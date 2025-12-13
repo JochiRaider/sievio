@@ -1,5 +1,5 @@
-from repocapsule.core.chunk import count_tokens
-from repocapsule.core.records import (
+from sievio.core.chunk import count_tokens
+from sievio.core.records import (
     build_record,
     ensure_meta_dict,
     filter_qc_meta,

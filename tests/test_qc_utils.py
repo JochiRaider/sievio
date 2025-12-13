@@ -1,6 +1,6 @@
 import pytest
 
-from repocapsule.core.qc_utils import parse_ok
+from sievio.core.qc_utils import parse_ok
 
 
 def test_parse_ok_rejects_partial_json():

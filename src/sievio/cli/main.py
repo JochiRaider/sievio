@@ -10,7 +10,7 @@ import sys
 from pathlib import Path
 from typing import Optional, Sequence
 
-from ..core.config import RepocapsuleConfig, load_config_from_path
+from ..core.config import SievioConfig, load_config_from_path
 from ..core.dataset_card import build_dataset_card_from_fragments
 from ..core.log import configure_logging
 from ..core.qc_post import _run_post_qc
@@ -32,7 +32,7 @@ except Exception:  # pragma: no cover
 
 
 def _build_parser() -> argparse.ArgumentParser:
-    """Build the top-level Repocapsule CLI argument parser.
+    """Build the top-level Sievio CLI argument parser.
 
     Configures the main parser with subcommands for running pipelines,
     converting local directories or GitHub repositories, building dataset
@@ -41,7 +41,7 @@ def _build_parser() -> argparse.ArgumentParser:
     Returns:
         argparse.ArgumentParser: Configured argument parser for the CLI.
     """
-    parser = argparse.ArgumentParser(prog="repocapsule", description="Repocapsule CLI")
+    parser = argparse.ArgumentParser(prog="sievio", description="Sievio CLI")
     parser.add_argument(
         "--log-level",
         default="INFO",
@@ -105,15 +105,15 @@ def _build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _apply_pipeline_overrides(cfg: RepocapsuleConfig, args: argparse.Namespace) -> None:
+def _apply_pipeline_overrides(cfg: SievioConfig, args: argparse.Namespace) -> None:
     """Apply pipeline-related CLI overrides to a config object.
 
-    Updates the provided ``RepocapsuleConfig`` in place using any
+    Updates the provided ``SievioConfig`` in place using any
     override flags supplied on the command line, such as maximum worker
     count or executor kind.
 
     Args:
-        cfg (RepocapsuleConfig): Configuration object to mutate.
+        cfg (SievioConfig): Configuration object to mutate.
         args (argparse.Namespace): Parsed CLI arguments that may contain
             pipeline override fields.
     """
@@ -123,7 +123,7 @@ def _apply_pipeline_overrides(cfg: RepocapsuleConfig, args: argparse.Namespace) 
         cfg.pipeline.executor_kind = args.override_executor_kind
 
 
-def _load_base_config(path: Optional[str]) -> Optional[RepocapsuleConfig]:
+def _load_base_config(path: Optional[str]) -> Optional[SievioConfig]:
     """Load an optional base configuration from a file path.
 
     When ``path`` is provided, the configuration is loaded using
@@ -134,7 +134,7 @@ def _load_base_config(path: Optional[str]) -> Optional[RepocapsuleConfig]:
             None to skip loading.
 
     Returns:
-        RepocapsuleConfig | None: Loaded configuration instance, or None
+        SievioConfig | None: Loaded configuration instance, or None
         if no path was provided.
     """
     if not path:
@@ -247,7 +247,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         if not jsonl_path.exists():
             print(f"Input JSONL not found: {jsonl_path}", file=sys.stderr)
             return 1
-        cfg = _load_base_config(args.config) or RepocapsuleConfig()
+        cfg = _load_base_config(args.config) or SievioConfig()
         cfg.metadata.primary_jsonl = str(jsonl_path)
         cfg.qc.enabled = True
         cfg.qc.mode = "post"
@@ -278,7 +278,7 @@ def _dispatch(args: argparse.Namespace) -> int:
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
-    """Entry point for the Repocapsule command-line interface.
+    """Entry point for the Sievio command-line interface.
 
     Parses arguments, dispatches to the selected subcommand, and returns
     an appropriate process exit code. This function is used by the

@@ -1,6 +1,8 @@
-# RepoCapsule – LLM Guide
+# Sievio – LLM Guide
 
-This file gives LLMs a compact map of RepoCapsule so they can work in the right modules and avoid touching core pipeline wiring by accident.
+This file gives LLMs a compact map of Sievio so they can work in the right modules and avoid touching core pipeline wiring by accident.
+
+> Rename note: the project previously shipped as RepoCapsule. All imports/CLIs now use `sievio`; no compatibility shim exists. See `MIGRATION.md` for details.
 
 For operational rules, invariants, and “how to ask an AI for help,” see `agents.md`.
 This `llms.md` focuses on architecture, module responsibilities, and where to make
@@ -10,11 +12,11 @@ changes for different tasks.
 
 ## 1. High-level overview
 
-RepoCapsule is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized JSONL / Parquet datasets suitable for LLM pre-training, fine-tuning and analysis.
+Sievio is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized JSONL / Parquet datasets suitable for LLM pre-training, fine-tuning and analysis.
 
 At a high level:
 
-* You describe a run with `RepocapsuleConfig` (Python or TOML).
+* You describe a run with `SievioConfig` (Python or TOML).
 * The **builder** turns that config into a `PipelinePlan` and `PipelineRuntime`.
 * The **pipeline engine** coordinates sources → decode → chunk → record construction → sinks.
 * Optional subsystems (QC, dataset cards, language ID, safety/QC extras, CLI runners, plugins) sit **around** the core rather than reimplementing it.
@@ -49,7 +51,7 @@ For the purposes of this guide:
 
 ## 3. Module map
 
-### 3.1 Core package – `src/repocapsule/core/`
+### 3.1 Core package – `src/sievio/core/`
 
 These are treated as the “core” of the system.
 
@@ -57,7 +59,7 @@ These are treated as the “core” of the system.
   Core package initializer and exports for shared constants/helpers.
 
 * `config.py`
-  Configuration models and helpers for defining `RepocapsuleConfig` and related config sections (sources, sinks, QC, safety, chunking, etc.).
+  Configuration models and helpers for defining `SievioConfig` and related config sections (sources, sinks, QC, safety, chunking, etc.).
 
 * `records.py`
   Construction and normalization of output record dictionaries, including run headers and consistent metadata fields. Also hosts schema-version helpers (`check_record_schema`) to warn when ingesting JSONL produced by mismatched library versions.
@@ -111,10 +113,10 @@ These are treated as the “core” of the system.
   Protocols/typed interfaces shared across the system (sources, sinks, lifecycle hooks, quality/safety scorers, etc.), plus core type aliases.
 
 * `concurrency.py`
-  Abstractions over thread/process executors with bounded submission windows, plus helpers to derive executor settings from `RepocapsuleConfig`.
+  Abstractions over thread/process executors with bounded submission windows, plus helpers to derive executor settings from `SievioConfig`.
 
 * `builder.py`
-  Orchestrates config → `PipelinePlan`/`PipelineRuntime` construction: builds sources, sinks, bytes handlers, HTTP client, lifecycle hooks, QC wiring, and language detectors from a `RepocapsuleConfig`. Hosts `PipelineOverrides` and `build_engine`, which is the preferred entry point for wiring runtime-only overrides (HTTP/QC/safety scorers, language detectors, bytes handlers, file extractor, and record/file middlewares) into a `PipelineEngine`. If you are changing how configs become runtime objects or how overrides/hooks/QC wiring are applied, start here.
+  Orchestrates config → `PipelinePlan`/`PipelineRuntime` construction: builds sources, sinks, bytes handlers, HTTP client, lifecycle hooks, QC wiring, and language detectors from a `SievioConfig`. Hosts `PipelineOverrides` and `build_engine`, which is the preferred entry point for wiring runtime-only overrides (HTTP/QC/safety scorers, language detectors, bytes handlers, file extractor, and record/file middlewares) into a `PipelineEngine`. If you are changing how configs become runtime objects or how overrides/hooks/QC wiring are applied, start here.
 
 * `hooks.py`
   Built-in pipeline lifecycle hooks for run summaries/finalizers used by the builder to assemble runtime hooks. Hosts `LanguageTaggingMiddleware`, which the builder instantiates from configured detectors and carries on `PipelineRuntime`.
@@ -182,21 +184,21 @@ write_csv = true
 
 ---
 
-### 3.2 Top-level package – `src/repocapsule/`
+### 3.2 Top-level package – `src/sievio/`
 
 * `__init__.py`
-  Defines the public package surface for `repocapsule`, re-exporting primary configuration types (e.g., `RepocapsuleConfig`) and high-level helpers such as `convert`, `convert_local_dir`, and `convert_github`. Non-exported symbols are considered expert/unstable.
+  Defines the public package surface for `sievio`, re-exporting primary configuration types (e.g., `SievioConfig`) and high-level helpers such as `convert`, `convert_local_dir`, and `convert_github`. Non-exported symbols are considered expert/unstable.
 
 ---
 
-### 3.3 CLI – `src/repocapsule/cli/`
+### 3.3 CLI – `src/sievio/cli/`
 
 * `__init__.py`
   CLI package initializer.
   *Summary pending (likely minimal; may just expose entrypoints or re-export runner helpers).*
 
 * `main.py`
-  Command-line entrypoint module invoked by the `repocapsule` console script; responsible for parsing CLI arguments and dispatching to runner helpers.
+  Command-line entrypoint module invoked by the `sievio` console script; responsible for parsing CLI arguments and dispatching to runner helpers.
   *Summary pending.*
 
 * `runner.py`
@@ -209,7 +211,7 @@ write_csv = true
 
 ---
 
-### 3.4 Sources – `src/repocapsule/sources/`
+### 3.4 Sources – `src/sievio/sources/`
 
 * `__init__.py`
   Source package initializer.
@@ -244,7 +246,7 @@ write_csv = true
 
 ---
 
-### 3.5 Sinks – `src/repocapsule/sinks/`
+### 3.5 Sinks – `src/sievio/sinks/`
 
 * `__init__.py`
   Sink package initializer.
@@ -290,7 +292,7 @@ Pytest-based test suite validating core behavior and non-core wiring.
   Tests for the CLI entrypoint (`cli.main`) and argument handling.
 
 * `tests/test_concurrency.py`
-  Tests for `concurrency.py` executors, bounded submission, and configuration via `RepocapsuleConfig`.
+  Tests for `concurrency.py` executors, bounded submission, and configuration via `SievioConfig`.
 
 * `tests/test_config_builder_pipeline.py`
   End-to-end tests tying together config parsing, builder wiring, and pipeline execution.
@@ -392,7 +394,7 @@ Top-level files are summarized in `project_files.md`. Key ones:
   This architecture and module-responsibility guide.
 
 * `example_config.toml`, `manual_test_github.toml`
-  Example `RepocapsuleConfig` TOML files for documentation and manual tests.
+  Example `SievioConfig` TOML files for documentation and manual tests.
 
 * `pyproject.toml`
   Packaging configuration, dependencies, and project metadata.
@@ -401,14 +403,14 @@ Top-level files are summarized in `project_files.md`. Key ones:
 
 ### 3.9 Notes for future expansion
 
-* As new modules are added (especially under `src/repocapsule/core/` and `src/repocapsule/sources` / `sinks`), they should be appended here with:
+* As new modules are added (especially under `src/sievio/core/` and `src/sievio/sources` / `sinks`), they should be appended here with:
 
   * One-line purpose summary.
   * How they depend on or extend existing core modules.
 * For planned-but-not-yet-implemented modules, add entries like:
 
   ```markdown
-  - `src/repocapsule/core/FOO.py`  
+  - `src/sievio/core/FOO.py`  
     Summary pending – planned module for …
   ```
 

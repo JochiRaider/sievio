@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 import os
 
-from ..core.config import RepocapsuleConfig, SourceSpec, SinkSpec
+from ..core.config import SievioConfig, SourceSpec, SinkSpec
 from ..core.factories_sinks import make_output_paths_for_github, make_output_paths_for_pdf
 from ..core.factories_context import make_repo_context_from_git
 from ..core.factories_qc import make_qc_scorer  # re-export for tests
@@ -57,11 +57,11 @@ def run_engine(engine: PipelineEngine) -> Dict[str, int]:
 
 
 # ---------- One generic entry point ----------
-def convert(config: RepocapsuleConfig | PipelineEngine, *, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
+def convert(config: SievioConfig | PipelineEngine, *, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
     """Convert sources to datasets using a config or prepared engine.
 
-    This is the main programmatic entry point for Repocapsule. When
-    given a ``RepocapsuleConfig``, it builds a ``PipelinePlan`` via the
+    This is the main programmatic entry point for Sievio. When
+    given a ``SievioConfig``, it builds a ``PipelinePlan`` via the
     builder, constructs a ``PipelineEngine``, and runs it. When given an
     existing ``PipelineEngine``, it simply runs that engine.
 
@@ -70,7 +70,7 @@ def convert(config: RepocapsuleConfig | PipelineEngine, *, overrides: PipelineOv
     pipelines in this function.
 
     Args:
-        config (RepocapsuleConfig | PipelineEngine): Either a declarative
+        config (SievioConfig | PipelineEngine): Either a declarative
             configuration for building a plan/engine or an already
             prepared engine instance.
         overrides (PipelineOverrides | None): Optional pipeline overrides
@@ -86,19 +86,19 @@ def convert(config: RepocapsuleConfig | PipelineEngine, *, overrides: PipelineOv
     return run_engine(engine)
 
 
-def _clone_base_config(base_config: Optional[RepocapsuleConfig]) -> RepocapsuleConfig:
+def _clone_base_config(base_config: Optional[SievioConfig]) -> SievioConfig:
     """Clone a base configuration or build a fresh default one.
 
     Uses a shallow ``dataclasses.replace`` so that the returned config
     can be mutated without affecting the original top-level object.
 
     Args:
-        base_config (RepocapsuleConfig | None): Optional config to clone.
+        base_config (SievioConfig | None): Optional config to clone.
 
     Returns:
-        RepocapsuleConfig: Cloned or freshly constructed configuration.
+        SievioConfig: Cloned or freshly constructed configuration.
     """
-    return replace(base_config) if base_config is not None else RepocapsuleConfig()
+    return replace(base_config) if base_config is not None else SievioConfig()
 
 
 def _build_github_repo_profile(
@@ -238,11 +238,11 @@ def convert_local_dir(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
+    base_config: Optional[SievioConfig] = None,
 ) -> Dict[str, int]:
     """Convert a local directory into a dataset.
 
-    Builds a ``RepocapsuleConfig`` for a local directory via
+    Builds a ``SievioConfig`` for a local directory via
     ``make_local_profile`` and runs the engine via ``convert``.
 
     Args:
@@ -251,7 +251,7 @@ def convert_local_dir(
         out_jsonl (str | Path): Path where the primary JSONL output will
             be written.
         out_prompt (str | Path | None): Optional path for a prompt file.
-        base_config (RepocapsuleConfig | None): Optional base config to
+        base_config (SievioConfig | None): Optional base config to
             clone and extend.
 
     Returns:
@@ -271,11 +271,11 @@ def convert_github(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
+    base_config: Optional[SievioConfig] = None,
 ) -> Dict[str, int]:
     """Convert a GitHub repository into a dataset.
 
-    Builds a ``RepocapsuleConfig`` for a GitHub repository via
+    Builds a ``SievioConfig`` for a GitHub repository via
     ``make_github_profile`` and runs the engine via ``convert``.
 
     Args:
@@ -283,7 +283,7 @@ def convert_github(
         out_jsonl (str | Path): Path where the primary JSONL output will
             be written.
         out_prompt (str | Path | None): Optional path for a prompt file.
-        base_config (RepocapsuleConfig | None): Optional base config to
+        base_config (SievioConfig | None): Optional base config to
             clone and extend.
 
     Returns:
@@ -303,12 +303,12 @@ def make_local_repo_config(
     root_dir: str | Path,
     out_jsonl: str | Path,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
-) -> RepocapsuleConfig:
+    base_config: Optional[SievioConfig] = None,
+) -> SievioConfig:
     """Build a configuration for a local repository without running it.
 
     Convenience helper for callers that want to inspect or tweak the
-    generated ``RepocapsuleConfig`` for a local directory before running
+    generated ``SievioConfig`` for a local directory before running
     the pipeline.
 
     Args:
@@ -316,11 +316,11 @@ def make_local_repo_config(
             corpus to ingest.
         out_jsonl (str | Path): Path to the primary JSONL output.
         out_prompt (str | Path | None): Optional prompt file path.
-        base_config (RepocapsuleConfig | None): Optional base config to
+        base_config (SievioConfig | None): Optional base config to
             clone.
 
     Returns:
-        RepocapsuleConfig: Prepared configuration for the local
+        SievioConfig: Prepared configuration for the local
         repository.
     """
 
@@ -337,22 +337,22 @@ def make_github_repo_config(
     url: str,
     out_jsonl: str | Path,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
-) -> RepocapsuleConfig:
+    base_config: Optional[SievioConfig] = None,
+) -> SievioConfig:
     """Build a configuration for a GitHub repository without running it.
 
     Convenience helper for callers that want to inspect or customize the
-    generated ``RepocapsuleConfig`` for a GitHub repo.
+    generated ``SievioConfig`` for a GitHub repo.
 
     Args:
         url (str): GitHub repository URL.
         out_jsonl (str | Path): Path to the primary JSONL output.
         out_prompt (str | Path | None): Optional prompt file path.
-        base_config (RepocapsuleConfig | None): Optional base config to
+        base_config (SievioConfig | None): Optional base config to
             clone.
 
     Returns:
-        RepocapsuleConfig: Prepared configuration for the GitHub
+        SievioConfig: Prepared configuration for the GitHub
         repository.
     """
 
@@ -369,11 +369,11 @@ def make_local_profile(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
-) -> RepocapsuleConfig:
+    base_config: Optional[SievioConfig] = None,
+) -> SievioConfig:
     """Construct a local-directory profile config.
 
-    Clones or builds a base ``RepocapsuleConfig``, infers a
+    Clones or builds a base ``SievioConfig``, infers a
     ``RepoContext`` (including Git metadata when available), attempts to
     detect a license from the filesystem, and wires source/sink specs
     and metadata for a local directory run.
@@ -383,11 +383,11 @@ def make_local_profile(
             corpus to ingest.
         out_jsonl (str | Path): Path to the primary JSONL output.
         out_prompt (str | Path | None): Optional prompt file path.
-        base_config (RepocapsuleConfig | None): Optional config to
+        base_config (SievioConfig | None): Optional config to
             clone.
 
     Returns:
-        RepocapsuleConfig: Fully wired configuration for the local run.
+        SievioConfig: Fully wired configuration for the local run.
     """
     cfg = _clone_base_config(base_config)
     ctx = (
@@ -430,12 +430,12 @@ def make_github_profile(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[RepocapsuleConfig] = None,
+    base_config: Optional[SievioConfig] = None,
     repo_context: Optional[RepoContext] = None,
-) -> RepocapsuleConfig:
+) -> SievioConfig:
     """Construct a GitHub repository profile config.
 
-    Clones or builds a base ``RepocapsuleConfig``, constructs or
+    Clones or builds a base ``SievioConfig``, constructs or
     reuses a ``RepoContext`` for the GitHub repository (including
     detected SPDX license where possible), and wires source/sink specs
     and metadata for a GitHub zipball run.
@@ -444,13 +444,13 @@ def make_github_profile(
         url (str): GitHub repository URL.
         out_jsonl (str | Path): Path to the primary JSONL output.
         out_prompt (str | Path | None): Optional prompt file path.
-        base_config (RepocapsuleConfig | None): Optional base config to
+        base_config (SievioConfig | None): Optional base config to
             clone.
         repo_context (RepoContext | None): Optional pre-built context to
             seed the profile.
 
     Returns:
-        RepocapsuleConfig: Fully wired configuration for the GitHub run.
+        SievioConfig: Fully wired configuration for the GitHub run.
     """
     cfg = _clone_base_config(base_config)
     base_ctx = repo_context or cfg.sinks.context

@@ -1,10 +1,10 @@
 # __init__.py
 # SPDX-License-Identifier: MIT
 
-"""Top-level package exports for :mod:`repocapsule`.
+"""Top-level package exports for :mod:`sievio`.
 
 The names listed in :data:`PRIMARY_API` form the recommended, stable
-surface for most callers: configure a run via :class:`RepocapsuleConfig`
+surface for most callers: configure a run via :class:`SievioConfig`
 or a TOML/JSON file, invoke a runner such as :func:`convert_local_dir`
 / :func:`convert_github` or :func:`convert`, and consume records via the
 provided sinks.
@@ -18,14 +18,14 @@ these helpers.
 
 Quality control (inline or post-hoc) is configured via :class:`QCConfig`.
 When ``mode="post"``, :func:`run_engine` (from
-:mod:`repocapsule.cli.runner`) can rescore the primary JSONL after
+:mod:`sievio.cli.runner`) can rescore the primary JSONL after
 extraction, optionally using process-based parallel scoring and emitting
 QC CSV diagnostics.
 
 Examples:
     Minimal local directory run::
 
-        >>> from repocapsule import convert_local_dir
+        >>> from sievio import convert_local_dir
         >>> stats = convert_local_dir(
         ...     root_dir="path/to/repo",
         ...     out_jsonl="out/repo.jsonl",
@@ -33,7 +33,7 @@ Examples:
 
     Config-driven run::
 
-        >>> from repocapsule import load_config_from_path, convert
+        >>> from sievio import load_config_from_path, convert
         >>> cfg = load_config_from_path("example_config.toml")
         >>> stats = convert(cfg)
 
@@ -56,7 +56,7 @@ from __future__ import annotations
 try:
     from importlib.metadata import version as _pkg_version  # Py3.8+
 
-    __version__ = _pkg_version("repocapsule")
+    __version__ = _pkg_version("sievio")
 except Exception:  # PackageNotFoundError or any runtime env oddities
     __version__ = "0.0.0+unknown"
 
@@ -64,7 +64,7 @@ except Exception:  # PackageNotFoundError or any runtime env oddities
 # ---------------------------------------------------------------------------
 # Primary public API (stable)
 # ---------------------------------------------------------------------------
-from .core.config import RepocapsuleConfig, QCHeuristics, load_config_from_path
+from .core.config import SievioConfig, QCHeuristics, load_config_from_path
 from .core.records import (
     build_record,
     RecordMeta,
@@ -177,7 +177,7 @@ except Exception:  # pragma: no cover
 
 PRIMARY_API = [
     "__version__",
-    "RepocapsuleConfig",
+    "SievioConfig",
     "load_config_from_path",
     "PipelineOverrides",
     "LanguageConfig",

@@ -2,12 +2,12 @@ from pathlib import Path
 
 import pytest
 
-from repocapsule.core.config import RepocapsuleConfig, SinkSpec
-from repocapsule.core.sharding import generate_shard_configs
+from sievio.core.config import SievioConfig, SinkSpec
+from sievio.core.sharding import generate_shard_configs
 
 
 def test_web_pdf_list_strategy():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
     urls = ["https://example.com/a.pdf", "https://example.com/b.pdf"]
 
     shards = list(generate_shard_configs(urls, base, num_shards=1, source_kind="web_pdf_list"))
@@ -22,7 +22,7 @@ def test_web_pdf_list_strategy():
 
 
 def test_github_zip_scalar_strategy():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
     repos = ["repo1", "repo2"]
 
     shards = list(generate_shard_configs(repos, base, num_shards=1, source_kind="github_zip"))
@@ -35,7 +35,7 @@ def test_github_zip_scalar_strategy():
 
 
 def test_isolation_of_outputs():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
     base.sinks.output_dir = Path("out")
     base.sinks.jsonl_basename = "data"
 
@@ -48,7 +48,7 @@ def test_isolation_of_outputs():
 
 
 def test_sink_sanitization_clears_default_jsonl_prompt_paths():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
     base.sinks.specs = [SinkSpec(kind="default_jsonl_prompt", options={"jsonl_path": "x", "prompt_path": "y"})]
 
     shard_id, cfg = next(generate_shard_configs(["item"], base, num_shards=1, source_kind="github_zip"))
@@ -65,14 +65,14 @@ def test_sink_sanitization_clears_default_jsonl_prompt_paths():
 
 
 def test_unknown_source_kind_raises():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
 
     with pytest.raises(ValueError):
         list(generate_shard_configs(["input"], base, num_shards=1, source_kind="bogus"))
 
 
 def test_empty_shards_skipped():
-    base = RepocapsuleConfig()
+    base = SievioConfig()
 
     shards = list(generate_shard_configs(["a", "b"], base, num_shards=4, source_kind="github_zip"))
 

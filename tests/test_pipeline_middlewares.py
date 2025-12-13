@@ -1,14 +1,14 @@
 from pathlib import Path
 import json
 
-from repocapsule.core.builder import build_pipeline_plan, build_engine, PipelineOverrides
-from repocapsule.core.interfaces import RepoContext
-from repocapsule.core.pipeline import PipelineEngine, _FuncRecordMiddleware
-from repocapsule.core.config import RepocapsuleConfig, SourceSpec, SinkSpec
+from sievio.core.builder import build_pipeline_plan, build_engine, PipelineOverrides
+from sievio.core.interfaces import RepoContext
+from sievio.core.pipeline import PipelineEngine, _FuncRecordMiddleware
+from sievio.core.config import SievioConfig, SourceSpec, SinkSpec
 
 
 def _make_basic_plan(tmp_path: Path) -> PipelineEngine:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
     cfg.sinks.context = ctx
 
@@ -147,7 +147,7 @@ def test_sink_open_failure_increments_stats(tmp_path: Path):
 
 
 def test_pipeline_overrides_record_middlewares_wired_by_build_engine(tmp_path: Path):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
     cfg.sinks.context = ctx
 
@@ -184,7 +184,7 @@ def test_pipeline_overrides_record_middlewares_wired_by_build_engine(tmp_path: P
 
 
 def test_pipeline_overrides_file_middlewares_wired_by_build_engine(tmp_path: Path):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
     cfg.sinks.context = ctx
 

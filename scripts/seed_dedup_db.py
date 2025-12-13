@@ -19,8 +19,8 @@ from typing import Iterable, Iterator, Tuple
 # Allow running from a source checkout without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
-from repocapsule.core.dedup_store import GlobalDedupStore
-from repocapsule.core.qc_utils import minhash_signature_for_text, open_jsonl_maybe_gz
+from sievio.core.dedup_store import GlobalDedupStore
+from sievio.core.qc_utils import minhash_signature_for_text, open_jsonl_maybe_gz
 
 
 def _iter_signatures(paths: Iterable[str], *, k: int, n_perm: int) -> Iterator[Tuple[str, tuple[int, ...], str]]:

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 from urllib.parse import urlparse
 
-from .config import RepocapsuleConfig, FileProcessingConfig, DecodeConfig, ChunkConfig
+from .config import SievioConfig, FileProcessingConfig, DecodeConfig, ChunkConfig
 from .chunk import ChunkPolicy, iter_chunk_dicts
 from .decode import decode_bytes
 from .factories_sources import UnsupportedBinary
@@ -19,7 +19,7 @@ from .language_id import classify_path_kind
 from .log import get_logger
 from .records import build_record
 
-ConfigForRecords = RepocapsuleConfig | FileProcessingConfig
+ConfigForRecords = SievioConfig | FileProcessingConfig
 
 
 class _LimitedStream(io.BufferedReader):

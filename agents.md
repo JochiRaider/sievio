@@ -8,6 +8,8 @@ For deeper architecture and module-by-module descriptions, see `llms.md`.
 For the canonical file tree (what files and tests exist), see `project_files.md`.
 Use this `agents.md` as the primary rules and “how to work safely” guide.
 
+> Rename note: the project was formerly RepoCapsule. The package/imports/CLI are now `sievio`; no `repocapsule` compatibility layer remains. See `MIGRATION.md` if you encounter old references.
+
 ---
 
 ## 1. Setup & core commands
@@ -51,12 +53,12 @@ mypy --config-file pyproject.toml src
 
 ### Core vs non-core
 
-- **Core** (`src/repocapsule/core/`): config models, builder, pipeline engine, registries, QC, dataset cards, HTTP safety, logging, concurrency. Other code should **use these**, not reimplement them.
+- **Core** (`src/sievio/core/`): config models, builder, pipeline engine, registries, QC, dataset cards, HTTP safety, logging, concurrency. Other code should **use these**, not reimplement them.
 - **Non-core**:
-  - CLI and runner helpers: `src/repocapsule/cli/`
-  - Public package surface: `src/repocapsule/__init__.py`
-  - Source/sink implementations: `src/repocapsule/sources/`, `src/repocapsule/sinks/`
-  - Extras (optional modules): `src/repocapsule/core/extras/`
+  - CLI and runner helpers: `src/sievio/cli/`
+  - Public package surface: `src/sievio/__init__.py`
+  - Source/sink implementations: `src/sievio/sources/`, `src/sievio/sinks/`
+  - Extras (optional modules): `src/sievio/core/extras/`
   - Tests: `tests/`
 
 ### Golden "spine" modules
@@ -124,13 +126,13 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 
 ### 4.1 New source type
 
-1. Implement a `Source` under `src/repocapsule/sources/` (see `llms.md` §3.4).
+1. Implement a `Source` under `src/sievio/sources/` (see `llms.md` §3.4).
 2. Add a `SourceFactory` and register it with the source registry.
 3. Add or update config examples to show usage.
 
 ### 4.2 New sink or output format
 
-1. Implement a `Sink` under `src/repocapsule/sinks/` (see `llms.md` §3.5).
+1. Implement a `Sink` under `src/sievio/sinks/` (see `llms.md` §3.5).
 2. Add a `SinkFactory` and register it with the sink registry.
 3. Add or update config examples and docs.
 
@@ -155,8 +157,8 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 ### 4.6 Sharded runs / distributed execution
 
 1. Show agents the sharding/stats helpers: `core/sharding.py`, `core/stats_aggregate.py`, configs in `core/config.py`, pipeline wiring in `core/pipeline.py`, QC summaries in `core/qc_controller.py`.
-2. Ask the agent to generate shard configs via the CLI (`repocapsule shard ...`) or by calling `generate_shard_configs`.
-3. After shards finish, merge stats JSON files with `repocapsule merge-stats` or `merge_pipeline_stats([...])`; combine JSONL/prompt outputs with `cat`/`zcat` or downstream tooling.
+2. Ask the agent to generate shard configs via the CLI (`sievio shard ...`) or by calling `generate_shard_configs`.
+3. After shards finish, merge stats JSON files with `sievio merge-stats` or `merge_pipeline_stats([...])`; combine JSONL/prompt outputs with `cat`/`zcat` or downstream tooling.
 
 ---
 

@@ -1,7 +1,7 @@
 # pdfio.py
 # SPDX-License-Identifier: MIT
 
-"""PDF helpers for sniffing, parsing, and emitting RepoCapsule records."""
+"""PDF helpers for sniffing, parsing, and emitting Sievio records."""
 
 from __future__ import annotations
 from io import BytesIO
@@ -157,7 +157,7 @@ def extract_pdf_records(
     password: Optional[str] = None,
     mode: str = "page",  # "page" => 1 record per page; "chunk" => join+chunk
 ) -> List[Dict[str, object]]:
-    """Converts PDF bytes into RepoCapsule JSONL records with metadata.
+    """Converts PDF bytes into Sievio JSONL records with metadata.
 
     This routine is CPU-bound (pypdf parsing, text extraction, and
     chunking). For large batches, configure the pipeline to use process

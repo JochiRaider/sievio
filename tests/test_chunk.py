@@ -1,5 +1,5 @@
-import repocapsule.core.chunk as chunk_module
-from repocapsule.core.chunk import ChunkPolicy, count_tokens, iter_chunk_dicts
+import sievio.core.chunk as chunk_module
+from sievio.core.chunk import ChunkPolicy, count_tokens, iter_chunk_dicts
 
 
 def test_iter_chunk_dicts_code_single_chunk() -> None:

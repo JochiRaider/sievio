@@ -3,7 +3,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from repocapsule.sources.sqlite_source import SQLiteSource
+from sievio.sources.sqlite_source import SQLiteSource
 
 
 class SQLiteSourceSecurityTest(unittest.TestCase):

@@ -3,8 +3,8 @@ import time
 
 import pytest
 
-from repocapsule.core.config import RepocapsuleConfig
-from repocapsule.core.concurrency import Executor, ExecutorConfig, infer_executor_kind, process_items_parallel
+from sievio.core.config import SievioConfig
+from sievio.core.concurrency import Executor, ExecutorConfig, infer_executor_kind, process_items_parallel
 
 
 def _process_one_echo(item):
@@ -182,7 +182,7 @@ def test_infer_executor_respects_attributes():
 
     dummy_heavy_handler.cpu_intensive = True
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.bytes_handlers = [(None, dummy_heavy_handler)]
 
     kind = infer_executor_kind(cfg)

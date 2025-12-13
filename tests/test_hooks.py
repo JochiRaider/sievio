@@ -3,14 +3,14 @@ from typing import Any, Iterable, Mapping
 
 import pytest
 
-from repocapsule.core.dataset_card import DatasetCardHook
-from repocapsule.core.interfaces import RunArtifacts, RunContext
-from repocapsule.core.pipeline import PipelineStats
-from repocapsule.core.config import RepocapsuleConfig, QCConfig
-from repocapsule.core.qc_controller import InlineQCHook, QCSummaryTracker
-from repocapsule.core.qc_post import PostQCHook
-from repocapsule.core.records import RunSummaryMeta
-from repocapsule.core.hooks import RunSummaryHook
+from sievio.core.dataset_card import DatasetCardHook
+from sievio.core.interfaces import RunArtifacts, RunContext
+from sievio.core.pipeline import PipelineStats
+from sievio.core.config import SievioConfig, QCConfig
+from sievio.core.qc_controller import InlineQCHook, QCSummaryTracker
+from sievio.core.qc_post import PostQCHook
+from sievio.core.records import RunSummaryMeta
+from sievio.core.hooks import RunSummaryHook
 
 
 class DummySink:
@@ -47,7 +47,7 @@ def _make_runtime(**kwargs: Any) -> Any:
 
 
 def test_run_summary_hook_dispatches_artifacts() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     stats = PipelineStats()
     sink = DummySink()
     inline_hook = InlineStub()
@@ -71,7 +71,7 @@ def test_run_summary_hook_dispatches_artifacts() -> None:
 
 def test_dataset_card_hook_uses_artifacts(monkeypatch: pytest.MonkeyPatch) -> None:
     hook = DatasetCardHook(enabled=True)
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     stats = PipelineStats(records=3, primary_jsonl_path="data.jsonl")
     summary_view = stats.to_summary_view()
     artifacts = RunArtifacts(summary_record={"meta": RunSummaryMeta().to_dict()}, summary_view=summary_view)
@@ -80,11 +80,11 @@ def test_dataset_card_hook_uses_artifacts(monkeypatch: pytest.MonkeyPatch) -> No
 
     called: dict[str, Any] = {}
 
-    def _capture(cfg_arg: RepocapsuleConfig, view_arg: Any) -> None:
+    def _capture(cfg_arg: SievioConfig, view_arg: Any) -> None:
         called["cfg"] = cfg_arg
         called["view"] = view_arg
 
-    monkeypatch.setattr("repocapsule.core.dataset_card.write_card_fragment_for_run", _capture)
+    monkeypatch.setattr("sievio.core.dataset_card.write_card_fragment_for_run", _capture)
 
     hook.on_artifacts(artifacts, ctx)
 
@@ -93,7 +93,7 @@ def test_dataset_card_hook_uses_artifacts(monkeypatch: pytest.MonkeyPatch) -> No
 
 
 def test_summary_view_primary_jsonl_path_matches_config() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.primary_jsonl = "meta.jsonl"
     stats = PipelineStats(primary_jsonl_path=cfg.metadata.primary_jsonl)
     view_from_metadata = stats.to_summary_view()
@@ -106,7 +106,7 @@ def test_summary_view_primary_jsonl_path_matches_config() -> None:
 
 
 def test_all_hooks_expose_lifecycle_methods() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     stats = PipelineStats()
     dummy_scorer = object()
     hooks = [

@@ -10,7 +10,7 @@ from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callabl
 from pathlib import Path
 import pickle
 
-from .config import RepocapsuleConfig, FileProcessingConfig
+from .config import SievioConfig, FileProcessingConfig
 from .builder import PipelinePlan, PipelineOverrides, PipelineRuntime, build_pipeline_plan, build_engine
 from .interfaces import (
     Source,
@@ -254,11 +254,11 @@ def _ext_key(path: str) -> str:
         return ""
 
 
-def _build_file_processing_config(cfg: RepocapsuleConfig, runtime: PipelineRuntime) -> FileProcessingConfig:
+def _build_file_processing_config(cfg: SievioConfig, runtime: PipelineRuntime) -> FileProcessingConfig:
     """Create per-file configuration for worker processes.
 
     Args:
-        cfg (RepocapsuleConfig): Base configuration.
+        cfg (SievioConfig): Base configuration.
         runtime (PipelineRuntime): Runtime-specific overrides.
 
     Returns:
@@ -791,11 +791,11 @@ class PipelineEngine:
 # Public API
 # ---------------------------------------------------------------------------
 
-def run_pipeline(*, config: RepocapsuleConfig, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
+def run_pipeline(*, config: SievioConfig, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
     """Run the end-to-end pipeline described by config.
 
     Args:
-        config (RepocapsuleConfig): Pipeline configuration object.
+        config (SievioConfig): Pipeline configuration object.
         overrides (PipelineOverrides | None): Optional runtime overrides
             merged into the plan and engine.
 

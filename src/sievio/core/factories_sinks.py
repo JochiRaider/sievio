@@ -321,7 +321,7 @@ class ParquetDatasetSinkFactory(SinkFactory):
             from ..sinks.parquet import ParquetDatasetSink  # noqa: F401
         except ModuleNotFoundError as exc:
             raise RuntimeError(
-                "Parquet sink requires the 'parquet' extra (install repocapsule[parquet])."
+                "Parquet sink requires the 'parquet' extra (install sievio[parquet])."
             ) from exc
         except Exception as exc:  # pragma: no cover - defensive guard
             raise RuntimeError(f"Parquet sink could not be constructed: {exc}") from exc

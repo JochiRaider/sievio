@@ -1,5 +1,5 @@
-from repocapsule.core.language_id import LanguageConfig
-from repocapsule.core.records import build_record
+from sievio.core.language_id import LanguageConfig
+from sievio.core.records import build_record
 
 
 def test_default_language_display_names():

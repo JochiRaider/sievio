@@ -18,19 +18,19 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from pathlib import Path
 
-from repocapsule import RepocapsuleConfig, convert_github, configure_logging
-from repocapsule.core.config import DEFAULT_QC_SCORER_ID
-from repocapsule.cli.runner import default_paths_for_github
+from sievio import SievioConfig, convert_github, configure_logging
+from sievio.core.config import DEFAULT_QC_SCORER_ID
+from sievio.cli.runner import default_paths_for_github
 
 
-# Default repo to try; override with REPOCAPSULE_GH_URL env var.
+# Default repo to try; override with SIEVIO_GH_URL env var.
 REPO_URL = "https://github.com/JochiRaider/URL_Research_Tool"
 OUT_DIR = Path(__file__).resolve().parents[1] / "out" / "min_test"
 
 
-def build_config() -> RepocapsuleConfig:
+def build_config() -> SievioConfig:
     """Return a minimally tweaked config suitable for smoke testing."""
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.sinks.prompt.include_prompt_file = True
     cfg.qc.enabled = True
     cfg.qc.mode = cfg.qc.normalize_mode()  # keep default inline gating

@@ -1,6 +1,6 @@
 import pytest
 
-from repocapsule.core.qc_utils import SimHashWindowIndex, hamming
+from sievio.core.qc_utils import SimHashWindowIndex, hamming
 
 
 def test_simhash_index_basic():

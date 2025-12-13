@@ -3,18 +3,18 @@ from pathlib import Path
 
 import pytest
 
-from repocapsule.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
-from repocapsule.core.extras.qc import DefaultQualityScorerFactory, JSONLQualityScorer
-from repocapsule.cli import runner
-from repocapsule.core import builder
-from repocapsule.core.builder import build_pipeline_plan
-from repocapsule.core.config import RepocapsuleConfig, SinkSpec, SourceSpec
-from repocapsule.core.interfaces import RepoContext
-from repocapsule.core.pipeline import PipelineEngine
+from sievio.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
+from sievio.core.extras.qc import DefaultQualityScorerFactory, JSONLQualityScorer
+from sievio.cli import runner
+from sievio.core import builder
+from sievio.core.builder import build_pipeline_plan
+from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
+from sievio.core.interfaces import RepoContext
+from sievio.core.pipeline import PipelineEngine
 
 
-def _make_basic_config(tmp_path: Path) -> RepocapsuleConfig:
-    cfg = RepocapsuleConfig()
+def _make_basic_config(tmp_path: Path) -> SievioConfig:
+    cfg = SievioConfig()
     ctx = RepoContext(
         repo_full_name="local/test",
         repo_url="https://example.com/local",

@@ -1,20 +1,20 @@
 from pathlib import Path
 
-from repocapsule.core.chunk import ChunkPolicy
-from repocapsule.core.config import RepocapsuleConfig
-from repocapsule.core.convert import (
+from sievio.core.chunk import ChunkPolicy
+from sievio.core.config import SievioConfig
+from sievio.core.convert import (
     _build_record_context,
     build_records_from_bytes,
     iter_records_from_bytes,
     iter_records_from_file_item,
     list_records_for_file,
 )
-from repocapsule.core.factories_sources import UnsupportedBinary
-from repocapsule.core.interfaces import FileItem, RepoContext
+from sievio.core.factories_sources import UnsupportedBinary
+from sievio.core.interfaces import FileItem, RepoContext
 
 
 def test_list_records_for_file_basic() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(repo_full_name="owner/repo", repo_url="https://github.com/owner/repo", license_id="MIT")
     text = "Line1\nLine2\nLine3"
     file_bytes = len(text.encode("utf-8"))
@@ -43,7 +43,7 @@ def test_list_records_for_file_basic() -> None:
 
 
 def test_iter_records_from_bytes_respects_max_bytes_and_source() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.decode.max_bytes_per_file = 50
     ctx = RepoContext(repo_full_name="owner/repo", repo_url="https://github.com/owner/repo", license_id="MIT")
     text = "A" * 1_000
@@ -74,7 +74,7 @@ def test_iter_records_from_bytes_respects_max_bytes_and_source() -> None:
 
 
 def test_build_records_from_bytes_allows_custom_handler() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext()
     record_ctx = _build_record_context(cfg, ctx)
     sentinel = {"text": "SENTINEL", "meta": {"custom": True}}
@@ -101,7 +101,7 @@ def test_build_records_from_bytes_allows_custom_handler() -> None:
 
 
 def test_build_records_from_bytes_handler_raises_falls_back() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext()
     record_ctx = _build_record_context(cfg, ctx)
     text = "Hello from bytes"
@@ -148,7 +148,7 @@ def test_iter_records_from_file_item_uses_streaming_extractor_when_available(tmp
         origin_path=str(file_path),
         streamable=True,
     )
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     streaming = DummyStreamingExtractor()
 
     records = list(

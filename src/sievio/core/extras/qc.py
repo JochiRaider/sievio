@@ -17,7 +17,7 @@ from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Mapping
 
 from ..log import get_logger
-from ..config import QCConfig, QCHeuristics, DEFAULT_QC_SCORER_ID, RepocapsuleConfig, QCMode
+from ..config import QCConfig, QCHeuristics, DEFAULT_QC_SCORER_ID, SievioConfig, QCMode
 from ..qc_controller import QCSummaryTracker
 from ..qc_post import collect_qc_rows_from_jsonl, run_qc_over_jsonl
 from ..dedup_store import GlobalDedupStore
@@ -419,7 +419,7 @@ class JSONLQualityScorer:
             mode=QCMode.POST,
         )
         qc_cfg.fail_on_error = bool(fail_on_error)
-        config: RepocapsuleConfig = kwargs.pop("config", None) or RepocapsuleConfig(qc=qc_cfg)
+        config: SievioConfig = kwargs.pop("config", None) or SievioConfig(qc=qc_cfg)
         tracker = QCSummaryTracker(
             enabled=True,
             mode=qc_cfg.mode,
@@ -545,7 +545,7 @@ def score_jsonl_to_csv(
         mode=QCMode.POST,
         fail_on_error=False,
     )
-    config = RepocapsuleConfig(qc=qc_cfg)
+    config = SievioConfig(qc=qc_cfg)
     scorer = JSONLQualityScorer(
         lm_model_id=lm_model_id,
         device=device,
@@ -633,5 +633,5 @@ except Exception:
 def main(argv: Optional[Sequence[str]] = None) -> int:
     """Deprecated console entry point; use the library API instead."""
     raise SystemExit(
-        "repocapsule.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."
+        "sievio.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."
     )

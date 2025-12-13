@@ -21,7 +21,7 @@ __all__ = [
     "temp_level",
 ]
 
-PACKAGE_LOGGER_NAME = "repocapsule"
+PACKAGE_LOGGER_NAME = "sievio"
 
 # Install a NullHandler on the package logger so importing libraries
 # don't emit warnings if the application hasn't configured logging.
@@ -29,7 +29,7 @@ logging.getLogger(PACKAGE_LOGGER_NAME).addHandler(logging.NullHandler())
 
 
 def get_logger(name: Optional[str] = None) -> logging.Logger:
-    """Return a named logger scoped to repocapsule.
+    """Return a named logger scoped to sievio.
 
     Args:
         name (str | None): Fully qualified logger name. Defaults to the
@@ -50,7 +50,7 @@ def configure_logging(
     propagate: bool = False,
     logger_name: str = PACKAGE_LOGGER_NAME,
 ) -> logging.Logger:
-    """Configure a stream handler for a repocapsule logger.
+    """Configure a stream handler for a sievio logger.
 
     Args:
         level (int | str): Logging level or level name. Defaults to

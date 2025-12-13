@@ -1,13 +1,13 @@
 import json
 from pathlib import Path
 
-from repocapsule.cli.main import main
-from repocapsule.core.config import RepocapsuleConfig, SinkSpec, SourceSpec
-from repocapsule.core.interfaces import RepoContext
+from sievio.cli.main import main
+from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
+from sievio.core.interfaces import RepoContext
 
 
 def _make_config_file(tmp_path: Path) -> tuple[Path, Path, Path]:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
     cfg.sinks.context = ctx
 

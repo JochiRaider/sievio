@@ -1,6 +1,6 @@
 import pytest
 
-from repocapsule.core.stats_aggregate import merge_pipeline_stats
+from sievio.core.stats_aggregate import merge_pipeline_stats
 
 
 def test_merge_pipeline_stats_sums_top_level_counts():

@@ -12,6 +12,7 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 ├── .gitignore
 ├── LICENSE
 ├── README.md
+├── MIGRATION.md
 ├── agents.md
 ├── core_upload.md
 ├── example_config.toml
@@ -26,7 +27,7 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 │   ├── manual_test_web_pdf.py
 │   └── seed_dedup_db.py
 ├── src
-│   ├── repocapsule
+│   ├── sievio
 │   │   ├── __init__.py
 │   │   ├── cli
 │   │   │   ├── __init__.py
@@ -85,13 +86,6 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 │   │       ├── pdfio.py
 │   │       ├── sources_webpdf.py
 │   │       └── sqlite_source.py
-│   └── repocapsule.egg-info
-│       ├── PKG-INFO
-│       ├── SOURCES.txt
-│       ├── dependency_links.txt
-│       ├── entry_points.txt
-│       ├── requires.txt
-│       └── top_level.txt
 └── tests
     ├── conftest.py
     ├── test_builder_runtime_layering.py

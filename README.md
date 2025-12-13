@@ -1,18 +1,20 @@
-# RepoCapsule
+# Sievio
 Library-first, config-driven pipeline that turns repositories, logs, and other text/structured sources into normalized JSONL and Parquet datasets for LLM fine-tuning and analysis.
 
-Define a pipeline once in Python or TOML (`RepocapsuleConfig`), run it via a small set of helpers (`convert_local_dir`, `convert_github`, `convert`), and get a stable record schema and dataset card fragments. Requires Python 3.11+. Specs are strictly declarative; all runtime objects (clients, sources/sinks, extractors/handlers, scorers, language detectors, lifecycle hooks) live in `PipelineRuntime` and are injected via registries or `PipelineOverrides`.
+Define a pipeline once in Python or TOML (`SievioConfig`), run it via a small set of helpers (`convert_local_dir`, `convert_github`, `convert`), and get a stable record schema and dataset card fragments. Requires Python 3.11+. Specs are strictly declarative; all runtime objects (clients, sources/sinks, extractors/handlers, scorers, language detectors, lifecycle hooks) live in `PipelineRuntime` and are injected via registries or `PipelineOverrides`.
+
+> Sievio was formerly RepoCapsule. See `MIGRATION.md` for rename guidance.
 
 ## Key features
-- **Sources (ingest):** Local directories, GitHub zipballs, web PDFs (page scrape or URL list), CSV/TSV, and SQLite tables/queries. Optional bytes handlers (PDF/EVTX/Parquet) activate when extras are installed. All are configured via `SourceConfig` and declarative `[[sources.specs]]` entries (see `core/config.py` and `example_config.toml`), and implemented under `src/repocapsule/sources`.
+- **Sources (ingest):** Local directories, GitHub zipballs, web PDFs (page scrape or URL list), CSV/TSV, and SQLite tables/queries. Optional bytes handlers (PDF/EVTX/Parquet) activate when extras are installed. All are configured via `SourceConfig` and declarative `[[sources.specs]]` entries (see `core/config.py` and `example_config.toml`), and implemented under `src/sievio/sources`.
 - **Processing (decode → chunk → extract → records):** Safe decoding with Unicode normalization and mojibake repair (`core/decode.py`), document/code-aware chunking with token targets and overlap (`ChunkPolicy` in `core/chunk.py`), optional extractors (e.g., Markdown→KQL in `core/extras/md_kql.py`), and record-building in `core/convert.py` / `core/records.py`. Repo-level metadata flows via `RepoContext` and `RunMetadata`.
 - **Language identification:** Single source of truth in `core/language_id.py` for extension maps, doc-format hints, content-type tags, and detectors. Baseline filename/shebang heuristics are always available; optional backends (`lingua`, `pygments`) activate via extras and are wired into the pipeline to tag `meta["language"]` (human) and `meta["lang"]` (code/doc type).
 - **Schema version visibility:** Records carry `meta["schema_version"]`; ingestion paths (JSONL source, post-QC scorer) log a warning if a file was produced by a newer library version so forward-compatibility issues are visible.
-- **Sinks (outputs):** JSONL (plain or gzipped) plus grouped prompt-text, and a Parquet dataset sink (via the `[parquet]` extra) implemented in `src/repocapsule/sinks`. Sinks are configured through `SinkConfig` and `[[sinks.specs]]` (e.g., `default_jsonl_prompt`, `parquet_dataset`) and can participate in run finalization.
+- **Sinks (outputs):** JSONL (plain or gzipped) plus grouped prompt-text, and a Parquet dataset sink (via the `[parquet]` extra) implemented in `src/sievio/sinks`. Sinks are configured through `SinkConfig` and `[[sinks.specs]]` (e.g., `default_jsonl_prompt`, `parquet_dataset`) and can participate in run finalization.
 - **Screening layer (quality + safety):** Inline/advisory/post quality modes (`QCConfig` / `QCMode` in `core/config.py`) with heuristics, near-duplicate detection, CSV export, and customizable scorers (`QualityScorer` in `core/interfaces.py`, implemented in `core/extras/qc.py`). Safety is a separate screener (`SafetyConfig`) that can run inline or advisory alongside QC. The default quality scorer is registered via `QualityScorerRegistry` under `DEFAULT_QC_SCORER_ID` (`jsonl_default`); screening uses utilities from `core/qc_utils.py` and lifecycle hooks in `core/qc_controller.py` (`InlineQCHook`) and `core/qc_post.py` (`PostQCHook`). In POST mode, quality gates only in the post-hoc pass; safety is inline/advisory only.
 - **Lifecycle hooks:** Run-level callbacks (`RunLifecycleHook` / `RunContext`) invoked at start, per-record, and end of every run. Hooks drive QC, run-summary records, and dataset-card fragments (`PipelineRuntime.lifecycle_hooks` assembled by the builder).
 - **Dataset cards:** Each run can emit Hugging Face–style dataset-card fragments (`*.card.json`) alongside the primary JSONL, then merge them into a final Markdown card using helpers in `dataset_card.py` controlled by `[dataset_card]` in the config.
-- **Extensibility:** Registries (`core/registries.py`) and entry-point plugins (`repocapsule.plugins` via `core/plugins.py`) allow new sources, sinks, bytes handlers, and QC scorers to be registered without modifying the core pipeline. New features should plug into the registries and builder, not bypass them.
+- **Extensibility:** Registries (`core/registries.py`) and entry-point plugins (`sievio.plugins` via `core/plugins.py`) allow new sources, sinks, bytes handlers, and QC scorers to be registered without modifying the core pipeline. New features should plug into the registries and builder, not bypass them.
 
 ### Core factories split
 - `core/factories.py` – Facade re-exporting all factory helpers for sinks, sources, QC, and context.
@@ -24,15 +26,15 @@ Define a pipeline once in Python or TOML (`RepocapsuleConfig`), run it via a sma
 ## Installation
 From PyPI (when published):
 ```sh
-pip install repocapsule
+pip install sievio
 ```
 Optional extras (see `pyproject.toml`):
-- `pip install "repocapsule[tok]"` – exact token counts via tiktoken.
-- `pip install "repocapsule[pdf]"` – PDF ingestion/handling.
-- `pip install "repocapsule[evtx]"` – Windows EVTX ingestion.
-- `pip install "repocapsule[parquet]"` – Parquet sink and Parquet-as-source handler.
-- `pip install "repocapsule[qc]"` – QC scorer (Torch/Transformers/tiktoken/pyyaml).
-- `pip install "repocapsule[langid]"` – optional language detectors (Lingua for human language, Pygments for code).
+- `pip install "sievio[tok]"` – exact token counts via tiktoken.
+- `pip install "sievio[pdf]"` – PDF ingestion/handling.
+- `pip install "sievio[evtx]"` – Windows EVTX ingestion.
+- `pip install "sievio[parquet]"` – Parquet sink and Parquet-as-source handler.
+- `pip install "sievio[qc]"` – QC scorer (Torch/Transformers/tiktoken/pyyaml).
+- `pip install "sievio[langid]"` – optional language detectors (Lingua for human language, Pygments for code).
 
 Development install from a clone:
 ```sh
@@ -42,7 +44,7 @@ pip install -e ".[dev,tok,pdf,evtx,parquet,qc]"
 ## Quickstart (library)
 Minimal local directory → JSONL (with optional prompt text and a dataset-card fragment):
 ```python
-from repocapsule import convert_local_dir
+from sievio import convert_local_dir
 
 stats = convert_local_dir(
     root_dir="path/to/repo",
@@ -55,7 +57,7 @@ This writes a JSONL file plus an optional prompt-text file, and (with default se
 
 GitHub repo → JSONL:
 ```python
-from repocapsule import convert_github
+from sievio import convert_github
 
 stats = convert_github(
     url="https://github.com/owner/repo",
@@ -67,7 +69,7 @@ The helper infers repo metadata (owner/repo, default branch, license where possi
 
 TOML-driven run:
 ```python
-from repocapsule import load_config_from_path, convert
+from sievio import load_config_from_path, convert
 
 cfg = load_config_from_path("example_config.toml")
 stats = convert(cfg)
@@ -75,32 +77,32 @@ stats = convert(cfg)
 `convert(...)` also accepts an already-built `PipelineEngine` if you need to reuse runtime wiring. In all cases the return value is a `dict` derived from `PipelineStats.as_dict()` (files/bytes/records, per-extension counts, screening summary).
 
 ## CLI
-Installable entry point: `repocapsule` (also aliased as `repocapsule-qc`).
+Installable entry point: `sievio` (also aliased as `sievio-qc`).
 
-- `repocapsule run -c config.toml [--override-max-workers N] [--override-executor-kind auto|thread|process] [--dry-run]` – load TOML/JSON config, optionally print the effective config (dry-run) or run and emit stats as JSON.
-- `repocapsule local ROOT_DIR OUT.jsonl [--prompt OUT.prompt] [--base-config CONFIG]` – quick local-dir conversion using optional base config overrides.
-- `repocapsule github URL OUT.jsonl [--prompt OUT.prompt] [--base-config CONFIG]` – GitHub wrapper that builds RepoContext from the URL.
-- `repocapsule card --fragments \"out/*.card.json\" --output README.md` – merge dataset-card fragments into a single README-style card.
-- `repocapsule qc INPUT.jsonl [--csv OUT.csv] [--parallel] [--config CONFIG]` – post-hoc QC scoring of an existing JSONL; requires QC extras.
+- `sievio run -c config.toml [--override-max-workers N] [--override-executor-kind auto|thread|process] [--dry-run]` – load TOML/JSON config, optionally print the effective config (dry-run) or run and emit stats as JSON.
+- `sievio local ROOT_DIR OUT.jsonl [--prompt OUT.prompt] [--base-config CONFIG]` – quick local-dir conversion using optional base config overrides.
+- `sievio github URL OUT.jsonl [--prompt OUT.prompt] [--base-config CONFIG]` – GitHub wrapper that builds RepoContext from the URL.
+- `sievio card --fragments \"out/*.card.json\" --output README.md` – merge dataset-card fragments into a single README-style card.
+- `sievio qc INPUT.jsonl [--csv OUT.csv] [--parallel] [--config CONFIG]` – post-hoc QC scoring of an existing JSONL; requires QC extras.
 
 ### Distributed execution / sharded runs
 End-to-end split-and-run workflow for distributed launches:
 
 1. Generate sharded configs:
    ```bash
-   repocapsule shard \
+   sievio shard \
      --targets targets.txt \
      --base config.toml \
      --shards 16 \
      --out-dir shards/ \
      --kind web_pdf_list
    ```
-2. Run each shard independently (Slurm/K8s array jobs or `parallel 'repocapsule run -c {}' ::: shards/*.json`), writing stats next to outputs.
+2. Run each shard independently (Slurm/K8s array jobs or `parallel 'sievio run -c {}' ::: shards/*.json`), writing stats next to outputs.
 3. Aggregate stats:
    ```bash
-   repocapsule merge-stats shards/*/stats.json > merged_stats.json
+   sievio merge-stats shards/*/stats.json > merged_stats.json
    ```
-4. Merge artifacts: `cat`/`zcat` JSONL shards, and combine dataset-card fragments via the existing `repocapsule card` command or custom tooling.
+4. Merge artifacts: `cat`/`zcat` JSONL shards, and combine dataset-card fragments via the existing `sievio card` command or custom tooling.
 
 **Caveats / limitations**
 - Aggregated stats are counts-only; QC signal means/stdevs are intentionally cleared.
@@ -109,8 +111,8 @@ End-to-end split-and-run workflow for distributed launches:
 Library helpers for this flow live in `core/sharding.py` and `core/stats_aggregate.py`.
 
 ## Concepts & architecture
-### Configuration (`RepocapsuleConfig`)
-`RepocapsuleConfig` in `core/config.py` is the single source of truth for how a run is wired. Its major sections map directly to the TOML layout:
+### Configuration (`SievioConfig`)
+`SievioConfig` in `core/config.py` is the single source of truth for how a run is wired. Its major sections map directly to the TOML layout:
 - `sources`: defaults (`[sources.local]`, `[sources.github]`, `[sources.pdf]`, `[sources.csv]`, `[sources.sqlite]`) plus per-kind defaults (`[sources.defaults.<kind>]` such as `github_zip`, `web_pdf_list`, `web_page_pdf`, `csv_text`, `sqlite`, `local_dir`) and declarative `[[sources.specs]]` entries (e.g., `local_dir`, `github_zip`, `web_pdf_list`, `web_page_pdf`, `csv_text`, `sqlite`).
 - `decode`: Unicode normalization, control stripping, mojibake repair, and optional per-file byte caps (`DecodeConfig`).
 - `chunk`: tokenizer selection (`tokenizer_name`), language metadata attachment, and the `ChunkPolicy` used for chunk sizes/overlap/semantic splitting.
@@ -123,7 +125,7 @@ Library helpers for this flow live in `core/sharding.py` and `core/stats_aggrega
 - `logging`: `LoggingConfig` for level/propagate/format/logger_name, applied before pipelines are built.
 - `metadata`: `RunMetadata` (primary JSONL, prompt path, repo URL, arbitrary `extra` fields) stored in run summaries and dataset-card fragments.
 - `dataset_card`: `DatasetCardConfig` describing split name, license, task categories/ids, tags, and the enable flag.
-Configs are composable in Python or loaded from TOML (`load_config_from_path`, `RepocapsuleConfig.from_toml`). `example_config.toml` is the canonical reference for all fields.
+Configs are composable in Python or loaded from TOML (`load_config_from_path`, `SievioConfig.from_toml`). `example_config.toml` is the canonical reference for all fields.
 
 ### Sources
 In plain language, a `Source` enumerates files or rows and yields `FileItem` objects (repository-relative `path`, raw `data` bytes, `size`, `origin_path`, and a `streamable` hint). Built-ins (wired via `SourceRegistry` in `core/registries.py` and source factories in `core/factories_sources.py`, re-exported from `core/factories.py`) include:
@@ -136,7 +138,7 @@ Optional bytes handlers (via `BytesHandlerRegistry` and plugins) cover PDF (`sou
 
 Built-in source specs validate option keys: `local_dir`, `github_zip`, `web_pdf_list`, `web_page_pdf`, `csv_text`, and `sqlite` will raise `ValueError` when a per-spec option is unknown (catching typos like `include_ext` vs `include_exts` early).
 
-Declarative `[[sources.specs]]` blocks in TOML map directly to these kinds and are expanded by `default_source_registry()`. To add a new source, implement the `Source` protocol, create a `SourceFactory` that knows how to turn a `SourceSpec` into one or more concrete sources, register it in a registry (either by calling `default_source_registry().register(...)` in core code or via a `repocapsule.plugins` entry point), and wire it through `sources.specs`.
+Declarative `[[sources.specs]]` blocks in TOML map directly to these kinds and are expanded by `default_source_registry()`. To add a new source, implement the `Source` protocol, create a `SourceFactory` that knows how to turn a `SourceSpec` into one or more concrete sources, register it in a registry (either by calling `default_source_registry().register(...)` in core code or via a `sievio.plugins` entry point), and wire it through `sources.specs`.
 
 ### Decode & chunk
 The decode step takes `FileItem.data` bytes and turns them into normalized text. `DecodeConfig` controls Unicode normalization, newline normalization, stripping of unsafe control characters, mojibake repair, and optional soft caps on bytes passed to the decoder. The logic lives in `core/decode.py` (`decode_bytes` / `read_text`).
@@ -171,7 +173,7 @@ Records are plain dicts with a `"text"` field and a `"meta"` mapping built by `b
 ### Runtime overrides (advanced)
 Declarative configs stay “pure data”: `_assert_runtime_free_spec` rejects baked-in runtime objects like HTTP clients, sources/sinks, extractors/handlers, or scorers. Programmatic callers can supply those via `PipelineOverrides` instead; the builder stashes them on `PipelineRuntime` while keeping the spec immutable:
 ```python
-from repocapsule import PipelineOverrides, convert
+from sievio import PipelineOverrides, convert
 
 overrides = PipelineOverrides(
     http_client=my_safe_client,
@@ -182,11 +184,11 @@ overrides = PipelineOverrides(
 stats = convert(cfg, overrides=overrides)
 # stats -> {'files': 1, 'records': 1, 'qc': {'enabled': True, 'mode': 'inline', 'scored': 1, 'kept': 1, ...}, ...}
 ```
-Each override is optional; when provided, it bypasses registry-based wiring for that component while leaving the TOML/`RepocapsuleConfig` spec unchanged.
+Each override is optional; when provided, it bypasses registry-based wiring for that component while leaving the TOML/`SievioConfig` spec unchanged.
 
 For plan-based helpers that need runtime wiring (bytes handlers, extractors), use the plan-aware API:
 ```python
-from repocapsule import iter_records_from_bytes_with_plan
+from sievio import iter_records_from_bytes_with_plan
 records = list(iter_records_from_bytes_with_plan(data, rel_path="foo.bin", plan=plan, context=ctx))
 ```
 
@@ -202,7 +204,7 @@ records = list(iter_records_from_bytes_with_plan(data, rel_path="foo.bin", plan=
 `SafeHttpClient` (`core/safe_http.py`) is the hardened HTTP client used by GitHub/PDF/SQLite download helpers: DNS resolution with private/loopback blocking, redirect whitelisting (`allowed_redirect_suffixes`), and timeout/redirect limits. `HttpConfig.build_client()` builds/reuses the client and can optionally install it as a global for simple scripts; library code should prefer explicit clients.
 
 ### Plugin system
-`core/plugins.py` loads entry points under the `repocapsule.plugins` group. A plugin receives `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`, and `QualityScorerRegistry` instances and can register new kinds (sources/sinks/bytes handlers/QC scorers). Plugins are loaded automatically by `build_pipeline_plan(load_plugins=True)`.
+`core/plugins.py` loads entry points under the `sievio.plugins` group. A plugin receives `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`, and `QualityScorerRegistry` instances and can register new kinds (sources/sinks/bytes handlers/QC scorers). Plugins are loaded automatically by `build_pipeline_plan(load_plugins=True)`.
 
 ## Quality control (QC)
 - `QCConfig` (`core/config.py`) controls whether QC is enabled, the mode (`inline`, `advisory`, `post`, `off` via `QCMode`), score thresholds (`min_score`), near-duplicate handling (`drop_near_dups`), error behavior (`fail_on_error`), CSV emission (`write_csv`, `csv_suffix`), per-record signals sidecars (`write_signals_sidecar`, `signals_suffix`, `signals_format`=`csv|parquet`), and post-QC concurrency overrides (`parallel_post`, `post_executor_kind`, `post_max_workers`, `post_submit_window`). `QCHeuristics` tunes target token bands, repetition window, code weights, and simhash/minhash knobs.
@@ -212,8 +214,8 @@ records = list(iter_records_from_bytes_with_plan(data, rel_path="foo.bin", plan=
 - `filter_qc_meta` in `core/records.py` partitions scorer output into canonical QC fields (score, decision, near-dup ids) and `QualitySignals` (RedPajama/Dolma-style `len_tok`, `len_char`, `lang_id`, `ascii_ratio`, `repetition`, `gopher_quality`, etc.). Inline QC writes those signals to `meta["extra"]["qc_signals"]` and `QCSummaryTracker.signal_stats` aggregates means/min/max/stdev for numeric/bool signals.
 - **Inline/advisory:** For `mode="inline"` or `"advisory"`, `build_pipeline_plan` wires an `InlineQCHook` that hosts a generic screening controller (`InlineQCController`) with quality and safety screeners. It wraps a `QualityScorer` (typically `JSONLQualityScorer` from `core/extras/qc.py` when `[qc]` extras are installed), updates `QCSummaryTracker` in `PipelineStats`, attaches screening metadata to each record’s `meta`, and drops records only when a screener runs in inline/gating mode.
 - **Post-QC:** For `mode="post"`, `cli/runner.run_engine` can rescore the primary JSONL after extraction, using either an existing scorer (`QCConfig.scorer`) or one built via `make_qc_scorer`. It supports sequential or process-based scoring (`qc.parallel_post`), merges QC summaries into run summaries, and optionally writes QC CSV/sidecar signals ({primary_jsonl}_quality.csv plus `{primary_jsonl}_signals.csv`).
-- **CLI:** The `repocapsule` entry point exposes `run/local/github/card/qc` commands; `repocapsule qc` is a thin wrapper around the same QC scorer APIs (`JSONLQualityScorer`, `score_jsonl_to_csv`, `QCConfig`) and requires QC extras.
-- Parquet QC signal sidecars require PyArrow (`pip install "repocapsule[parquet]"`).
+- **CLI:** The `sievio` entry point exposes `run/local/github/card/qc` commands; `sievio qc` is a thin wrapper around the same QC scorer APIs (`JSONLQualityScorer`, `score_jsonl_to_csv`, `QCConfig`) and requires QC extras.
+- Parquet QC signal sidecars require PyArrow (`pip install "sievio[parquet]"`).
 
 Global MinHash dedup store:
 - The default `JSONLQualityScorer` can use a process-safe SQLite store (`core/dedup_store.GlobalDedupStore`) to persist MinHash LSH signatures and band keys for cross-process/global near-duplicate detection. Configure it via:
@@ -236,7 +238,7 @@ Rules of thumb for QC contributions:
 - Example end-to-end workflow:
   ```python
   from pathlib import Path
-  from repocapsule.dataset_card import build_dataset_card_from_fragments
+  from sievio.dataset_card import build_dataset_card_from_fragments
 
   fragments = list(Path("out").glob("*.card.json"))
   card_md = build_dataset_card_from_fragments(fragments)
@@ -297,19 +299,19 @@ split_name = "train"
 ```
 See `example_config.toml` for every knob (includes HTTP, logging, QC heuristics, and dataset card fields).
 
-## Extending RepoCapsule
-- **New Source/Sink:** Implement the `Source` or `Sink` protocol, then register a factory with `SourceRegistry`/`SinkRegistry` (via `core/registries.default_*` or a plugin). Place code under `src/repocapsule/sources/` or `sinks/` and add tests.
+## Extending Sievio
+- **New Source/Sink:** Implement the `Source` or `Sink` protocol, then register a factory with `SourceRegistry`/`SinkRegistry` (via `core/registries.default_*` or a plugin). Place code under `src/sievio/sources/` or `sinks/` and add tests.
 - **New bytes handler:** Register `(sniff, handler)` with `BytesHandlerRegistry` (e.g., for new binary formats). Handlers return iterable records given bytes, relative path, optional `RepoContext`, and optional `ChunkPolicy`.
 - **Custom QC scorer:** Implement `QualityScorer` or a factory with an `id` and `build(cfg: QCConfig)`. Register via `quality_scorer_registry` or a plugin. Keep `qc.scorer` unset in declarative configs; use the registry instead.
-- **Plugins:** Publish an entry point under `repocapsule.plugins` that receives all registries and performs registrations.
+- **Plugins:** Publish an entry point under `sievio.plugins` that receives all registries and performs registrations.
 - For advanced scenarios, construct a `RegistryBundle` and pass it to `build_pipeline_plan(registries=...)` to control registry contents and plugin loading.
 
 ### Extension points
 
-RepoCapsule is designed to be extended without forking the core loop:
+Sievio is designed to be extended without forking the core loop:
 
 - **Registries and plugins** – Register custom sources, sinks, bytes handlers,
-  and QC/safety scorers via `core/registries.py` and `repocapsule.plugins`.
+  and QC/safety scorers via `core/registries.py` and `sievio.plugins`.
 - **Record/file middlewares** – For cross-cutting behavior (tagging, extra QC,
   logging, metrics), implement `RecordMiddleware` / `FileMiddleware` or pass
   simple functions and inject them using `PipelineOverrides.record_middlewares`
@@ -324,7 +326,7 @@ RepoCapsule is designed to be extended without forking the core loop:
 Example: tag records via a middleware:
 
 ```python
-from repocapsule import load_config_from_path, convert, PipelineOverrides
+from sievio import load_config_from_path, convert, PipelineOverrides
 
 
 def add_source_tag(record):
@@ -341,8 +343,8 @@ stats = convert(cfg, overrides=overrides)
 ```
 
 ## Conventions for contributors
-- **File layout:** New ingestion code lives under `src/repocapsule/sources/`, new sinks under `src/repocapsule/sinks/`, QC-related helpers under `src/repocapsule/core/extras/` or `src/repocapsule/core/`, and orchestration/CLI helpers under `src/repocapsule/cli/`. Keep new modules cohesive and small.
-- **Registration, not wiring by hand:** Prefer `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`, and `QualityScorerRegistry` (optionally via `repocapsule.plugins`) over ad-hoc wiring. Declarative configs should stay runtime-free: do not stash live clients, scorers, or extractors inside `RepocapsuleConfig` fields in TOML.
+- **File layout:** New ingestion code lives under `src/sievio/sources/`, new sinks under `src/sievio/sinks/`, QC-related helpers under `src/sievio/core/extras/` or `src/sievio/core/`, and orchestration/CLI helpers under `src/sievio/cli/`. Keep new modules cohesive and small.
+- **Registration, not wiring by hand:** Prefer `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`, and `QualityScorerRegistry` (optionally via `sievio.plugins`) over ad-hoc wiring. Declarative configs should stay runtime-free: do not stash live clients, scorers, or extractors inside `SievioConfig` fields in TOML.
 - **HTTP and safety:** Use `SafeHttpClient` via `HttpConfig.build_client()` or `safe_http.get_global_http_client()` for all remote access (GitHub, PDFs, SQLite downloads). Avoid direct `requests` or `urllib` usage outside `safe_http` and source modules that already use it.
 - **Logging:** Use `get_logger(__name__)` and respect `LoggingConfig` for levels/format/propagation. Avoid printing directly to stdout/stderr in core logic; log at `INFO`/`WARNING` where appropriate.
 - **QC defaults:** Keep `qc.enabled` defaulting to `false` in example configs, and rely on `QCHeuristics` / `QCConfig` for tunable behavior. New QC behavior should either be implemented as a `QualityScorer` or as utilities in `qc_utils.py`, not baked into sinks or sources.
@@ -370,7 +372,7 @@ Goal: “I have a new place where data lives (e.g. API, new DB, custom archive) 
    - Returns one or more concrete `Source` instances.
 3. Register the factory with `SourceRegistry`:
    - Either in core (via `default_source_registry()` in `core/registries.py`), or
-   - Via a plugin entry point (`repocapsule.plugins`) using `core/plugins.py`.
+   - Via a plugin entry point (`sievio.plugins`) using `core/plugins.py`.
 4. Add a `[[sources.specs]]` example to your config (TOML or JSON) so people know how to use it.
 
 Rule of thumb: **All new sources should be discoverable by `kind` from config**, not hard-wired in code.
@@ -445,10 +447,10 @@ Goal: “I want to adjust how convert helpers behave or add a new ‘profile’ 
 
 1. Look at `runner.py`:
    - `convert`, `convert_local_dir`, `convert_github`, and `run_engine`.
-   - Any profile builder helpers that create `RepocapsuleConfig` instances.
+   - Any profile builder helpers that create `SievioConfig` instances.
 2. Keep `convert` thin: it should build a `PipelineEngine` via `build_pipeline_plan`, run it, and return `PipelineStats.as_dict()`.
 3. If adding a new profile helper (e.g. “convert_something_else”), make sure it:
-   - Builds a valid `RepocapsuleConfig`.
+   - Builds a valid `SievioConfig`.
    - Uses existing factories/registries for sources/sinks.
    - Populates `metadata` and `[dataset_card]` sensibly.
 
@@ -594,7 +596,7 @@ Use this when:
 
 ### `logging.*` – How noisy the library is
 
-**Context:** Integrates RepoCapsule’s logging with your application or CLI.
+**Context:** Integrates Sievio’s logging with your application or CLI.
 
 - Controls:
   - Log level (INFO/DEBUG/WARNING).
@@ -603,7 +605,7 @@ Use this when:
 - Applied early as part of `build_pipeline_plan`.
 
 Use this when:
-- You’re embedding RepoCapsule into a larger app and want consistent logging.
+- You’re embedding Sievio into a larger app and want consistent logging.
 - You’re debugging a weird pipeline behavior and need more detail.
 
 ---
@@ -637,7 +639,7 @@ Use this when:
 
 ## Limitations & roadmap
 - Extras required for certain formats/features: `[pdf]`, `[evtx]`, `[parquet]`, `[tok]`, `[qc]`. Without them, handlers are skipped or fall back to plain text.
-- `repocapsule-qc` is an alias of the main CLI; `repocapsule qc ...` requires the `[qc]` extra to be installed.
+- `sievio-qc` is an alias of the main CLI; `sievio qc ...` requires the `[qc]` extra to be installed.
 - Token counts fall back to heuristic estimates when `tiktoken` is absent.
 - Executor selection is heuristic; extremely large PDFs/EVTX workloads may need manual tuning of `pipeline.executor_kind`/`max_workers`.
 - Future work: richer source types, additional sinks/handlers, stronger QC CLI, and expanded dataset card automation.

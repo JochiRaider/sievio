@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from repocapsule.core.config import QCConfig, QCMode, RepocapsuleConfig
-from repocapsule.core.qc_post import run_qc_over_jsonl
+from sievio.core.config import QCConfig, QCMode, SievioConfig
+from sievio.core.qc_post import run_qc_over_jsonl
 
 
 class DummyQCScorer:
@@ -40,7 +40,7 @@ def test_run_qc_over_jsonl_writes_signals_csv(tmp_path: Path) -> None:
     summary, _rows = run_qc_over_jsonl(
         str(jsonl_path),
         qc_cfg,
-        config=RepocapsuleConfig(),
+        config=SievioConfig(),
         scorer=DummyQCScorer(),
         write_signals_sidecar=True,
         signals_suffix="_signals.csv",
@@ -78,7 +78,7 @@ def test_run_qc_over_jsonl_writes_signals_parquet(tmp_path: Path) -> None:
     summary, _rows = run_qc_over_jsonl(
         str(jsonl_path),
         qc_cfg,
-        config=RepocapsuleConfig(),
+        config=SievioConfig(),
         scorer=DummyQCScorer(),
         write_signals_sidecar=True,
         signals_format="parquet",

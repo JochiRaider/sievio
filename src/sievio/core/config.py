@@ -1,6 +1,6 @@
 # config.py
 # SPDX-License-Identifier: MIT
-"""Configuration models and helpers for Repocapsule runs.
+"""Configuration models and helpers for Sievio runs.
 
 This module defines declarative dataclasses for sources, sinks, quality
 control, HTTP, logging, and other pipeline settings, along with helpers
@@ -150,7 +150,7 @@ class PdfSourceConfig:
     require_pdf: bool = True
     include_ambiguous: bool = False
     retries: int = 1
-    user_agent: str = "repocapsule/0.1 (+https://github.com)"
+    user_agent: str = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
     client: Optional[SafeHttpClient] = None
     download_max_workers: int = 4  # 0 or negative → auto based on URL count
     download_submit_window: Optional[int] = None
@@ -685,7 +685,7 @@ T = TypeVar("T")
 
 @dataclass(slots=True)
 class RunMetadata:
-    """Metadata describing a single Repocapsule run.
+    """Metadata describing a single Sievio run.
 
     This captures paths to primary outputs plus arbitrary user-defined
     key/value pairs under ``extra``.
@@ -788,8 +788,8 @@ class RunMetadata:
 
 
 @dataclass(slots=True)
-class RepocapsuleConfig:
-    """Declarative spec for a Repocapsule run.
+class SievioConfig:
+    """Declarative spec for a Sievio run.
 
     This object must remain purely declarative and serializable: it can
     hold only configuration knobs and derived scalar/string/path values.
@@ -836,14 +836,14 @@ class RepocapsuleConfig:
         if self.sinks.sinks:
             raise ValueError("sinks.sinks must be empty in declarative specs; use sinks.specs instead.")
 
-    def with_context(self, ctx: RepoContext) -> RepocapsuleConfig:
+    def with_context(self, ctx: RepoContext) -> SievioConfig:
         """Return a shallow copy with the given RepoContext attached.
 
         Args:
             ctx (RepoContext): Repository context to propagate to sinks.
 
         Returns:
-            RepocapsuleConfig: New config sharing all other fields.
+            SievioConfig: New config sharing all other fields.
         """        
         return replace(self, sinks=replace(self.sinks, context=ctx))
 
@@ -912,14 +912,14 @@ class RepocapsuleConfig:
 
     @classmethod
     def from_dict(cls: Type[T], data: Mapping[str, Any]) -> T:
-        """Instantiate a RepocapsuleConfig from a mapping.
+        """Instantiate a SievioConfig from a mapping.
 
         Args:
             data (Mapping[str, Any]): Mapping produced by
                 :meth:`to_dict` or loaded from JSON/TOML.
 
         Returns:
-            RepocapsuleConfig: Parsed configuration instance.
+            SievioConfig: Parsed configuration instance.
         """        
         return _dataclass_from_dict(cls, data)
 
@@ -931,7 +931,7 @@ class RepocapsuleConfig:
             path (Path | str): Path to the JSON document.
 
         Returns:
-            RepocapsuleConfig: Parsed configuration instance.
+            SievioConfig: Parsed configuration instance.
         """
         payload = json.loads(Path(path).read_text(encoding="utf-8"))
         return cls.from_dict(payload)
@@ -939,7 +939,7 @@ class RepocapsuleConfig:
     @classmethod
     def from_toml(cls: Type[T], path: Path | str) -> T:
         """
-        Load a RepocapsuleConfig from a TOML file.
+        Load a SievioConfig from a TOML file.
 
         The TOML layout mirrors the structure of this dataclass: top-level tables like [decode],
         [chunk], [pipeline], [sinks], [http], [qc], [logging], [metadata], and so on.
@@ -958,22 +958,22 @@ class RepocapsuleConfig:
         return cls.from_dict(data)
 
 
-def load_config_from_path(path: str | Path) -> RepocapsuleConfig:
-    """Load a RepocapsuleConfig from a JSON or TOML file.
+def load_config_from_path(path: str | Path) -> SievioConfig:
+    """Load a SievioConfig from a JSON or TOML file.
     Args:
         path (Path | str): Path to a ``.toml`` or ``.json`` config
             file.
     Returns:
-        RepocapsuleConfig: Parsed configuration instance.
+        SievioConfig: Parsed configuration instance.
     Raises:
         ValueError: If the file extension is not ``.toml`` or ``.json``.
     """
     p = Path(path)
     suffix = p.suffix.lower()
     if suffix == ".toml":
-        return RepocapsuleConfig.from_toml(p)
+        return SievioConfig.from_toml(p)
     if suffix == ".json":
-        return RepocapsuleConfig.from_json(p)
+        return SievioConfig.from_json(p)
     raise ValueError(f"Unsupported config extension {p.suffix!r}; expected .toml or .json.")
 
 
@@ -1033,8 +1033,8 @@ def build_config_from_defaults_and_options(
     this function perform the merge and filtering, only pulling constructor-only
     keys (paths, URLs, identifiers) directly from `spec.options`.
 
-    - ``defaults`` typically comes from e.g. RepocapsuleConfig.sources.defaults[kind]
-      or RepocapsuleConfig.sinks.defaults[kind].
+    - ``defaults`` typically comes from e.g. SievioConfig.sources.defaults[kind]
+      or SievioConfig.sinks.defaults[kind].
     - ``options`` comes from a specific SourceSpec/SinkSpec/etc.
     - ``ignore_keys`` is for keys that belong to the factory constructor
       but not the dataclass itself (e.g., 'root_dir', 'url').
@@ -1194,4 +1194,4 @@ def is_dataclass_type(typ: Any) -> bool:
 
 
 
-__all__ = ["RepocapsuleConfig", "RunMetadata", "FileProcessingConfig", "DEFAULT_QC_SCORER_ID"]
+__all__ = ["SievioConfig", "RunMetadata", "FileProcessingConfig", "DEFAULT_QC_SCORER_ID"]

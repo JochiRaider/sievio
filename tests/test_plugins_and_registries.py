@@ -4,10 +4,10 @@ from types import SimpleNamespace
 
 import pytest
 
-from repocapsule.core.builder import build_pipeline_plan
-from repocapsule.core.factories import SinkFactoryResult
-from repocapsule.core.plugins import load_entrypoint_plugins
-from repocapsule.core.registries import (
+from sievio.core.builder import build_pipeline_plan
+from sievio.core.factories import SinkFactoryResult
+from sievio.core.plugins import load_entrypoint_plugins
+from sievio.core.registries import (
     BytesHandlerRegistry,
     QualityScorerRegistry,
     SafetyScorerRegistry,
@@ -21,8 +21,8 @@ from repocapsule.core.registries import (
     quality_scorer_registry,
     safety_scorer_registry,
 )
-from repocapsule.core.config import RepocapsuleConfig, SourceSpec, SinkSpec
-from repocapsule.core.interfaces import SourceFactoryContext, SinkFactoryContext
+from sievio.core.config import SievioConfig, SourceSpec, SinkSpec
+from sievio.core.interfaces import SourceFactoryContext, SinkFactoryContext
 
 
 class FakeEntryPoint:
@@ -50,7 +50,7 @@ def test_load_entrypoint_plugins_logs_failures(monkeypatch, caplog):
 
     class DummyEntryPoints(list):
         def select(self, group=None):
-            return self if group == "repocapsule.plugins" else []
+            return self if group == "sievio.plugins" else []
 
     def fake_entry_points():
         return DummyEntryPoints(eps)
@@ -62,9 +62,9 @@ def test_load_entrypoint_plugins_logs_failures(monkeypatch, caplog):
         text = msg % args if args else str(msg)
         messages.append(text)
 
-    monkeypatch.setattr("repocapsule.core.plugins.log.warning", fake_warning)
+    monkeypatch.setattr("sievio.core.plugins.log.warning", fake_warning)
 
-    with caplog.at_level("WARNING", logger="repocapsule.core.plugins"):
+    with caplog.at_level("WARNING", logger="sievio.core.plugins"):
         load_entrypoint_plugins(
             source_registry=SourceRegistry(),
             sink_registry=SinkRegistry(),
@@ -79,7 +79,7 @@ def test_load_entrypoint_plugins_logs_failures(monkeypatch, caplog):
 
 def test_source_registry_unknown_kind_raises():
     registry = default_source_registry()
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.sources.specs = (SourceSpec(kind="does_not_exist", options={}),)
     ctx = SourceFactoryContext(
         repo_context=None,
@@ -93,7 +93,7 @@ def test_source_registry_unknown_kind_raises():
 
 def test_sink_registry_unknown_kind_raises():
     registry = default_sink_registry()
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.sinks.specs = (SinkSpec(kind="does_not_exist", options={}),)
     ctx = SinkFactoryContext(repo_context=None, sink_config=cfg.sinks, sink_defaults=cfg.sinks.defaults)
     with pytest.raises(ValueError):
@@ -132,7 +132,7 @@ def test_default_registries_load_plugins_calls_loader(monkeypatch):
     def fake_loader(**kwargs):
         calls.append(kwargs)
 
-    monkeypatch.setattr("repocapsule.core.plugins.load_entrypoint_plugins", fake_loader)
+    monkeypatch.setattr("sievio.core.plugins.load_entrypoint_plugins", fake_loader)
 
     default_registries(load_plugins=False)
     assert calls == []
@@ -207,9 +207,9 @@ def test_build_pipeline_plan_uses_custom_bundle(monkeypatch, tmp_path):
     def fail_default_registries(*args, **kwargs):
         raise AssertionError("default_registries should not be called when registries are provided")
 
-    monkeypatch.setattr("repocapsule.core.builder.default_registries", fail_default_registries)
+    monkeypatch.setattr("sievio.core.builder.default_registries", fail_default_registries)
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.sources.specs = (SourceSpec(kind="dummy_source", options={"label": "from_bundle"}),)
     cfg.sinks.specs = (SinkSpec(kind="dummy_sink", options={"jsonl_path": str(tmp_path / "data.jsonl")}),)
 
@@ -238,9 +238,9 @@ def test_build_pipeline_plan_per_registry_override_wins_over_bundle(monkeypatch,
     def fail_default_registries(*args, **kwargs):
         raise AssertionError("default_registries should not be called when registries are provided")
 
-    monkeypatch.setattr("repocapsule.core.builder.default_registries", fail_default_registries)
+    monkeypatch.setattr("sievio.core.builder.default_registries", fail_default_registries)
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.sources.specs = (SourceSpec(kind="dummy_source", options={}),)
     cfg.sinks.specs = (SinkSpec(kind="dummy_sink", options={"jsonl_path": str(tmp_path / "custom.jsonl")}),)
 

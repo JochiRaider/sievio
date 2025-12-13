@@ -3,18 +3,18 @@ import types
 
 import pytest
 
-from repocapsule.core.builder import _prepare_qc
-from repocapsule.core.config import QCConfig, QCMode, RepocapsuleConfig, SafetyConfig
-from repocapsule.core.interfaces import RunContext
-from repocapsule.core.pipeline import PipelineStats
-from repocapsule.core.qc_controller import (
+from sievio.core.builder import _prepare_qc
+from sievio.core.config import QCConfig, QCMode, SievioConfig, SafetyConfig
+from sievio.core.interfaces import RunContext
+from sievio.core.pipeline import PipelineStats
+from sievio.core.qc_controller import (
     InlineQCController,
     InlineQCHook,
     QualityInlineScreener,
     SafetyInlineScreener,
 )
-from repocapsule.core.qc_post import PostQCHook, PostSafetyHook, run_safety_over_jsonl
-from repocapsule.core.registries import QualityScorerRegistry, SafetyScorerRegistry
+from sievio.core.qc_post import PostQCHook, PostSafetyHook, run_safety_over_jsonl
+from sievio.core.registries import QualityScorerRegistry, SafetyScorerRegistry
 
 
 class ConstantQCScorer:
@@ -72,7 +72,7 @@ def test_post_qc_mode_skips_inline():
     qc_reg.register(ConstantQCFactory({"score": 10.0, "near_dup": False}))
     safety_reg = SafetyScorerRegistry()
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = True
     cfg.qc.mode = QCMode.POST
     cfg.qc.min_score = 0.0
@@ -90,7 +90,7 @@ def test_inline_safety_without_qc_drops():
     safety_reg = SafetyScorerRegistry()
     safety_reg.register(ConstantSafetyFactory({"safety_decision": "drop", "safety_flags": {"flagged": True}}))
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = False
     cfg.qc.mode = QCMode.OFF
     cfg.qc.safety.enabled = True
@@ -120,7 +120,7 @@ def test_qc_inline_safety_advisory_annotates_only():
     safety_reg = SafetyScorerRegistry()
     safety_reg.register(ConstantSafetyFactory({"safety_decision": "keep", "safety_flags": {"note": True}}))
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = True
     cfg.qc.mode = QCMode.INLINE
     cfg.qc.min_score = 0.0
@@ -144,7 +144,7 @@ def test_qc_inline_safety_advisory_annotates_only():
 
 
 def test_safety_post_mode_allowed():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = False
     cfg.qc.safety.enabled = True
     cfg.qc.safety.mode = QCMode.POST
@@ -182,7 +182,7 @@ def test_prepare_qc_post_mode_attaches_safety_only_inline():
     safety_reg = SafetyScorerRegistry()
     safety_reg.register(ConstantSafetyFactory({"safety_decision": "drop"}))
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = True
     cfg.qc.mode = QCMode.POST
     cfg.qc.min_score = 0.0
@@ -209,7 +209,7 @@ def test_prepare_qc_inline_mode_attaches_quality_and_safety():
     safety_reg = SafetyScorerRegistry()
     safety_reg.register(ConstantSafetyFactory({"safety_decision": "keep"}))
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = True
     cfg.qc.mode = QCMode.INLINE
     cfg.qc.min_score = 0.0
@@ -233,7 +233,7 @@ def test_prepare_qc_safety_post_attaches_hook():
     safety_reg = SafetyScorerRegistry()
     safety_reg.register(ConstantSafetyFactory({"safety_decision": "keep"}))
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = False
     cfg.qc.mode = QCMode.OFF
     cfg.qc.safety.enabled = True
@@ -248,7 +248,7 @@ def test_prepare_qc_safety_post_attaches_hook():
 def test_post_qc_merge_preserves_safety(tmp_path):
     qc_scorer = ConstantQCScorer({"score": 10.0, "near_dup": False})
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = True
     cfg.qc.mode = QCMode.POST
     cfg.qc.min_score = 0.0
@@ -274,7 +274,7 @@ def test_post_qc_merge_preserves_safety(tmp_path):
 def test_post_safety_hook_preserves_quality(tmp_path):
     safety_scorer = ConstantSafetyScorer({"safety_decision": "drop", "safety_flags": {"flagged": True}})
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = False
     cfg.qc.mode = QCMode.OFF
     cfg.qc.safety.enabled = True
@@ -297,7 +297,7 @@ def test_post_safety_hook_preserves_quality(tmp_path):
 
 
 def test_run_safety_over_jsonl_emits_csv(tmp_path):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.qc.enabled = False
     cfg.qc.safety.enabled = True
     cfg.qc.safety.mode = QCMode.POST

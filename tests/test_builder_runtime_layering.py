@@ -1,12 +1,12 @@
 from pathlib import Path
 
-from repocapsule.core.builder import build_pipeline_plan
-from repocapsule.core.config import RepocapsuleConfig, SinkSpec, SourceSpec
-from repocapsule.core.interfaces import RepoContext
+from sievio.core.builder import build_pipeline_plan
+from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
+from sievio.core.interfaces import RepoContext
 
 
-def _basic_cfg(tmp_path: Path) -> RepocapsuleConfig:
-    cfg = RepocapsuleConfig()
+def _basic_cfg(tmp_path: Path) -> SievioConfig:
+    cfg = SievioConfig()
     cfg.sinks.context = RepoContext(repo_full_name="local/test", repo_url="https://example.com/local", license_id="UNKNOWN")
 
     src_root = tmp_path / "input"

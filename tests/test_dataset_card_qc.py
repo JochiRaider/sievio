@@ -1,4 +1,4 @@
-from repocapsule.core.dataset_card import CardFragment, _aggregate_signal_stats
+from sievio.core.dataset_card import CardFragment, _aggregate_signal_stats
 
 
 def test_aggregate_signal_stats_qc_summary_shape():

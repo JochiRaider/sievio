@@ -3,13 +3,13 @@ requires = ["setuptools>=80", "setuptools-scm>=8"]
 build-backend = "setuptools.build_meta"
 
 [project]
-name = "repocapsule"
+name = "sievio"
 dynamic = ["version"]
 description = "Repository → JSONL converter with robust decoding, structure-aware chunking, Markdown/KQL extraction, license detection, and GitHub/PDF/EVTX helpers."
 readme = "README.md"
 requires-python = ">=3.11"
 authors = [
-  { name = "Repocapsule Maintainers" },
+  { name = "Sievio Maintainers" },
 ]
 license = { text = "MIT" }
 keywords = ["jsonl", "github", "markdown", "kql", "ingestion", "chunking", "pdf", "evtx", "parquet"]
@@ -52,20 +52,20 @@ langid = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/jochiraider/repocapsule"
-Repository = "https://github.com/jochiraider/repocapsule"
-Issues = "https://github.com/jochiraider/repocapsule/issues"
+Homepage = "https://github.com/jochiraider/sievio"
+Repository = "https://github.com/jochiraider/sievio"
+Issues = "https://github.com/jochiraider/sievio/issues"
 
 [project.scripts]
-repocapsule = "repocapsule.cli.main:main"
-repocapsule-qc = "repocapsule.cli.main:main"
+sievio = "sievio.cli.main:main"
+sievio-qc = "sievio.cli.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
 
 [tool.setuptools.packages.find]
 where = ["src"]
-include = ["repocapsule*"]
+include = ["sievio*"]
 
 [tool.setuptools_scm]
 # Rely on Git tags for the version; no extra config needed for basic use.

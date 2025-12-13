@@ -1,4 +1,4 @@
-from repocapsule.core.extras.qc import JSONLQualityScorer
+from sievio.core.extras.qc import JSONLQualityScorer
 
 
 def test_global_deduplication_scores_and_flags(tmp_path) -> None:

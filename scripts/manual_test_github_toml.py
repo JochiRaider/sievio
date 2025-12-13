@@ -1,14 +1,14 @@
 # manual_test_github_toml.py
 # SPDX-License-Identifier: MIT
 """
-RepoCapsule - manual smoke test (GitHub)
+Sievio - manual smoke test (GitHub)
 ========================================
 
 Run this from your workspace root (no install required). The script:
 
 - Validates the GitHub URL up front
 - Autonames outputs with SPDX license + optional ref + timestamp
-- Loads a TOML-based RepocapsuleConfig and applies a few runtime-only tweaks
+- Loads a TOML-based SievioConfig and applies a few runtime-only tweaks
 - Registers an optional QC scorer via the new registry system (keeps the config runtime-free)
 - Builds a GitHub profile config and runs `convert(...)`
 - Treats KQL-from-Markdown as an optional Extractor
@@ -29,21 +29,20 @@ sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 from pathlib import Path
 from typing import Any, Mapping, Optional, Sequence
 
-from repocapsule import RepocapsuleConfig, convert, load_config_from_path
-from repocapsule.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
-from repocapsule.cli.runner import default_paths_for_github, make_github_profile
-from repocapsule.core.builder import PipelineOverrides, build_pipeline_plan
-from repocapsule.core.chunk import ChunkPolicy
-from repocapsule.core.interfaces import RepoContext
-from repocapsule.core.log import configure_logging
-from repocapsule.core.pipeline import PipelineEngine
-from repocapsule.core.registries import quality_scorer_registry
-from repocapsule.core.convert import DefaultExtractor
-from repocapsule.sources.githubio import parse_github_url
+from sievio import SievioConfig, convert, load_config_from_path
+from sievio.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
+from sievio.cli.runner import default_paths_for_github, make_github_profile
+from sievio.core.builder import PipelineOverrides
+from sievio.core.chunk import ChunkPolicy
+from sievio.core.interfaces import RepoContext
+from sievio.core.log import configure_logging
+from sievio.core.registries import quality_scorer_registry
+from sievio.core.convert import DefaultExtractor
+from sievio.sources.githubio import parse_github_url
 
 # Optional extractor for KQL blocks inside Markdown
 try:
-    from repocapsule.core.extras.md_kql import KqlFromMarkdownExtractor
+    from sievio.core.extras.md_kql import KqlFromMarkdownExtractor
 except Exception:  # pragma: no cover - optional extra
     KqlFromMarkdownExtractor = None  # type: ignore[assignment]
 
@@ -51,7 +50,7 @@ except Exception:  # pragma: no cover - optional extra
 try:
     import importlib
 
-    importlib.import_module("repocapsule.core.extras.qc")
+    importlib.import_module("sievio.core.extras.qc")
     QC_EXTRAS_AVAILABLE = True
 except Exception:
     QC_EXTRAS_AVAILABLE = False
@@ -62,9 +61,9 @@ except Exception:
 
 # Example GitHub repo to test:
 # URL = "https://github.com/pallets/flask/tree/main/docs"
-# URL = "https://github.com/JochiRaider/URL_Research_Tool"
+URL = "https://github.com/JochiRaider/URL_Research_Tool"
 # URL = "https://github.com/Bert-JanP/Hunting-Queries-Detection-Rules"
-URL = "https://github.com/chinapandaman/PyPDFForm"
+# URL = "https://github.com/chinapandaman/PyPDFForm"
 # URL = "https://github.com/SystemsApproach/book"
 REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (applied when URL has no ref)
 
@@ -135,10 +134,10 @@ def _plan_output_paths(
 
 
 def _build_config(
-    base_cfg: RepocapsuleConfig,
-) -> RepocapsuleConfig:
+    base_cfg: SievioConfig,
+) -> SievioConfig:
     """
-    Take a TOML-loaded RepocapsuleConfig and apply runtime-only tweaks.
+    Take a TOML-loaded SievioConfig and apply runtime-only tweaks.
 
     The TOML file controls stable, serializable knobs (QC, concurrency, HTTP, etc.).
     This helper stitches in objects that are hard to express in TOML, such as:
@@ -166,7 +165,7 @@ def _build_config(
     return cfg
 
 
-def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> bool:
+def _maybe_disable_qc(cfg: SievioConfig, log) -> bool:
     """
     Turn off QC if the optional QC extras are missing to avoid runtime errors.
     """
@@ -181,7 +180,7 @@ def _maybe_disable_qc(cfg: RepocapsuleConfig, log) -> bool:
     return True
 
 
-def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
+def _register_qc_factory(cfg: SievioConfig, log) -> None:
     """
     Register a QC scorer factory when QC is enabled.
 
@@ -199,7 +198,7 @@ def _register_qc_factory(cfg: RepocapsuleConfig, log) -> None:
 
         def build(self, options: Mapping[str, Any]):
             try:
-                from repocapsule.core.extras.qc import JSONLQualityScorer
+                from sievio.core.extras.qc import JSONLQualityScorer
             except Exception as exc:  # pragma: no cover - optional extra
                 raise RuntimeError(
                     "QC is enabled in the config, but QC extras are not installed. "
@@ -269,8 +268,8 @@ def main() -> None:
 
     # Load base config from TOML.
     base_cfg = load_config_from_path(CONFIG_PATH)
-    if not isinstance(base_cfg, RepocapsuleConfig):
-        raise TypeError(f"Expected RepocapsuleConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
+    if not isinstance(base_cfg, SievioConfig):
+        raise TypeError(f"Expected SievioConfig from {CONFIG_PATH}, got {type(base_cfg)!r}")
 
     extractors: list[object] = []
     if ENABLE_KQL_MD_EXTRACTOR and KqlFromMarkdownExtractor is not None:
@@ -282,6 +281,9 @@ def main() -> None:
     _register_qc_factory(run_cfg, log)
     if getattr(run_cfg.qc, "enabled", False) and not getattr(run_cfg.qc, "scorer_id", None):
         run_cfg.qc.scorer_id = DEFAULT_QC_SCORER_ID
+
+    # Allow repo_context to populate repo_url instead of the static TOML value.
+    run_cfg.metadata.repo_url = None
 
     qc_enabled = bool(getattr(run_cfg.qc, "enabled", False))
     qc_mode = getattr(run_cfg.qc, "mode", "off")
@@ -309,13 +311,16 @@ def main() -> None:
         base_config=run_cfg,
         repo_context=ctx,
     )
+    profile_cfg.metadata.primary_jsonl = str(jsonl_path)
+    if prompt_path:
+        profile_cfg.metadata.prompt_path = str(prompt_path)
+    profile_cfg.metadata.repo_url = ctx.repo_url or target_url
+
     overrides = None
     if extractors:
         overrides = PipelineOverrides(file_extractor=_RuntimeExtractor(extractors))
 
-    plan = build_pipeline_plan(profile_cfg, scorer_registry=quality_scorer_registry, overrides=overrides)
-    engine = PipelineEngine(plan)
-    stats = convert(engine)
+    stats = convert(profile_cfg, overrides=overrides)
 
     print("\n=== Done ===")
     print("JSONL :", jsonl_path)

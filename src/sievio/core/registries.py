@@ -18,7 +18,7 @@ from typing import (
     Tuple,
 )
 
-from .config import RepocapsuleConfig, SourceSpec, SinkSpec
+from .config import SievioConfig, SourceSpec, SinkSpec
 from .interfaces import (
     Source,
     Sink,
@@ -241,7 +241,7 @@ class LifecycleHookFactory(Protocol):
 
     id: str
 
-    def build(self, cfg: RepocapsuleConfig, runtime: "PipelineRuntime") -> RunLifecycleHook:
+    def build(self, cfg: SievioConfig, runtime: "PipelineRuntime") -> RunLifecycleHook:
         ...
 
 
@@ -254,7 +254,7 @@ class LifecycleHookRegistry:
     def register(self, factory: LifecycleHookFactory) -> None:
         self._factories[factory.id] = factory
 
-    def build_all(self, cfg: RepocapsuleConfig, runtime: "PipelineRuntime", ids: Sequence[str]) -> list[RunLifecycleHook]:
+    def build_all(self, cfg: SievioConfig, runtime: "PipelineRuntime", ids: Sequence[str]) -> list[RunLifecycleHook]:
         hooks: list[RunLifecycleHook] = []
         for hook_id in ids:
             factory = self._factories.get(hook_id)

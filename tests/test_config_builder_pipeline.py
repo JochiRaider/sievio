@@ -5,31 +5,31 @@ from types import SimpleNamespace
 
 import pytest
 
-from repocapsule.core.builder import (
+from sievio.core.builder import (
     PipelinePlan,
     PipelineRuntime,
     _assert_runtime_free_spec,
     build_pipeline_plan,
     PipelineOverrides,
 )
-from repocapsule.core.concurrency import ExecutorConfig, resolve_pipeline_executor_config
-from repocapsule.core.config import (
+from sievio.core.concurrency import ExecutorConfig, resolve_pipeline_executor_config
+from sievio.core.config import (
     PipelineConfig,
     QCConfig,
     QCHeuristics,
-    RepocapsuleConfig,
+    SievioConfig,
     RunMetadata,
     SinkSpec,
     SourceSpec,
     load_config_from_path,
 )
-from repocapsule.core.interfaces import RepoContext
-from repocapsule.core.pipeline import PipelineEngine, run_pipeline
-from repocapsule.core.safe_http import SafeHttpClient
-from repocapsule.core.registries import SourceRegistry, SinkRegistry
-from repocapsule.core.factories import SinkFactoryResult
-from repocapsule.core.qc_controller import InlineQCHook
-import repocapsule.core.pipeline as pipeline
+from sievio.core.interfaces import RepoContext
+from sievio.core.pipeline import PipelineEngine, run_pipeline
+from sievio.core.safe_http import SafeHttpClient
+from sievio.core.registries import SourceRegistry, SinkRegistry
+from sievio.core.factories import SinkFactoryResult
+from sievio.core.qc_controller import InlineQCHook
+import sievio.core.pipeline as pipeline
 
 
 class DummyPdfSource:
@@ -44,8 +44,8 @@ def handle_evtx(data, rel_path, ctx, policy):
     return None
 
 
-def _make_basic_spec(tmp_path: Path) -> RepocapsuleConfig:
-    cfg = RepocapsuleConfig()
+def _make_basic_spec(tmp_path: Path) -> SievioConfig:
+    cfg = SievioConfig()
 
     ctx = RepoContext(
         repo_full_name="local/test",
@@ -145,19 +145,19 @@ def test_qcheuristics_weight_out_of_range_raises():
 
 
 def test_pipeline_executor_kind_normalization_valid_values():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = " Thread "
     cfg.validate()
     assert cfg.pipeline.executor_kind == "thread"
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "AUTO"
     cfg.validate()
     assert cfg.pipeline.executor_kind == "auto"
 
 
 def test_pipeline_executor_kind_invalid_raises():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "invalid-kind"
     with pytest.raises(ValueError) as excinfo:
         cfg.validate()
@@ -165,7 +165,7 @@ def test_pipeline_executor_kind_invalid_raises():
 
 
 def test_validate_paths_same_string_raises():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.primary_jsonl = "out/data.jsonl"
     cfg.metadata.prompt_path = "out/data.jsonl"
 
@@ -177,7 +177,7 @@ def test_validate_paths_same_string_raises():
 def test_validate_paths_same_real_path_raises(tmp_path: Path):
     jsonl = tmp_path / "data.jsonl"
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.primary_jsonl = str(jsonl)
     cfg.metadata.prompt_path = str(tmp_path / "./data.jsonl")
 
@@ -186,12 +186,12 @@ def test_validate_paths_same_real_path_raises(tmp_path: Path):
 
 
 def test_config_roundtrip_to_from_dict():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.primary_jsonl = "out/data.jsonl"
     cfg.metadata.repo_url = "https://example.com/repo"
 
     data = cfg.to_dict()
-    cfg2 = RepocapsuleConfig.from_dict(data)
+    cfg2 = SievioConfig.from_dict(data)
 
     assert cfg2.metadata.primary_jsonl == cfg.metadata.primary_jsonl
     assert cfg2.metadata.repo_url == cfg.metadata.repo_url
@@ -200,23 +200,23 @@ def test_config_roundtrip_to_from_dict():
 
 
 def test_config_roundtrip_json(tmp_path: Path):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.repo_url = "https://example.com/repo"
     path = tmp_path / "config.json"
 
     cfg.to_json(path)
-    loaded = RepocapsuleConfig.from_json(path)
+    loaded = SievioConfig.from_json(path)
 
     assert loaded.metadata.repo_url == cfg.metadata.repo_url
 
 
-config_mod = importlib.import_module("repocapsule.core.config")
+config_mod = importlib.import_module("sievio.core.config")
 HAS_TOML = getattr(config_mod, "tomllib", None) is not None
 
 
 @pytest.mark.skipif(not HAS_TOML, reason="tomllib/tomli not available")
 def test_config_roundtrip_toml(tmp_path: Path):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.repo_url = "https://example.com/repo"
 
     path = tmp_path / "config.toml"
@@ -233,7 +233,7 @@ def test_config_roundtrip_toml(tmp_path: Path):
 
 
 def test_assert_runtime_free_spec_with_http_client_raises():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.http.client = SafeHttpClient(timeout=1.0)
     with pytest.raises(ValueError) as excinfo:
         _assert_runtime_free_spec(cfg)
@@ -241,7 +241,7 @@ def test_assert_runtime_free_spec_with_http_client_raises():
 
 
 def test_assert_runtime_free_spec_with_file_extractor_raises():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.file_extractor = object()  # type: ignore[assignment]
     with pytest.raises(ValueError) as excinfo:
         _assert_runtime_free_spec(cfg)
@@ -255,7 +255,7 @@ def test_assert_runtime_free_spec_with_bytes_handlers_raises():
     def handler(data: bytes, rel_path: str, ctx, policy):
         return None
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.bytes_handlers = ((sniff, handler),)
     with pytest.raises(ValueError) as excinfo:
         _assert_runtime_free_spec(cfg)
@@ -399,7 +399,7 @@ def test_build_pipeline_plan_registry_wiring(tmp_path: Path):
 
 
 def test_resolve_executor_config_auto_no_heavy():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "auto"
 
     exec_cfg, fail_fast = resolve_pipeline_executor_config(cfg, runtime=None)
@@ -411,7 +411,7 @@ def test_resolve_executor_config_auto_no_heavy():
 
 
 def test_resolve_executor_config_auto_heavy_handlers_and_sources():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "auto"
     runtime = SimpleNamespace(
         bytes_handlers=(
@@ -427,7 +427,7 @@ def test_resolve_executor_config_auto_heavy_handlers_and_sources():
 
 
 def test_resolve_executor_config_auto_only_heavy_handlers():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "auto"
     runtime = SimpleNamespace(
         bytes_handlers=((lambda b, p: False, handle_pdf),),
@@ -439,7 +439,7 @@ def test_resolve_executor_config_auto_only_heavy_handlers():
 
 
 def test_resolve_executor_config_auto_only_heavy_sources():
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.pipeline.executor_kind = "auto"
     runtime = SimpleNamespace(
         bytes_handlers=(),
@@ -451,7 +451,7 @@ def test_resolve_executor_config_auto_only_heavy_sources():
 
 
 def test_process_parallel_submit_error_increments_errors(caplog):
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     runtime = PipelineRuntime(
         http_client=None,
         sources=(),
@@ -493,7 +493,7 @@ def test_process_parallel_submit_error_increments_errors(caplog):
                     if on_submit_error:
                         on_submit_error(it, RuntimeError("submit fail"))
 
-    with caplog.at_level("WARNING", logger="repocapsule.core.pipeline"):
+    with caplog.at_level("WARNING", logger="sievio.core.pipeline"):
         engine._process_parallel(  # type: ignore[attr-defined]
             [work],
             processor=processor,
@@ -508,7 +508,7 @@ def test_process_parallel_submit_error_increments_errors(caplog):
 
 def test_build_pipeline_plan_mutate_false_preserves_original_config(tmp_path: Path):
     config_path = Path(__file__).resolve().parents[1] / "example_config.toml"
-    cfg = RepocapsuleConfig.from_toml(config_path)
+    cfg = SievioConfig.from_toml(config_path)
 
     class StubSource:
         def iter_files(self):
@@ -603,7 +603,7 @@ def test_run_pipeline_smoke(tmp_path: Path):
     jsonl_path = out_dir / "data.jsonl"
     prompt_path = out_dir / "data.prompt.txt"
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     ctx = RepoContext(
         repo_full_name="local/test",
         repo_url="https://example.com/local",

@@ -28,7 +28,7 @@ def load_entrypoint_plugins(
     bytes_registry: BytesHandlerRegistry,
     scorer_registry: QualityScorerRegistry,
     safety_scorer_registry: SafetyScorerRegistry,
-    group: str = "repocapsule.plugins",
+    group: str = "sievio.plugins",
 ) -> None:
     """Discover and load plugin entry points.
 

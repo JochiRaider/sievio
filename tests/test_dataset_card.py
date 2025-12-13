@@ -3,10 +3,10 @@ import json
 
 import pytest
 
-from repocapsule.core.config import RepocapsuleConfig
-from repocapsule.core.builder import build_pipeline_plan
-from repocapsule.core.pipeline import PipelineStats
-from repocapsule.core.dataset_card import (
+from sievio.core.config import SievioConfig
+from sievio.core.builder import build_pipeline_plan
+from sievio.core.pipeline import PipelineStats
+from sievio.core.dataset_card import (
     CardFragment,
     DatasetCardHook,
     build_dataset_card_from_fragments,
@@ -202,7 +202,7 @@ def test_write_card_fragment_for_run(tmp_path: Path) -> None:
     sample_line = {"text": "hello", "meta": {"language": "en"}}
     jsonl_path.write_text(json.dumps(sample_line) + "\n", encoding="utf-8")
 
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.metadata.primary_jsonl = str(jsonl_path)
 
     stats = PipelineStats(records=1)
@@ -215,7 +215,7 @@ def test_write_card_fragment_for_run(tmp_path: Path) -> None:
 
 
 def test_dataset_card_enabled_by_default() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
 
     plan = build_pipeline_plan(cfg, load_plugins=False)
 
@@ -224,7 +224,7 @@ def test_dataset_card_enabled_by_default() -> None:
 
 
 def test_dataset_card_disabled_skips_hook() -> None:
-    cfg = RepocapsuleConfig()
+    cfg = SievioConfig()
     cfg.dataset_card.enabled = False
 
     plan = build_pipeline_plan(cfg, load_plugins=False)

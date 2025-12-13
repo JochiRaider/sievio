@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from repocapsule.sources.sqlite_source import SQLiteSource
+from sievio.sources.sqlite_source import SQLiteSource
 
 
 def test_sqlite_checksum_match(tmp_path):

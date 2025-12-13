@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from repocapsule.core.safe_http import PrivateAddressBlocked, SafeHttpClient
+from sievio.core.safe_http import PrivateAddressBlocked, SafeHttpClient
 
 
 def test_safe_http_blocks_private_ip(monkeypatch):

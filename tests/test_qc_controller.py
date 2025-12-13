@@ -2,16 +2,16 @@ from dataclasses import dataclass
 
 import pytest
 
-from repocapsule.core.config import QCConfig, QCMode, SafetyConfig
-from repocapsule.core.pipeline import PipelineStats
-from repocapsule.core.qc_controller import (
+from sievio.core.config import QCConfig, QCMode, SafetyConfig
+from sievio.core.pipeline import PipelineStats
+from sievio.core.qc_controller import (
     InlineQCController,
     InlineScreeningController,
     QCSummaryTracker,
     QualityInlineScreener,
     SafetyInlineScreener,
 )
-from repocapsule.core.records import ensure_meta_dict
+from sievio.core.records import ensure_meta_dict
 
 
 @dataclass

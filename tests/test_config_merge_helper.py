@@ -1,6 +1,6 @@
 from dataclasses import dataclass
 
-from repocapsule.core.config import build_config_from_defaults_and_options
+from sievio.core.config import build_config_from_defaults_and_options
 
 
 @dataclass

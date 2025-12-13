@@ -10,7 +10,7 @@ def test_extract_pdf_records_real_bytes():
         pytest.skip("pypdf not available")
 
     try:
-        from repocapsule.sources.pdfio import extract_pdf_records
+        from sievio.sources.pdfio import extract_pdf_records
     except Exception as exc:  # pragma: no cover - import issues are env-specific
         pytest.skip(f"pdf handler not available: {exc}")
 

@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: MIT
 """Builder helpers for constructing PipelinePlan instances.
 
-This module turns declarative RepocapsuleConfig objects into immutable
+This module turns declarative SievioConfig objects into immutable
 PipelinePlan instances that separate pure configuration from runtime
 wiring such as sources, sinks, HTTP clients, bytes handlers, and QC
 hooks. The primary entry point is build_pipeline_plan().
@@ -14,7 +14,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Optional, Sequence, Tuple, Iterable, Any, Callable, Mapping, TYPE_CHECKING
 
-from .config import RepocapsuleConfig, QCMode, SinkConfig, RunMetadata, QCConfig
+from .config import SievioConfig, QCMode, SinkConfig, RunMetadata, QCConfig
 from .interfaces import (
     Source,
     Sink,
@@ -129,7 +129,7 @@ class PipelineRuntime:
     """Hold resolved runtime wiring and state for a pipeline run.
 
     This dataclass stores live objects (sources, sinks, clients, hooks)
-    derived from a declarative RepocapsuleConfig. It is kept separate
+    derived from a declarative SievioConfig. It is kept separate
     from the spec to avoid cross-run mutation and configuration drift.
 
     Attributes:
@@ -235,7 +235,7 @@ class QCPreparationResult:
 
 @dataclass(slots=True)
 class PipelinePlan:
-    """Represent an immutable plan derived from a RepocapsuleConfig.
+    """Represent an immutable plan derived from a SievioConfig.
 
     A PipelinePlan splits the declarative configuration (:attr:`spec`)
     from live runtime wiring (:attr:`runtime`). The spec is validated
@@ -243,19 +243,19 @@ class PipelinePlan:
     across runs that share the same configuration.
 
     Attributes:
-        spec (RepocapsuleConfig): Effective, validated configuration
+        spec (SievioConfig): Effective, validated configuration
             with runtime-only fields cleared.
         runtime (PipelineRuntime): Resolved runtime wiring, including
             sources, sinks, HTTP client, bytes handlers, QC hooks, and
             executor settings.
     """
 
-    spec: RepocapsuleConfig
+    spec: SievioConfig
     runtime: PipelineRuntime
 
 
 def build_pipeline_plan(
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     *,
     mutate: bool = False,
     overrides: PipelineOverrides | None = None,
@@ -267,7 +267,7 @@ def build_pipeline_plan(
     safety_scorer_registry: Optional[SafetyScorerRegistry] = None,
     load_plugins: bool = True,
 ) -> PipelinePlan:
-    """Build a PipelinePlan from a declarative RepocapsuleConfig.
+    """Build a PipelinePlan from a declarative SievioConfig.
 
     The builder validates the configuration, optionally loads plugins,
     sources and sinks, attaches run-header records, resolves QC and
@@ -275,7 +275,7 @@ def build_pipeline_plan(
     PipelineRuntime.
 
     Args:
-        config (RepocapsuleConfig): Declarative configuration for the
+        config (SievioConfig): Declarative configuration for the
             run.
         mutate (bool): Whether to mutate ``config`` in place. When False
             (default), the config is deep-copied so the original remains
@@ -392,14 +392,14 @@ def build_pipeline_plan(
     return PipelinePlan(spec=cfg, runtime=runtime)
 
 
-def _prepare_http(cfg: RepocapsuleConfig, overrides: PipelineOverrides | None = None) -> Optional[SafeHttpClient]:
+def _prepare_http(cfg: SievioConfig, overrides: PipelineOverrides | None = None) -> Optional[SafeHttpClient]:
     """Resolve the SafeHttpClient to use for remote-capable sources.
 
     If an override is provided via PipelineOverrides, it is returned
     as-is. Otherwise a new client is built from ``cfg.http``.
 
     Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
+        cfg (SievioConfig): Effective configuration for the run.
         overrides (PipelineOverrides | None): Optional runtime
             overrides.
 
@@ -413,15 +413,15 @@ def _prepare_http(cfg: RepocapsuleConfig, overrides: PipelineOverrides | None = 
     return cfg.http.build_client()
 
 
-def _assert_runtime_free_spec(cfg: RepocapsuleConfig) -> None:
-    """Validate that a RepocapsuleConfig does not embed runtime objects.
+def _assert_runtime_free_spec(cfg: SievioConfig) -> None:
+    """Validate that a SievioConfig does not embed runtime objects.
 
     This enforces the convention that declarative specs remain pure data
     by rejecting baked-in sources, sinks, HTTP clients, extractors,
     bytes handlers, or QC scorers.
 
     Args:
-        cfg (RepocapsuleConfig): Configuration to validate.
+        cfg (SievioConfig): Configuration to validate.
 
     Raises:
         ValueError: If any runtime-only field is populated.
@@ -450,11 +450,11 @@ def _assert_runtime_free_spec(cfg: RepocapsuleConfig) -> None:
         )
 
 
-def _prepare_sources(cfg: RepocapsuleConfig, registry: SourceRegistry, *, ctx: SourceFactoryContext) -> tuple[Source, ...]:
+def _prepare_sources(cfg: SievioConfig, registry: SourceRegistry, *, ctx: SourceFactoryContext) -> tuple[Source, ...]:
     """Build concrete Source instances from declarative specs.
 
     Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
+        cfg (SievioConfig): Effective configuration for the run.
         registry (SourceRegistry): Registry used to construct sources.
         ctx (SourceFactoryContext): Context shared across factories.
 
@@ -471,7 +471,7 @@ def _prepare_sources(cfg: RepocapsuleConfig, registry: SourceRegistry, *, ctx: S
     return tuple(registry.build_all(ctx, cfg.sources.specs))
 
 
-def _prepare_sinks(cfg: RepocapsuleConfig, registry: SinkRegistry, *, ctx: SinkFactoryContext) -> SinksPreparationResult:
+def _prepare_sinks(cfg: SievioConfig, registry: SinkRegistry, *, ctx: SinkFactoryContext) -> SinksPreparationResult:
     """Build sinks and derive normalized sink config and metadata.
 
     This function leaves ``cfg.sinks.sinks`` empty in the spec while
@@ -479,7 +479,7 @@ def _prepare_sinks(cfg: RepocapsuleConfig, registry: SinkRegistry, *, ctx: SinkF
     RunMetadata pair.
 
     Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
+        cfg (SievioConfig): Effective configuration for the run.
         registry (SinkRegistry): Registry used to construct sinks.
         ctx (SinkFactoryContext): Context shared across factories.
 
@@ -526,7 +526,7 @@ def _prepare_sinks(cfg: RepocapsuleConfig, registry: SinkRegistry, *, ctx: SinkF
 
 
 def _prepare_pipeline(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     *,
     bytes_registry: BytesHandlerRegistry,
     overrides: PipelineOverrides | None = None,
@@ -538,7 +538,7 @@ def _prepare_pipeline(
     and defaults.
 
     Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
+        cfg (SievioConfig): Effective configuration for the run.
         bytes_registry (BytesHandlerRegistry): Registry used to
             construct bytes handlers when no override is provided.
         overrides (PipelineOverrides | None): Optional runtime
@@ -565,7 +565,7 @@ def _prepare_pipeline(
 
 
 def _prepare_language_detectors(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     overrides: PipelineOverrides | None = None,
 ) -> tuple[LanguageDetector | None, CodeLanguageDetector | None]:
     """Resolve human and code language detectors."""
@@ -592,7 +592,7 @@ def _prepare_language_detectors(
 
 
 def _prepare_qc(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     *,
     scorer_registry: QualityScorerRegistry,
     safety_scorer_registry: SafetyScorerRegistry,
@@ -747,14 +747,14 @@ def _prepare_qc(
     )
 
 
-def _attach_run_header_record(cfg: RepocapsuleConfig, sinks: Sequence[Sink]) -> None:
+def _attach_run_header_record(cfg: SievioConfig, sinks: Sequence[Sink]) -> None:
     """Attach the run-header record to sinks that support it.
 
     Any sink implementing ``set_header_record`` will receive a header
     built from the effective configuration.
 
     Args:
-        cfg (RepocapsuleConfig): Effective configuration for the run.
+        cfg (SievioConfig): Effective configuration for the run.
         sinks (Sequence[Sink]): Runtime sinks that may accept header
             records.
     """
@@ -765,14 +765,14 @@ def _attach_run_header_record(cfg: RepocapsuleConfig, sinks: Sequence[Sink]) -> 
             setter(header)
 
 
-def _strip_runtime_from_spec(cfg: RepocapsuleConfig) -> None:
-    """Remove runtime-only objects from a RepocapsuleConfig.
+def _strip_runtime_from_spec(cfg: SievioConfig) -> None:
+    """Remove runtime-only objects from a SievioConfig.
 
     This is called after PipelineRuntime has been constructed so that
     the plan's spec remains a pure, reusable configuration object.
 
     Args:
-        cfg (RepocapsuleConfig): Configuration to sanitize.
+        cfg (SievioConfig): Configuration to sanitize.
     """
     cfg.http.client = None
     cfg.sources.sources = ()
@@ -788,7 +788,7 @@ def _strip_runtime_from_spec(cfg: RepocapsuleConfig) -> None:
 
 
 def build_engine(
-    config: RepocapsuleConfig,
+    config: SievioConfig,
     *,
     mutate: bool = False,
     overrides: PipelineOverrides | None = None,
@@ -799,7 +799,7 @@ def build_engine(
     immediately constructs a PipelineEngine from the resulting plan.
 
     Args:
-        config (RepocapsuleConfig): Declarative configuration for the
+        config (SievioConfig): Declarative configuration for the
             run.
         mutate (bool): Whether to mutate ``config`` in place when
             building the plan.

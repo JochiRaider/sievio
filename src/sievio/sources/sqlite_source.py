@@ -20,7 +20,7 @@ __all__ = ["SQLiteSource"]
 
 log = get_logger(__name__)
 
-_USER_AGENT = "repocapsule/0.1 (+https://github.com)"
+_USER_AGENT = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
 _READ_CHUNK = 64 * 1024
 
 

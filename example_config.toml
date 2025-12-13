@@ -1,5 +1,5 @@
 # example_config.toml
-# Comprehensive example of the TOML layout supported by RepocapsuleConfig.
+# Comprehensive example of the TOML layout supported by SievioConfig.
 # All tunable fields are shown with their library defaults; tweak as needed.
 # Array-of-table entries under [[sources.specs]] and [[sinks.specs]] hold the
 # declarative wiring for sources/sinks; everything else sets global defaults.
@@ -34,7 +34,7 @@ max_links = 200               # Maximum discovered links to chase from a scraped
 require_pdf = true            # Drop responses that do not sniff as PDFs when true
 include_ambiguous = false     # Allow links without an explicit .pdf suffix when true
 retries = 1                   # Number of retry attempts per PDF URL
-user_agent = "repocapsule/0.1 (+https://github.com)" # User-Agent string for web PDF requests
+user_agent = "sievio/0.1 (+https://github.com/jochiraider/sievio)" # User-Agent string for web PDF requests
 # client is injected programmatically if you want to reuse a SafeHttpClient
 download_max_workers = 4      # Number of concurrent PDF downloads (0/negative → auto based on URL count)
 # download_submit_window = 16   # Optional cap on in-flight download tasks (else max_workers * 4)
@@ -291,10 +291,10 @@ scorer_id = "default_safety" # Safety scorer to use (None → registry default)
 # Logging
 # ---------------------------------------------------------------------------
 [logging]
-level = "INFO"               # Log level for the repocapsule logger
+level = "INFO"               # Log level for the sievio logger
 propagate = false            # Propagate logs to the root logger when true
 fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s" # Logging format string
-logger_name = "repocapsule"  # Base logger name used for all repocapsule logs
+logger_name = "sievio"  # Base logger name used for all sievio logs
 
 # ---------------------------------------------------------------------------
 # Metadata stored in run headers and dataset cards

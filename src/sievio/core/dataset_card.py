@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Iterable, Mapping, MutableMapping, Sequence
 
-from .config import RepocapsuleConfig
+from .config import SievioConfig
 from .interfaces import RunLifecycleHook, RunContext, RunSummaryView, RunArtifacts
 from .language_id import CODE_EXTS, DOC_EXTS
 from .log import get_logger
@@ -78,11 +78,11 @@ class DatasetCardHook(RunLifecycleHook):
 
 
 def _package_version() -> str:
-    """Return the installed repocapsule version string."""
+    """Return the installed sievio version string."""
     try:
         from importlib.metadata import version  # type: ignore
 
-        return version("repocapsule")
+        return version("sievio")
     except Exception:
         return "0.0.0+unknown"
 
@@ -295,7 +295,7 @@ def _sample_languages(path: Path, *, max_records: int = 100) -> tuple[list[str] 
 
 
 def _choose_split(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     explicit: str | None,
 ) -> str:
     """Pick a split name from explicit input, config, or metadata."""
@@ -607,7 +607,7 @@ def _format_quality_sections(signal_stats: Mapping[str, Any] | None, screening_s
 
 
 def build_card_fragment_for_run(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     stats: Any,
     *,
     split: str | None = None,
@@ -692,7 +692,7 @@ def build_card_fragment_for_run(
 
 
 def write_card_fragment_for_run(
-    cfg: RepocapsuleConfig,
+    cfg: SievioConfig,
     stats: PipelineStats | Mapping[str, Any],
     *,
     split: str | None = None,

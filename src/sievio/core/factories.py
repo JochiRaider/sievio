@@ -9,7 +9,7 @@ This module re-exports factories split across:
 - factories_qc (QC and safety scorer construction)
 - factories_context (repo context and HTTP client)
 
-Callers should continue to import from `repocapsule.core.factories`.
+Callers should continue to import from `sievio.core.factories`.
 """
 
 from __future__ import annotations

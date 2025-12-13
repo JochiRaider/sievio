@@ -3,7 +3,7 @@
 """
 Sharding helpers for split-and-run workflows.
 
-Given a base RepocapsuleConfig and a list of targets (repos, paths, URLs),
+Given a base SievioConfig and a list of targets (repos, paths, URLs),
 generate per-shard configs with:
 - appropriate SourceSpec entries for the chosen source_kind,
 - unique output directories and jsonl basenames per shard,
@@ -18,7 +18,7 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Callable, Dict, Iterator, List, Sequence, Tuple
 
-from .config import RepocapsuleConfig, SourceSpec, SinkSpec
+from .config import SievioConfig, SourceSpec, SinkSpec
 
 
 def _make_scalar_specs(kind: str, items: Sequence[str]) -> List[SourceSpec]:
@@ -70,11 +70,11 @@ SHARDING_STRATEGIES: Dict[str, ShardingStrategy] = {
 
 def generate_shard_configs(
     input_list: Sequence[str],
-    base_config: RepocapsuleConfig,
+    base_config: SievioConfig,
     num_shards: int,
     source_kind: str,
-) -> Iterator[tuple[str, RepocapsuleConfig]]:
-    """Yield per-shard RepocapsuleConfig instances derived from base_config."""
+) -> Iterator[tuple[str, SievioConfig]]:
+    """Yield per-shard SievioConfig instances derived from base_config."""
     if num_shards < 1:
         raise ValueError("num_shards must be at least 1")
     if not input_list:

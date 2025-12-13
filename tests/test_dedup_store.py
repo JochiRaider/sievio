@@ -3,7 +3,7 @@ from concurrent.futures import ThreadPoolExecutor
 
 import pytest
 
-from repocapsule.core.dedup_store import GlobalDedupStore
+from sievio.core.dedup_store import GlobalDedupStore
 
 
 def test_check_and_add_flags_duplicates(tmp_path) -> None:
