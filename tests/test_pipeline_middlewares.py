@@ -332,3 +332,116 @@ def test_file_middleware_errors_raise_in_strict_mode(tmp_path: Path, caplog):
 
     assert engine.stats.middleware_errors == 1
     assert engine.stats.source_errors == 0
+
+
+def test_record_chain_preserves_order_and_writes_once(tmp_path: Path):
+    engine = _make_basic_plan(tmp_path)
+    events: list[str] = []
+
+    def before(record):
+        events.append("before")
+        meta = record.setdefault("meta", {})
+        meta.setdefault("seq", []).append("before")
+        return record
+
+    def allow(record):
+        events.append("filter")
+        meta = record.setdefault("meta", {})
+        meta.setdefault("seq", []).append("filter")
+        return True
+
+    def mw(record):
+        events.append("middleware")
+        meta = record.setdefault("meta", {})
+        meta.setdefault("seq", []).append("middleware")
+        return record
+
+    def after(record):
+        events.append("after")
+        meta = record.setdefault("meta", {})
+        meta.setdefault("seq", []).append("after")
+        return record
+
+    class Hook:
+        def __init__(self) -> None:
+            self.started = False
+            self.finished = False
+
+        def on_run_start(self, ctx):
+            self.started = True
+
+        def on_record(self, record):
+            events.append("lifecycle")
+            meta = record.setdefault("meta", {})
+            meta.setdefault("seq", []).append("lifecycle")
+            return record
+
+        def on_run_end(self, ctx):
+            self.finished = True
+
+    hook = Hook()
+    engine.before_record_hooks.append(before)
+    engine.record_filter_hooks.append(allow)
+    engine.add_record_middleware(mw)
+    engine.after_record_hooks.append(after)
+    engine.plan.runtime.lifecycle_hooks = (hook,)
+    engine._hooks = (hook,)
+
+    stats = engine.run()
+    payloads = _read_payloads(engine)
+    seqs = [rec.get("meta", {}).get("seq", []) for rec in payloads]
+
+    assert stats.records == 1
+    assert hook.started and hook.finished
+    assert events == ["before", "filter", "middleware", "after", "lifecycle"]
+    assert any(seq == events for seq in seqs)
+
+
+def test_record_chain_drops_skip_after_and_lifecycle(tmp_path: Path):
+    engine = _make_basic_plan(tmp_path)
+    calls: list[str] = []
+
+    def before(record):
+        calls.append("before")
+        return record
+
+    def drop(record):
+        calls.append("filter")
+        return False
+
+    def mw(record):
+        calls.append("middleware")
+        return record
+
+    def after(record):
+        calls.append("after")
+        return record
+
+    class Hook:
+        def __init__(self) -> None:
+            self.seen = False
+
+        def on_record(self, record):
+            self.seen = True
+            calls.append("lifecycle")
+            return record
+
+        def on_run_start(self, ctx):
+            return None
+
+        def on_run_end(self, ctx):
+            return None
+
+    hook = Hook()
+    engine.before_record_hooks.append(before)
+    engine.record_filter_hooks.append(drop)
+    engine.add_record_middleware(mw)
+    engine.after_record_hooks.append(after)
+    engine.plan.runtime.lifecycle_hooks = (hook,)
+    engine._hooks = (hook,)
+
+    stats = engine.run()
+
+    assert stats.records == 0
+    assert calls == ["before", "filter"]
+    assert hook.seen is False
