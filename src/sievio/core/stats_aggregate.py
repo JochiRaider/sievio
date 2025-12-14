@@ -78,6 +78,7 @@ def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any
         "records": 0,
         "sink_errors": 0,
         "source_errors": 0,
+        "middleware_errors": 0,
         "by_ext": {},
         "qc": {},
     }
@@ -89,6 +90,7 @@ def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any
         merged["records"] += int(data.get("records", 0))
         merged["sink_errors"] += int(data.get("sink_errors", 0))
         merged["source_errors"] += int(data.get("source_errors", 0))
+        merged["middleware_errors"] += int(data.get("middleware_errors", 0))
 
         ext_counts = data.get("by_ext") or {}
         for ext, count in ext_counts.items():

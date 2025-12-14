@@ -33,9 +33,14 @@ from .concurrency import (
 from .convert import DefaultExtractor
 from .log import get_logger
 from .qc_controller import QCSummaryTracker
+from .records import best_effort_record_path
 
 
 log = get_logger(__name__)
+
+
+class MiddlewareError(RuntimeError):
+    """Raised when a middleware failure should abort the pipeline."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class _FuncRecordMiddleware:
 
     def __init__(self, fn: Callable[[Record], Optional[Record]]) -> None:
         self._fn = fn
+        self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
     def process(self, record: Record) -> Optional[Record]:
         return self._fn(record)
@@ -62,6 +68,7 @@ class _FuncFileMiddleware:
 
     def __init__(self, fn: Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]) -> None:
         self._fn = fn
+        self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
     def process(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
         return self._fn(item, records)
@@ -152,6 +159,7 @@ class PipelineStats:
     records: int = 0
     sink_errors: int = 0
     source_errors: int = 0
+    middleware_errors: int = 0
     by_ext: Dict[str, int] = field(default_factory=dict)
     qc: QCSummaryTracker = field(default_factory=QCSummaryTracker)
     primary_jsonl_path: str | None = None
@@ -164,6 +172,7 @@ class PipelineStats:
             "records": int(self.records),
             "sink_errors": int(self.sink_errors),
             "source_errors": int(self.source_errors),
+            "middleware_errors": int(self.middleware_errors),
             "by_ext": dict(self.by_ext),
         }
         data["qc"] = self.qc.as_dict()
@@ -308,6 +317,9 @@ class PipelineEngine:
         if rt and getattr(rt, "record_middlewares", None):
             for mw in rt.record_middlewares:
                 self.add_record_middleware(mw)
+        self._fail_on_middleware_error = bool(
+            getattr(plan.runtime, "fail_fast", False) or getattr(self.config.pipeline, "fail_fast", False)
+        )
 
     def add_record_middleware(self, middleware: RecordMiddleware | Callable[[Record], Any]) -> None:
         """Register a record middleware or bare callable."""
@@ -336,16 +348,20 @@ class PipelineEngine:
         """Run a record through all registered record middlewares."""
         current = record
         for middleware in self.record_middlewares:
+            middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
+            record_label = best_effort_record_path(current)
             try:
                 process = getattr(middleware, "process", None)
                 callable_mw = process if callable(process) else middleware  # type: ignore[assignment]
                 current = callable_mw(current)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning(
-                    "record middleware %s failed: %s",
-                    getattr(middleware, "__name__", middleware.__class__.__name__),
-                    exc,
+            except Exception:  # noqa: BLE001
+                self.log.exception(
+                    "Record middleware %s failed for %s",
+                    middleware_name,
+                    record_label,
                 )
+                if self._fail_on_middleware_error:
+                    raise
                 return None
             if current is None:
                 return None
@@ -355,15 +371,23 @@ class PipelineEngine:
         """Run a file's records through registered file middlewares."""
         current = records
         for middleware in self.file_middlewares:
+            middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
+            item_label = getattr(item, "path", None) or getattr(item, "rel_path", None) or "<unknown>"
+            try:
+                item_label = str(item_label)
+            except Exception:
+                item_label = "<unknown>"
             try:
                 current = middleware.process(item, current)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning(
-                    "file middleware %s failed for %s: %s",
-                    getattr(middleware, "__name__", middleware.__class__.__name__),
-                    getattr(item, "path", "<unknown>"),
-                    exc,
+            except Exception:  # noqa: BLE001
+                self.stats.middleware_errors += 1
+                self.log.exception(
+                    "File middleware %s failed for %s",
+                    middleware_name,
+                    item_label,
                 )
+                if self._fail_on_middleware_error:
+                    raise MiddlewareError(f"File middleware {middleware_name} failed for {item_label}")
                 return None
             if current is None:
                 return None
@@ -586,6 +610,8 @@ class PipelineEngine:
                 self._write_records(work.item, recs, sinks=sinks)
             # Count only after successful processing (even if recs is None)
             self._increment_file_stats(work.item)
+        except MiddlewareError:
+            raise
         except Exception as exc:
             self.log.warning(
                 "Processing failed for %s: %s",
@@ -665,6 +691,8 @@ class PipelineEngine:
                 on_error=_on_worker_error,
                 on_submit_error=_on_submit_error,
             )
+        except MiddlewareError:
+            raise
         except Exception as exc:
             _log_pickling_hint(exc)
             stats.source_errors += 1
