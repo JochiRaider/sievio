@@ -1,9 +1,8 @@
 # Sievio
-Library-first, config-driven pipeline that turns repositories, logs, and other text/structured sources into normalized JSONL and Parquet datasets for LLM fine-tuning and analysis.
 
-Define a pipeline once in Python or TOML (`SievioConfig`), run it via a small set of helpers (`convert_local_dir`, `convert_github`, `convert`), and get a stable record schema and dataset card fragments. Requires Python 3.11+. Specs are strictly declarative; all runtime objects (clients, sources/sinks, extractors/handlers, scorers, language detectors, lifecycle hooks) live in `PipelineRuntime` and are injected via registries or `PipelineOverrides`.
+Config-first, extensible data pipeline for turning repositories, logs, PDFs, CSV/SQLite tables, and other text/structured inputs into a stable JSONL corpus (with optional prompt text and Parquet datasets), ready for LLM fine-tuning, evaluation, or analysis.
 
-> Sievio was formerly RepoCapsule. See `MIGRATION.md` for rename guidance.
+Define a run declaratively in Python or TOML (`SievioConfig`), execute it via a small set of helpers (`convert`, `convert_local_dir`, `convert_github`), and get a consistent record schema plus run artifacts: language tagging, QC + safety screening (inline/advisory or post-hoc), deduplication signals, and dataset card fragments. Runtime wiring (sources/sinks, HTTP clients, bytes handlers, scorers, detectors, lifecycle hooks) is resolved into a `PipelineRuntime` via registries and optional `PipelineOverrides`, and the engine appends a canonical run summary record at completion. 
 
 ## Key features
 - **Sources (ingest):** Local directories, GitHub zipballs, web PDFs (page scrape or URL list), CSV/TSV, and SQLite tables/queries. Optional bytes handlers (PDF/EVTX/Parquet) activate when extras are installed. All are configured via `SourceConfig` and declarative `[[sources.specs]]` entries (see `core/config.py` and `example_config.toml`), and implemented under `src/sievio/sources`.

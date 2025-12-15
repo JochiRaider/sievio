@@ -28,64 +28,64 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 │   └── seed_dedup_db.py
 ├── src
 │   ├── sievio
-│   │   ├── __init__.py
-│   │   ├── cli
-│   │   │   ├── __init__.py
-│   │   │   ├── main.py
-│   │   │   └── runner.py
-│   │   ├── core
-│   │   │   ├── __init__.py
-│   │   │   ├── builder.py
-│   │   │   ├── chunk.py
-│   │   │   ├── concurrency.py
-│   │   │   ├── config.py
-│   │   │   ├── convert.py
-│   │   │   ├── dataset_card.py
-│   │   │   ├── decode.py
-│   │   │   ├── dedup_store.py
-│   │   │   ├── extras
-│   │   │   │   ├── __init__.py
-│   │   │   │   ├── langid_lingua.py
-│   │   │   │   ├── langid_pygments.py
-│   │   │   │   ├── md_kql.py
-│   │   │   │   ├── qc.py
-│   │   │   │   └── safety.py
-│   │   │   ├── factories.py
-│   │   │   ├── factories_context.py
-│   │   │   ├── factories_qc.py
-│   │   │   ├── factories_sinks.py
-│   │   │   ├── factories_sources.py
-│   │   │   ├── hooks.py
-│   │   │   ├── interfaces.py
-│   │   │   ├── language_id.py
-│   │   │   ├── licenses.py
-│   │   │   ├── log.py
-│   │   │   ├── naming.py
-│   │   │   ├── pipeline.py
-│   │   │   ├── plugins.py
-│   │   │   ├── qc_controller.py
-│   │   │   ├── qc_post.py
-│   │   │   ├── qc_utils.py
-│   │   │   ├── records.py
-│   │   │   ├── registries.py
-│   │   │   ├── safe_http.py
-│   │   │   ├── sharding.py
-│   │   │   └── stats_aggregate.py
-│   │   ├── sinks
-│   │   │   ├── __init__.py
-│   │   │   ├── parquet.py
-│   │   │   └── sinks.py
-│   │   └── sources
-│   │       ├── __init__.py
-│   │       ├── csv_source.py
-│   │       ├── evtxio.py
-│   │       ├── fs.py
-│   │       ├── githubio.py
-│   │       ├── jsonl_source.py
-│   │       ├── parquetio.py
-│   │       ├── pdfio.py
-│   │       ├── sources_webpdf.py
-│   │       └── sqlite_source.py
+│       ├── __init__.py
+│       ├── cli
+│       │   ├── __init__.py
+│       │   ├── main.py
+│       │   └── runner.py
+│       ├── core
+│       │   ├── __init__.py
+│       │   ├── builder.py
+│       │   ├── chunk.py
+│       │   ├── concurrency.py
+│       │   ├── config.py
+│       │   ├── convert.py
+│       │   ├── dataset_card.py
+│       │   ├── decode.py
+│       │   ├── dedup_store.py
+│       │   ├── extras
+│       │   │   ├── __init__.py
+│       │   │   ├── langid_lingua.py
+│       │   │   ├── langid_pygments.py
+│       │   │   ├── md_kql.py
+│       │   │   ├── qc.py
+│       │   │   └── safety.py
+│       │   ├── factories.py
+│       │   ├── factories_context.py
+│       │   ├── factories_qc.py
+│       │   ├── factories_sinks.py
+│       │   ├── factories_sources.py
+│       │   ├── hooks.py
+│       │   ├── interfaces.py
+│       │   ├── language_id.py
+│       │   ├── licenses.py
+│       │   ├── log.py
+│       │   ├── naming.py
+│       │   ├── pipeline.py
+│       │   ├── plugins.py
+│       │   ├── qc_controller.py
+│       │   ├── qc_post.py
+│       │   ├── qc_utils.py
+│       │   ├── records.py
+│       │   ├── registries.py
+│       │   ├── safe_http.py
+│       │   ├── sharding.py
+│       │   └── stats_aggregate.py
+│       ├── sinks
+│       │   ├── __init__.py
+│       │   ├── parquet.py
+│       │   └── sinks.py
+│       └── sources
+│           ├── __init__.py
+│           ├── csv_source.py
+│           ├── evtxio.py
+│           ├── fs.py
+│           ├── githubio.py
+│           ├── jsonl_source.py
+│           ├── parquetio.py
+│           ├── pdfio.py
+│           ├── sources_webpdf.py
+│           └── sqlite_source.py
 └── tests
     ├── conftest.py
     ├── test_builder_runtime_layering.py
