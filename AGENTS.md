@@ -5,11 +5,9 @@ It is intentionally named `AGENTS.md` so agent tooling can auto-discover it.
 
 The project is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized datasets (JSONL/Parquet) for LLM pre-training, fine-tuning or analysis. A config describes a run, the builder turns it into a plan/runtime, and the pipeline engine coordinates sources → decode → chunk → records → sinks, with optional QC and dataset cards layered around the core.
 
-For deeper architecture and module-by-module descriptions, see `llms.md`.
+For deeper architecture and module-by-module descriptions, see `LLMS.md`.
 For the canonical file tree (what files and tests exist), see `project_files.md`.
 Use this `AGENTS.md` as the primary rules and “how to work safely” guide.
-
-> Rename note: the project was formerly RepoCapsule. The package/imports/CLI are now `sievio`; no `repocapsule` compatibility layer remains. See `MIGRATION.md` if you encounter old references.
 
 ---
 

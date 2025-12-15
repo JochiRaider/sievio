@@ -2,10 +2,8 @@
 
 This file gives LLMs a compact map of Sievio so they can work in the right modules and avoid touching core pipeline wiring by accident.
 
-> Rename note: the project previously shipped as RepoCapsule. All imports/CLIs now use `sievio`; no compatibility shim exists. See `MIGRATION.md` for details.
-
 For operational rules, invariants, and “how to ask an AI for help,” see `AGENTS.md`.
-This `llms.md` focuses on architecture, module responsibilities, and where to make
+This `LLMS.md` focuses on architecture, module responsibilities, and where to make
 changes for different tasks.
 
 ---
