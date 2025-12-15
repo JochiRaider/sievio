@@ -81,6 +81,7 @@ def make_jsonl_text_source(
     *,
     context: Optional[RepoContext] = None,
     text_key: str = "text",
+    check_schema: bool = True,
 ):
     """
     Build a JSONLTextSource for a sequence of JSONL files.
@@ -89,6 +90,7 @@ def make_jsonl_text_source(
         paths (Sequence[str | Path]): JSONL file paths to read.
         context (RepoContext | None): Repository context to attach to records.
         text_key (str): Field containing text within each JSONL record.
+        check_schema (bool): Whether to run schema checks on Sievio records.
 
     Returns:
         JSONLTextSource: Configured source for reading text rows.
@@ -97,7 +99,12 @@ def make_jsonl_text_source(
     from ..sources.jsonl_source import JSONLTextSource
 
     norm_paths = [Path(p) for p in paths]
-    return JSONLTextSource(paths=tuple(norm_paths), context=context, text_key=text_key)
+    return JSONLTextSource(
+        paths=tuple(norm_paths),
+        context=context,
+        text_key=text_key,
+        check_schema=check_schema,
+    )
 
 
 def make_csv_text_source(

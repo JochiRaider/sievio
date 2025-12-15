@@ -5,8 +5,24 @@ from sievio.core.stats_aggregate import merge_pipeline_stats
 
 def test_merge_pipeline_stats_sums_top_level_counts():
     stats = [
-        {"files": 2, "bytes": 100, "records": 5, "sink_errors": 1, "source_errors": 0, "by_ext": {".py": 2}},
-        {"files": 3, "bytes": 50, "records": 7, "sink_errors": 0, "source_errors": 2, "by_ext": {".md": 1}},
+        {
+            "files": 2,
+            "bytes": 100,
+            "records": 5,
+            "sink_errors": 1,
+            "source_errors": 0,
+            "middleware_errors": 1,
+            "by_ext": {".py": 2},
+        },
+        {
+            "files": 3,
+            "bytes": 50,
+            "records": 7,
+            "sink_errors": 0,
+            "source_errors": 2,
+            "middleware_errors": 2,
+            "by_ext": {".md": 1},
+        },
     ]
 
     merged = merge_pipeline_stats(stats)
@@ -16,6 +32,7 @@ def test_merge_pipeline_stats_sums_top_level_counts():
     assert merged["records"] == 12
     assert merged["sink_errors"] == 1
     assert merged["source_errors"] == 2
+    assert merged["middleware_errors"] == 3
     assert merged["by_ext"] == {".py": 2, ".md": 1}
 
 

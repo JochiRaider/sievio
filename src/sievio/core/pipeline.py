@@ -33,9 +33,14 @@ from .concurrency import (
 from .convert import DefaultExtractor
 from .log import get_logger
 from .qc_controller import QCSummaryTracker
+from .records import best_effort_record_path
 
 
 log = get_logger(__name__)
+
+
+class MiddlewareError(RuntimeError):
+    """Raised when a middleware failure should abort the pipeline."""
 
 
 @dataclass(frozen=True)
@@ -49,6 +54,7 @@ class _FuncRecordMiddleware:
 
     def __init__(self, fn: Callable[[Record], Optional[Record]]) -> None:
         self._fn = fn
+        self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
     def process(self, record: Record) -> Optional[Record]:
         return self._fn(record)
@@ -62,6 +68,7 @@ class _FuncFileMiddleware:
 
     def __init__(self, fn: Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]) -> None:
         self._fn = fn
+        self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
     def process(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
         return self._fn(item, records)
@@ -106,6 +113,7 @@ def _coerce_file_middleware(mw: FileMiddleware | Callable[[Any, Iterable[Record]
 class _ProcessFileCallable:
     config: FileProcessingConfig
     file_extractor: FileExtractor
+    executor_kind: str = "thread"
     materialize: bool = False
 
     def __call__(self, work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
@@ -124,11 +132,58 @@ class _ProcessFileCallable:
         rel = getattr(item, "path", None) or getattr(item, "rel_path", None)
         if rel is None:
             raise ValueError("FileItem missing 'path'")
-        recs_iter = self.file_extractor.extract(
-            item,
-            config=self.config,
-            context=ctx,
+        recs_iter: Iterable[Record]
+        extract_stream = getattr(self.file_extractor, "extract_stream", None)
+        can_stream = (
+            self.executor_kind == "thread"
+            and callable(extract_stream)
+            and getattr(item, "streamable", False)
+            and bool(getattr(item, "origin_path", None))
         )
+        if can_stream:
+            stream = None
+            try:
+                stream = open(str(getattr(item, "origin_path")), "rb")
+                stream_ref = stream
+
+                def _iter_with_close(iterable: Iterable[Record]) -> Iterable[Record]:
+                    try:
+                        yield from iterable
+                    finally:
+                        try:
+                            stream_ref.close()
+                        except Exception:
+                            pass
+
+                out = extract_stream(  # type: ignore[misc]
+                    stream=stream,
+                    path=str(rel),
+                    context=ctx,
+                )
+                recs_iter = _iter_with_close(out if out is not None else ())
+                stream = None
+            except Exception:
+                if stream:
+                    try:
+                        stream.close()
+                    except Exception:
+                        pass
+                log.debug(
+                    "Streaming extraction failed for %s; falling back to extract()",
+                    rel,
+                    exc_info=True,
+                )
+                recs_iter = self.file_extractor.extract(
+                    item,
+                    config=self.config,
+                    context=ctx,
+                )
+        else:
+            recs_iter = self.file_extractor.extract(
+                item,
+                config=self.config,
+                context=ctx,
+            )
         if self.materialize:
             recs_iter = list(recs_iter)
         return item, recs_iter
@@ -152,6 +207,7 @@ class PipelineStats:
     records: int = 0
     sink_errors: int = 0
     source_errors: int = 0
+    middleware_errors: int = 0
     by_ext: Dict[str, int] = field(default_factory=dict)
     qc: QCSummaryTracker = field(default_factory=QCSummaryTracker)
     primary_jsonl_path: str | None = None
@@ -164,6 +220,7 @@ class PipelineStats:
             "records": int(self.records),
             "sink_errors": int(self.sink_errors),
             "source_errors": int(self.source_errors),
+            "middleware_errors": int(self.middleware_errors),
             "by_ext": dict(self.by_ext),
         }
         data["qc"] = self.qc.as_dict()
@@ -303,16 +360,22 @@ class PipelineEngine:
         self.file_middlewares: List[FileMiddleware] = []
         self.before_source_hooks: List[Callable[[Source], None]] = []
         self.after_source_hooks: List[Callable[[Source], None]] = []
+        self._record_chain: List[Callable[[Record], Optional[Record]]] = []
+        self._record_chain_dirty = True
         self._middlewares_normalized = False
         rt = getattr(plan, "runtime", None)
         if rt and getattr(rt, "record_middlewares", None):
             for mw in rt.record_middlewares:
                 self.add_record_middleware(mw)
+        self._fail_on_middleware_error = bool(
+            getattr(plan.runtime, "fail_fast", False) or getattr(self.config.pipeline, "fail_fast", False)
+        )
 
     def add_record_middleware(self, middleware: RecordMiddleware | Callable[[Record], Any]) -> None:
         """Register a record middleware or bare callable."""
         self.record_middlewares.append(_coerce_record_middleware(middleware))
         self._middlewares_normalized = False
+        self._record_chain_dirty = True
 
     def add_file_middleware(
         self,
@@ -332,38 +395,138 @@ class PipelineEngine:
 
         self._middlewares_normalized = True
 
+    def _middleware_chain_step(self, record: Record) -> Optional[Record]:
+        """Chain adapter for record middlewares."""
+        return self._apply_middlewares(record)
+
     def _apply_middlewares(self, record: Record) -> Optional[Record]:
         """Run a record through all registered record middlewares."""
         current = record
         for middleware in self.record_middlewares:
+            middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
+            record_label = best_effort_record_path(current)
             try:
                 process = getattr(middleware, "process", None)
                 callable_mw = process if callable(process) else middleware  # type: ignore[assignment]
                 current = callable_mw(current)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning(
-                    "record middleware %s failed: %s",
-                    getattr(middleware, "__name__", middleware.__class__.__name__),
-                    exc,
+            except Exception:  # noqa: BLE001
+                self.log.exception(
+                    "Record middleware %s failed for %s",
+                    middleware_name,
+                    record_label,
                 )
+                if self._fail_on_middleware_error:
+                    raise
                 return None
             if current is None:
                 return None
         return current
 
+    def _wrap_before_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Optional[Record]]:
+        def _step(record: Record) -> Optional[Record]:
+            try:
+                return hook(record)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "before_record hook %s failed: %s",
+                    getattr(hook, "__name__", hook),
+                    exc,
+                )
+                return record
+
+        return _step
+
+    def _wrap_after_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Optional[Record]]:
+        def _step(record: Record) -> Optional[Record]:
+            try:
+                return hook(record)
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "after_record hook %s failed: %s",
+                    getattr(hook, "__name__", hook),
+                    exc,
+                )
+                return record
+
+        return _step
+
+    def _wrap_record_filter(self, check: Callable[[Record], bool]) -> Callable[[Record], Optional[Record]]:
+        def _step(record: Record) -> Optional[Record]:
+            try:
+                if check(record):
+                    return record
+            except Exception as exc:  # noqa: BLE001
+                self.log.warning(
+                    "record_filter hook %s failed: %s",
+                    getattr(check, "__name__", check),
+                    exc,
+                )
+                return None
+            return None
+
+        return _step
+
+    def _wrap_lifecycle_hooks(self) -> Callable[[Record], Optional[Record]]:
+        def _step(record: Record) -> Optional[Record]:
+            rec: Optional[Record] = record
+            for hook in self._hooks:
+                if rec is None:
+                    break
+                try:
+                    rec = hook.on_record(rec)
+                except Exception as exc:  # noqa: BLE001
+                    self.log.warning(
+                        "lifecycle hook %s failed on record: %s",
+                        getattr(hook, "__class__", type(hook)).__name__,
+                        exc,
+                    )
+                    rec = None
+                    break
+            return rec
+
+        return _step
+
+    def _build_record_chain(self) -> None:
+        """Construct the unified per-record processing chain."""
+        chain: List[Callable[[Record], Optional[Record]]] = []
+        for hook in self.before_record_hooks:
+            chain.append(self._wrap_before_record_hook(hook))
+        for check in self.record_filter_hooks:
+            chain.append(self._wrap_record_filter(check))
+        if self.record_middlewares:
+            chain.append(self._middleware_chain_step)
+        for hook in self.after_record_hooks:
+            chain.append(self._wrap_after_record_hook(hook))
+        if self._hooks:
+            chain.append(self._wrap_lifecycle_hooks())
+        self._record_chain = chain
+        self._record_chain_dirty = False
+
+    def _ensure_record_chain(self) -> None:
+        if self._record_chain_dirty:
+            self._build_record_chain()
+
     def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
         """Run a file's records through registered file middlewares."""
         current = records
         for middleware in self.file_middlewares:
+            middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
+            item_label = getattr(item, "path", None) or getattr(item, "rel_path", None) or "<unknown>"
+            try:
+                item_label = str(item_label)
+            except Exception:
+                item_label = "<unknown>"
             try:
                 current = middleware.process(item, current)
-            except Exception as exc:  # noqa: BLE001
-                self.log.warning(
-                    "file middleware %s failed for %s: %s",
-                    getattr(middleware, "__name__", middleware.__class__.__name__),
-                    getattr(item, "path", "<unknown>"),
-                    exc,
+            except Exception:  # noqa: BLE001
+                self.stats.middleware_errors += 1
+                self.log.exception(
+                    "File middleware %s failed for %s",
+                    middleware_name,
+                    item_label,
                 )
+                if self._fail_on_middleware_error:
+                    raise MiddlewareError(f"File middleware {middleware_name} failed for {item_label}")
                 return None
             if current is None:
                 return None
@@ -384,7 +547,7 @@ class PipelineEngine:
         ext = _ext_key(getattr(item, "path", ""))
         stats.by_ext[ext] = stats.by_ext.get(ext, 0) + 1
 
-    def _make_processor(self, *, materialize: bool) -> _ProcessFileCallable:
+    def _make_processor(self, *, materialize: bool, executor_kind: str) -> _ProcessFileCallable:
         """Build a callable that extracts records for each work item.
 
         Args:
@@ -402,6 +565,7 @@ class PipelineEngine:
         return _ProcessFileCallable(
             config=file_cfg,
             file_extractor=extractor,
+            executor_kind=executor_kind,
             materialize=materialize,
         )
 
@@ -432,67 +596,18 @@ class PipelineEngine:
             sinks (Sequence[Sink]): Destinations to receive records.
         """
         stats = self.stats
+        self._ensure_record_chain()
+        chain = self._record_chain
 
         for record in recs:
-            for hook in self.before_record_hooks:
-                try:
-                    record = hook(record)
-                except Exception as exc:
-                    self.log.warning(
-                        "before_record hook %s failed: %s",
-                        getattr(hook, "__name__", hook),
-                        exc,
-                    )
-
-            keep = True
-            for check in self.record_filter_hooks:
-                try:
-                    if not check(record):
-                        keep = False
-                        break
-                except Exception as exc:
-                    self.log.warning(
-                        "record_filter hook %s failed: %s",
-                        getattr(check, "__name__", check),
-                        exc,
-                    )
-                    keep = False
+            current: Optional[Record] = record
+            for step in chain:
+                if current is None:
                     break
-            if not keep:
+                current = step(current)
+            if current is None:
                 continue
-
-            record = self._apply_middlewares(record)
-            if record is None:
-                continue
-
-            for hook in self.after_record_hooks:
-                try:
-                    record = hook(record)
-                except Exception as exc:
-                    self.log.warning(
-                        "after_record hook %s failed: %s",
-                        getattr(hook, "__name__", hook),
-                        exc,
-                    )
-
-            rec = record
-            for hook in self._hooks:
-                if rec is None:
-                    break
-                try:
-                    rec = hook.on_record(rec)
-                except Exception as exc:
-                    self.log.warning(
-                        "lifecycle hook %s failed on record: %s",
-                        getattr(hook, "__class__", type(hook)).__name__,
-                        exc,
-                    )
-                    rec = None
-                    break
-            if rec is None:
-                continue
-            record = rec
-
+            record = current
             wrote_any = False
             for sink in sinks:
                 try:
@@ -586,6 +701,8 @@ class PipelineEngine:
                 self._write_records(work.item, recs, sinks=sinks)
             # Count only after successful processing (even if recs is None)
             self._increment_file_stats(work.item)
+        except MiddlewareError:
+            raise
         except Exception as exc:
             self.log.warning(
                 "Processing failed for %s: %s",
@@ -665,6 +782,8 @@ class PipelineEngine:
                 on_error=_on_worker_error,
                 on_submit_error=_on_submit_error,
             )
+        except MiddlewareError:
+            raise
         except Exception as exc:
             _log_pickling_hint(exc)
             stats.source_errors += 1
@@ -719,6 +838,7 @@ class PipelineEngine:
         jsonl_path = cfg.sinks.primary_jsonl_name or cfg.metadata.primary_jsonl
         stats.primary_jsonl_path = jsonl_path
         self._normalize_middlewares()
+        self._record_chain_dirty = True
 
         start_ctx = RunContext(cfg=cfg, stats=stats, runtime=self.plan.runtime)
         for hook in self._hooks:
@@ -743,7 +863,10 @@ class PipelineEngine:
 
                 executor, fail_fast = self._build_executor()
                 materialize_results = executor.cfg.kind == "process"
-                processor = self._make_processor(materialize=materialize_results)
+                processor = self._make_processor(
+                    materialize=materialize_results,
+                    executor_kind=executor.cfg.kind,
+                )
                 source_items = self._iter_source_items(open_sources)
 
                 requested_kind = (cfg.pipeline.executor_kind or "auto").strip().lower()
