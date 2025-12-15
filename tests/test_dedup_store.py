@@ -1,9 +1,28 @@
+import multiprocessing as mp
 import sqlite3
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.connection import Connection
 
 import pytest
 
 from sievio.core.dedup_store import GlobalDedupStore
+
+
+def _run_check_and_add(
+    start_conn: Connection,
+    result_conn: Connection,
+    db_path: str,
+    n_perm: int,
+    bands: int,
+    doc_id: str,
+    sig: tuple[int, ...],
+    content_hash: str | None,
+) -> None:
+    result_conn.send("ready")
+    start_conn.recv()
+    with GlobalDedupStore(db_path, n_perm=n_perm, bands=bands) as store:
+        res = store.check_and_add(doc_id, sig, content_hash=content_hash, add_if_missing=True)
+    result_conn.send((res.is_duplicate, res.match_id))
 
 
 def test_check_and_add_flags_duplicates(tmp_path) -> None:
@@ -101,3 +120,91 @@ def test_global_dedup_store_handles_concurrent_writes(tmp_path) -> None:
     with sqlite3.connect(db_path) as conn:
         (count,) = conn.execute("SELECT COUNT(*) FROM signatures").fetchone()
         assert count == 20
+
+
+def test_content_hash_enforced_uniqueness_under_concurrency(tmp_path) -> None:
+    db_path = tmp_path / "dedup.db"
+    n_perm = 8
+    bands = 2
+    sig = tuple(range(n_perm))
+
+    ctx = mp.get_context("spawn")
+    start_conns = []
+    result_conns = []
+    procs = []
+    for doc_id in ("doc-a", "doc-b"):
+        start_child, start_parent = ctx.Pipe(duplex=False)
+        result_parent, result_child = ctx.Pipe(duplex=False)
+        proc = ctx.Process(
+            target=_run_check_and_add,
+            args=(start_child, result_child, str(db_path), n_perm, bands, doc_id, sig, "samehash"),
+        )
+        procs.append(proc)
+        start_conns.append(start_parent)
+        result_conns.append(result_parent)
+
+    for proc in procs:
+        proc.start()
+    for result_conn in result_conns:
+        assert result_conn.recv() == "ready"
+    for start_conn in start_conns:
+        start_conn.send("go")
+    for proc in procs:
+        proc.join(timeout=15)
+    for proc in procs:
+        assert proc.exitcode == 0
+
+    results = [conn.recv() for conn in result_conns]
+    dup_flags = [dup for dup, _match in results]
+    assert sum(dup_flags) == 1
+    match_ids = [match for dup, match in results if dup]
+    assert len(match_ids) == 1
+    assert match_ids[0] in {"doc-a", "doc-b"}
+
+    with sqlite3.connect(db_path) as conn:
+        (count,) = conn.execute("SELECT COUNT(*) FROM signatures").fetchone()
+        assert count == 1
+
+
+def test_atomic_check_and_add_prevents_near_dup_race(tmp_path) -> None:
+    db_path = tmp_path / "dedup.db"
+    n_perm = 8
+    bands = 2
+    sig = tuple(range(n_perm))
+
+    ctx = mp.get_context("spawn")
+    start_conns = []
+    result_conns = []
+    procs = []
+    for doc_id in ("doc-a", "doc-b"):
+        start_child, start_parent = ctx.Pipe(duplex=False)
+        result_parent, result_child = ctx.Pipe(duplex=False)
+        proc = ctx.Process(
+            target=_run_check_and_add,
+            args=(start_child, result_child, str(db_path), n_perm, bands, doc_id, sig, None),
+        )
+        procs.append(proc)
+        start_conns.append(start_parent)
+        result_conns.append(result_parent)
+
+    for proc in procs:
+        proc.start()
+    for result_conn in result_conns:
+        assert result_conn.recv() == "ready"
+    for start_conn in start_conns:
+        start_conn.send("go")
+    for proc in procs:
+        proc.join(timeout=15)
+    for proc in procs:
+        assert proc.exitcode == 0
+
+    results = [conn.recv() for conn in result_conns]
+    dup_flags = [dup for dup, _match in results]
+    assert sum(dup_flags) == 1
+    match_ids = [match for dup, match in results if dup]
+    assert len(match_ids) == 1
+    assert match_ids[0] in {"doc-a", "doc-b"}
+
+    with sqlite3.connect(db_path) as conn:
+        (count,) = conn.execute("SELECT COUNT(*) FROM signatures").fetchone()
+        assert count == 2

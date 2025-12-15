@@ -223,6 +223,7 @@ Global MinHash dedup store:
   path = "out/global_dedup.db"
   read_only = false  # true when only reading from a pre-seeded DB
   ```
+- The store enforces uniqueness for non-null `content_hash` values and runs `check_and_add` inside a single `BEGIN IMMEDIATE` transaction when `add_if_missing=true` so concurrent writers get consistent duplicate decisions. Open an existing DB with write access at least once to install the unique index.
 - Use `scripts/seed_dedup_db.py` to pre-index existing JSONL/JSONL.GZ datasets into a dedup DB before running QC. The script uses the same doc_id logic as the scorer and takes `--k`, `--perm`, `--bands`, and `--threshold` flags; make sure these align with your `minhash_*` QC settings so the DB metadata matches.
 
 Rules of thumb for QC contributions:

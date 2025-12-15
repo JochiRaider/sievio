@@ -129,6 +129,7 @@ class SafeHttpClient:
 
     _ALLOWED_SCHEMES = ("http", "https")
     _REDIRECT_CODES = {301, 302, 303, 307, 308}
+    _COMMON_PUBLIC_SUFFIX_2LD = {"co", "com", "net", "org", "gov", "edu", "ac"}
 
     def __init__(
         self,
@@ -169,28 +170,45 @@ class SafeHttpClient:
 
     def _trusted_suffix_for(self, host: Optional[str]) -> Optional[str]:
         """Return the trusted redirect suffix for a host, if any."""
-        if not host:
+        normalized = self._normalize_host(host)
+        if not normalized:
             return None
-        host_l = host.lower()
         for suffix in self._trusted_redirect_suffixes:
-            if host_l == suffix or host_l.endswith("." + suffix):
+            if normalized == suffix or normalized.endswith("." + suffix):
                 return suffix
         return None
 
     @staticmethod
     def _registrable_domain(host: str) -> Optional[str]:
         """Return the registrable domain portion of a host."""
+        host = host.rstrip(".").lower()
+        if not host:
+            return None
         parts = host.split(".")
         if len(parts) < 2:
             return None
-        return ".".join(parts[-2:])
+        suffix_len = 1
+        tld = parts[-1]
+        if len(parts) >= 3 and len(tld) == 2 and parts[-2] in SafeHttpClient._COMMON_PUBLIC_SUFFIX_2LD:
+            suffix_len = 2
+        if len(parts) <= suffix_len:
+            return None
+        return ".".join(parts[-(suffix_len + 1) :])
+
+    @staticmethod
+    def _normalize_host(host: Optional[str]) -> Optional[str]:
+        """Normalize a host for comparisons."""
+        if not host:
+            return None
+        normalized = host.rstrip(".").lower()
+        return normalized or None
 
     def _hosts_related(self, origin: Optional[str], target: Optional[str]) -> bool:
         """Determine if two hosts are related enough to allow redirects."""
+        origin = self._normalize_host(origin)
+        target = self._normalize_host(target)
         if not origin or not target:
             return False
-        origin = origin.lower()
-        target = target.lower()
         if target == origin:
             return True
         if target.endswith("." + origin):
