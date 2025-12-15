@@ -529,14 +529,18 @@ class InlineScreeningController:
             except Exception:
                 self.logger.warning("screener %s failed", getattr(screener, "id", screener), exc_info=True)
                 screener_id = getattr(screener, "id", "")
+                enforce = bool(getattr(screener, "enforce_drops", True))
                 if screener_id == "quality":
                     self.summary.record_error()
                 elif screener_id == "safety":
                     self.summary.record_safety_error()
                 else:
                     self.summary.record_screener_error(screener_id or "unknown")
-                self._rollback_kept(kept_screeners)
-                return None
+                if enforce:
+                    self._rollback_kept(kept_screeners)
+                    return None
+                # advisory screeners should not drop; continue with current record
+                continue
             if result is None:
                 self._rollback_kept(kept_screeners)
                 return None
