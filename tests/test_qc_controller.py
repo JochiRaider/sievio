@@ -586,3 +586,31 @@ def test_process_record_records_custom_error_and_rolls_back_kept():
     assert stats.qc.screeners["custom_x"].errors == 1
     assert quality_stats.kept == 0
     assert quality_stats.scored == 1
+
+
+class AdvisoryExplodingScreener:
+    def __init__(self, sid: str):
+        self.id = sid
+        self.enforce_drops = False
+
+    def process_record(self, record):
+        raise RuntimeError("oops")
+
+
+def test_process_record_advisory_exception_keeps_record_and_counts_error():
+    qc_cfg = QCConfig(enabled=True, min_score=0.0, mode=QCMode.ADVISORY)
+    advisory = AdvisoryExplodingScreener("advisory_x")
+    controller = InlineScreeningController(
+        summary=None,
+        screeners=[advisory],
+        logger=DummyLogger(),
+        qc_cfg=qc_cfg,
+    )
+    stats = PipelineStats()
+    controller.reset(stats, qc_cfg=qc_cfg)
+
+    kept = controller.process_record({"text": "keep me", "meta": {"path": "ok.py"}})
+
+    assert kept is not None
+    advisory_stats = stats.qc.screeners["advisory_x"]
+    assert advisory_stats.errors == 1
