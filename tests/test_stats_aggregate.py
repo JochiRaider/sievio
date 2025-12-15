@@ -7,6 +7,7 @@ def test_merge_pipeline_stats_sums_top_level_counts():
     stats = [
         {
             "files": 2,
+            "attempted_files": 3,
             "bytes": 100,
             "records": 5,
             "sink_errors": 1,
@@ -16,6 +17,7 @@ def test_merge_pipeline_stats_sums_top_level_counts():
         },
         {
             "files": 3,
+            "attempted_files": 4,
             "bytes": 50,
             "records": 7,
             "sink_errors": 0,
@@ -28,6 +30,7 @@ def test_merge_pipeline_stats_sums_top_level_counts():
     merged = merge_pipeline_stats(stats)
 
     assert merged["files"] == 5
+    assert merged["attempted_files"] == 7
     assert merged["bytes"] == 150
     assert merged["records"] == 12
     assert merged["sink_errors"] == 1

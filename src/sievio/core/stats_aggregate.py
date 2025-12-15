@@ -74,6 +74,7 @@ def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any
     """
     merged: Dict[str, Any] = {
         "files": 0,
+        "attempted_files": 0,
         "bytes": 0,
         "records": 0,
         "sink_errors": 0,
@@ -86,6 +87,7 @@ def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any
 
     for data in stats_dicts:
         merged["files"] += int(data.get("files", 0))
+        merged["attempted_files"] += int(data.get("attempted_files", 0))
         merged["bytes"] += int(data.get("bytes", 0))
         merged["records"] += int(data.get("records", 0))
         merged["sink_errors"] += int(data.get("sink_errors", 0))

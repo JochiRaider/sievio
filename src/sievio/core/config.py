@@ -303,6 +303,7 @@ class PipelineConfig:
     submit_window: Optional[int] = None
     fail_fast: bool = False
     executor_kind: str = "auto"
+    max_error_rate: Optional[float] = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -864,6 +865,15 @@ class SievioConfig:
                 f"pipeline.executor_kind must be one of {sorted(allowed)}; got {self.pipeline.executor_kind!r}."
             )
         self.pipeline.executor_kind = kind
+        max_error_rate = self.pipeline.max_error_rate
+        if max_error_rate is not None:
+            try:
+                rate_val = float(max_error_rate)
+            except (TypeError, ValueError):
+                raise ValueError("pipeline.max_error_rate must be a float between 0.0 and 1.0 when set.")
+            if rate_val < 0.0 or rate_val > 1.0:
+                raise ValueError("pipeline.max_error_rate must be between 0.0 and 1.0 when set.")
+            self.pipeline.max_error_rate = rate_val
 
     def _validate_paths(self) -> None:
         """Ensure that primary_jsonl and prompt_path, if set, differ.

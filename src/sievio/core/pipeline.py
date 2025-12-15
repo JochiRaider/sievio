@@ -43,6 +43,10 @@ class MiddlewareError(RuntimeError):
     """Raised when a middleware failure should abort the pipeline."""
 
 
+class ErrorRateExceeded(RuntimeError):
+    """Raised when the pipeline aborts due to an error-rate threshold."""
+
+
 @dataclass(frozen=True)
 class _WorkItem:
     item: Any
@@ -198,11 +202,13 @@ class PipelineStats:
     """Mutable counters and aggregates collected during pipeline execution.
 
     files/bytes track items that completed extraction, middleware, and sink writes
-    without unhandled errors (not just files attempted). ``qc`` holds screening
-    (quality + safety) stats for the run.
+    without unhandled errors (not just files attempted); attempted_files counts each
+    item the pipeline tried to process. ``qc`` holds screening (quality + safety)
+    stats for the run.
     """
 
     files: int = 0
+    attempted_files: int = 0
     bytes: int = 0
     records: int = 0
     sink_errors: int = 0
@@ -216,6 +222,7 @@ class PipelineStats:
         """Return a stable dict shape for reporting and JSONL footers."""
         data: Dict[str, object] = {
             "files": int(self.files),
+            "attempted_files": int(self.attempted_files),
             "bytes": int(self.bytes),
             "records": int(self.records),
             "sink_errors": int(self.sink_errors),
@@ -662,6 +669,7 @@ class PipelineEngine:
                         exc,
                     )
                     stats.source_errors += 1
+                    self._maybe_abort_for_error_rate(exc)
                     if cfg.pipeline.fail_fast:
                         raise
                 finally:
@@ -694,6 +702,7 @@ class PipelineEngine:
             sinks (Sequence[Sink]): Destinations for records.
             fail_fast (bool): Whether to propagate errors immediately.
         """
+        self.stats.attempted_files += 1
         try:
             _, recs = processor(work)
             recs = self._apply_file_middlewares(work.item, recs)
@@ -710,6 +719,7 @@ class PipelineEngine:
                 exc,
             )
             self.stats.source_errors += 1
+            self._maybe_abort_for_error_rate(exc)
             if fail_fast:
                 raise
 
@@ -745,7 +755,9 @@ class PipelineEngine:
                 )
 
         def _items_with_stats() -> Iterable[_WorkItem]:
-            yield from items
+            for work in items:
+                stats.attempted_files += 1
+                yield work
 
         def _process_one(work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
             return processor(work)
@@ -754,6 +766,7 @@ class PipelineEngine:
             log.warning("Worker failed: %s", exc)
             _log_pickling_hint(exc)
             stats.source_errors += 1
+            self._maybe_abort_for_error_rate(exc)
 
         def _on_result(result: Tuple[Any, Iterable[Record]]) -> None:
             item, recs = result
@@ -771,6 +784,7 @@ class PipelineEngine:
             )
             _log_pickling_hint(exc)
             stats.source_errors += 1
+            self._maybe_abort_for_error_rate(exc)
             self._increment_file_stats(work.item)
 
         try:
@@ -787,9 +801,45 @@ class PipelineEngine:
         except Exception as exc:
             _log_pickling_hint(exc)
             stats.source_errors += 1
+            self._maybe_abort_for_error_rate(exc)
             if fail_fast:
                 raise
             log.warning("Parallel processing aborted: %s", exc)
+
+    def _maybe_abort_for_error_rate(self, cause: BaseException | None = None) -> None:
+        """Abort the pipeline when the source error-rate exceeds the configured max."""
+        cfg_threshold = getattr(self.config.pipeline, "max_error_rate", None)
+        if cfg_threshold is None:
+            return
+
+        attempted = self.stats.attempted_files
+        if attempted <= 0:
+            return
+
+        rate = self.stats.source_errors / attempted
+        if rate > cfg_threshold:
+            msg = (
+                f"Aborting pipeline: source error rate {rate:.3f} exceeded "
+                f"limit {cfg_threshold:.3f} "
+                f"(source_errors={self.stats.source_errors}, attempted_files={attempted})"
+            )
+            raise ErrorRateExceeded(msg) from cause
+
+    def _log_error_summary(self) -> None:
+        """Emit aggregated error counters at the end of a run."""
+        stats = self.stats
+        has_errors = any((stats.source_errors, stats.sink_errors, stats.middleware_errors))
+        level = self.log.warning if has_errors else self.log.info
+        level(
+            "Ingestion summary: attempted=%d succeeded=%d records=%d "
+            "source_errors=%d sink_errors=%d middleware_errors=%d",
+            stats.attempted_files,
+            stats.files,
+            stats.records,
+            stats.source_errors,
+            stats.sink_errors,
+            stats.middleware_errors,
+        )
 
     def _log_qc_summary(self) -> None:
         """Emit QC summary metrics after pipeline completion."""
@@ -907,6 +957,7 @@ class PipelineEngine:
                         exc,
                     )
 
+        self._log_error_summary()
         self._log_qc_summary()
         return stats
 
