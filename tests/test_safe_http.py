@@ -2,7 +2,7 @@ import socket
 
 import pytest
 
-from sievio.core.safe_http import PrivateAddressBlocked, SafeHttpClient
+from sievio.core.safe_http import PrivateAddressBlocked, RedirectBlocked, SafeHttpClient
 
 
 def test_safe_http_blocks_private_ip(monkeypatch):
@@ -53,6 +53,13 @@ def test_safe_http_allows_public_ip(monkeypatch):
         ("example.com", "sub.example.net", False),
         ("github.com", "docs.github.com", True),
         ("example.com", "malicious.com", False),
+        ("github.com", "github.com.attacker.com", False),
+        ("example.com", "example.com.attacker.net", False),
+        ("api.github.com", "codeload.github.com", True),
+        ("a.co.uk", "b.co.uk", False),
+        ("a.com.au", "b.com.au", False),
+        ("example.com.", "example.com", True),
+        ("example.com", "example.com.", True),
     ],
 )
 def test_hosts_related(src, dest, expected):
@@ -108,3 +115,41 @@ def test_open_collects_redirect_log(monkeypatch):
     assert resp.status == 200
     assert redirects == [("http://example.com/start", "https://example.com/next", 302)]
     assert resp.redirects == tuple(redirects)
+
+
+def test_cross_public_suffix_redirect_blocked(monkeypatch):
+    client = SafeHttpClient()
+    responses = []
+
+    class FakeResponse:
+        def __init__(self, status, headers):
+            self.status = status
+            self.headers = headers
+            self.reason = "OK"
+
+        def getheader(self, name, default=None):
+            return self.headers.get(name, default)
+
+        def close(self):
+            pass
+
+    class FakeConnection:
+        def __init__(self):
+            self._response = responses.pop(0)
+
+        def request(self, *args, **kwargs):
+            return None
+
+        def getresponse(self):
+            return self._response
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(client, "_resolve_ips", lambda hostname, url=None: ["8.8.8.8"])
+    monkeypatch.setattr(client, "_build_connection", lambda **kwargs: FakeConnection())
+
+    responses.append(FakeResponse(302, {"Location": "https://b.co.uk/next"}))
+
+    with pytest.raises(RedirectBlocked):
+        client.open("http://a.co.uk/start", timeout=1)
