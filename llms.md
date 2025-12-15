@@ -4,7 +4,7 @@ This file gives LLMs a compact map of Sievio so they can work in the right modul
 
 > Rename note: the project previously shipped as RepoCapsule. All imports/CLIs now use `sievio`; no compatibility shim exists. See `MIGRATION.md` for details.
 
-For operational rules, invariants, and “how to ask an AI for help,” see `agents.md`.
+For operational rules, invariants, and “how to ask an AI for help,” see `AGENTS.md`.
 This `llms.md` focuses on architecture, module responsibilities, and where to make
 changes for different tasks.
 
@@ -387,7 +387,7 @@ Top-level files are summarized in `project_files.md`. Key ones:
 * `README.md`
   Human-facing project overview and usage instructions.
 
-* `agents.md`
+* `AGENTS.md`
   Operational rules and invariants for AI coding assistants.
 
 * `llms.md`

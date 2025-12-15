@@ -1,5 +1,5 @@
 1.  `__init__.py`
-2.  `agents.md`
+2.  `AGENTS.md`
 3.  `builder.py`
 4.  `chunk.py`
 5.  `concurrency.py`

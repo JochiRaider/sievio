@@ -4,7 +4,7 @@ This file is a read-only index of files and tests in the repo for AI assistants
 and humans. It does not contain source; use it to decide which files to open.
 
 For architecture and module descriptions, see `llms.md`.
-For rules, invariants, and AI usage guidelines, see `agents.md`.
+For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
 
 ```text
 .
@@ -13,7 +13,7 @@ For rules, invariants, and AI usage guidelines, see `agents.md`.
 ├── LICENSE
 ├── README.md
 ├── MIGRATION.md
-├── agents.md
+├── AGENTS.md
 ├── core_upload.md
 ├── example_config.toml
 ├── llms.md
