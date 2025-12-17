@@ -126,6 +126,7 @@ class SafeHttpPolicy:
 
     allow_ip: Callable[[ipaddress._BaseAddress], bool]
     allow_redirect: Callable[[Optional[str], Optional[str]], bool]
+    allow_redirect_scheme: Callable[[str, str], bool]
     redirect_headers: Callable[
         [Optional[Mapping[str, str]], Optional[str], Optional[str]],
         Optional[Mapping[str, str]],
@@ -158,6 +159,13 @@ def _default_redirect_headers(
     return {k: v for k, v in headers.items() if k.lower() not in sensitive}
 
 
+def _default_allow_redirect_scheme(old_scheme: str, new_scheme: str) -> bool:
+    """Block downgrades from HTTPS to HTTP."""
+    if old_scheme == "https" and new_scheme == "http":
+        return False
+    return True
+
+
 def _build_default_allow_redirect(trusted_suffixes: set[str]) -> Callable[[Optional[str], Optional[str]], bool]:
     """Build the default redirect admission function."""
 
@@ -188,6 +196,7 @@ def _build_default_policy(trusted_suffixes: set[str]) -> SafeHttpPolicy:
     return SafeHttpPolicy(
         allow_ip=_default_allow_ip,
         allow_redirect=_build_default_allow_redirect(trusted_suffixes),
+        allow_redirect_scheme=_default_allow_redirect_scheme,
         redirect_headers=_default_redirect_headers,
     )
 
@@ -341,8 +350,12 @@ class SafeHttpClient:
         req_obj = request
         if isinstance(request, str):
             req_obj = urllib.request.Request(request)
+        explicit_method = getattr(req_obj, "method", None)
+        orig_data = getattr(req_obj, "data", None)
+        payload = data if data is not None else orig_data
         method = req_obj.get_method()
-        payload = req_obj.data if req_obj.data is not None else data
+        if payload is not None and explicit_method is None:
+            method = "POST"
         headers = dict(req_obj.header_items())
         url = req_obj.full_url
         redirect_log = redirect_log if redirect_log is not None else []
@@ -393,7 +406,12 @@ class SafeHttpClient:
         req_obj = request
         if isinstance(request, str):
             req_obj = urllib.request.Request(request)
+        explicit_method = getattr(req_obj, "method", None)
+        orig_data = getattr(req_obj, "data", None)
+        payload = data if data is not None else orig_data
         method = (req_obj.get_method() or "GET").upper()
+        if payload is not None and explicit_method is None:
+            method = "POST"
         if only_get_like and method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
             return self.open(req_obj, data=data, timeout=timeout)
 
@@ -464,6 +482,10 @@ class SafeHttpClient:
                 redirect_scheme = (redirect_parts.scheme or "http").lower()
                 if redirect_scheme not in self._ALLOWED_SCHEMES:
                     raise RedirectBlocked(f"Redirect blocked: scheme {redirect_scheme!r} not permitted")
+                if not self._policy.allow_redirect_scheme(scheme, redirect_scheme):
+                    raise RedirectBlocked(
+                        f"Redirect blocked: scheme change from {scheme} to {redirect_scheme} not permitted"
+                    )
                 new_host = redirect_parts.hostname
                 if not self._hosts_related(origin_host, new_host):
                     raise RedirectBlocked(

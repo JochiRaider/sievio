@@ -1,4 +1,6 @@
 import socket
+import time
+import urllib.error
 import urllib.request
 
 import pytest
@@ -99,6 +101,47 @@ def test_hosts_related(src, dest, expected):
     assert client._hosts_related(src, dest) is expected
 
 
+def test_open_data_overrides_request_data(monkeypatch):
+    client = SafeHttpClient()
+    captured = {}
+
+    def fake_request(**kwargs):
+        captured.update(kwargs)
+
+        class DummyResponse:
+            pass
+
+        return DummyResponse()
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    req = urllib.request.Request("http://example.com/path", data=b"original")
+    client.open(req, data=b"override")
+
+    assert captured["body"] == b"override"
+    assert captured["method"] == "POST"
+
+
+def test_open_url_with_data_defaults_to_post(monkeypatch):
+    client = SafeHttpClient()
+    captured = {}
+
+    def fake_request(**kwargs):
+        captured.update(kwargs)
+
+        class DummyResponse:
+            pass
+
+        return DummyResponse()
+
+    monkeypatch.setattr(client, "_request", fake_request)
+
+    client.open("http://example.com/path", data=b"payload")
+
+    assert captured["body"] == b"payload"
+    assert captured["method"] == "POST"
+
+
 def test_open_collects_redirect_log(monkeypatch):
     client = SafeHttpClient()
     responses = []
@@ -185,6 +228,79 @@ def test_cross_public_suffix_redirect_blocked(monkeypatch):
 
     with pytest.raises(RedirectBlocked):
         client.open("http://a.co.uk/start", timeout=1)
+
+
+def test_redirect_blocks_https_to_http(monkeypatch):
+    client = SafeHttpClient()
+    responses = []
+
+    class FakeResponse:
+        def __init__(self, status, headers):
+            self.status = status
+            self.headers = headers
+            self.reason = "OK"
+
+        def getheader(self, name, default=None):
+            return self.headers.get(name, default)
+
+        def close(self):
+            pass
+
+    class FakeConnection:
+        def __init__(self):
+            self._response = responses.pop(0)
+
+        def request(self, *args, **kwargs):
+            return None
+
+        def getresponse(self):
+            return self._response
+
+        def close(self):
+            pass
+
+    monkeypatch.setattr(client, "_resolve_ips", lambda hostname, url=None: ["93.184.216.34"])
+    monkeypatch.setattr(client, "_build_connection", lambda **kwargs: FakeConnection())
+
+    responses.append(FakeResponse(302, {"Location": "http://example.com/next"}))
+
+    with pytest.raises(RedirectBlocked):
+        client.open("https://example.com/start", timeout=1)
+
+
+def test_open_with_retries_data_disables_get_like(monkeypatch):
+    client = SafeHttpClient()
+    call_count = 0
+
+    def fake_open(request, data=None, timeout=None, redirect_log=None):
+        nonlocal call_count
+        call_count += 1
+        return "ok"
+
+    monkeypatch.setattr(client, "open", fake_open)
+
+    result = client.open_with_retries("http://example.com/path", data=b"payload", retries=3, only_get_like=True)
+
+    assert result == "ok"
+    assert call_count == 1
+
+
+def test_open_with_retries_get_like_still_retries(monkeypatch):
+    client = SafeHttpClient()
+    call_count = 0
+
+    def fake_open(request, data=None, timeout=None, redirect_log=None):
+        nonlocal call_count
+        call_count += 1
+        raise urllib.error.URLError("boom")
+
+    monkeypatch.setattr(client, "open", fake_open)
+    monkeypatch.setattr(time, "sleep", lambda _s: None)
+
+    with pytest.raises(urllib.error.URLError):
+        client.open_with_retries("http://example.com/path", retries=2, only_get_like=True)
+
+    assert call_count == 3
 
 
 def test_redirect_strips_sensitive_headers_on_host_change(monkeypatch):
