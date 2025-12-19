@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gzip
 import logging
 from contextlib import contextmanager
 from pathlib import Path
@@ -75,6 +76,7 @@ def test_jsonl_source_sanitizes_paths_and_fallback_suffix(tmp_path: Path) -> Non
                 '{"text": "third", "meta": {"path": "a/../b.txt"}}',
                 '{"text": "fourth", "meta": {"path": "\\\\a\\\\b\\\\c.txt"}}',
                 '{"text": "fifth", "meta": {"path": "/abs/like/path.txt"}}',
+                '{"text": "sixth", "meta": {"path": "/\\n..//dir/\\rfile.txt"}}',
             ]
         )
     )
@@ -88,6 +90,7 @@ def test_jsonl_source_sanitizes_paths_and_fallback_suffix(tmp_path: Path) -> Non
         "a/b.txt",
         "a/b/c.txt",
         "abs/like/path.txt",
+        "dir/file.txt",
     ]
 
 
@@ -143,3 +146,37 @@ def test_jsonl_source_meta_path_all_filtered_falls_back(tmp_path: Path) -> None:
     items = list(src.iter_files())
 
     assert [item.path for item in items] == ["dots/line_1.txt", "dots/line_2.txt"]
+
+
+def test_jsonl_source_skips_oversized_line_and_continues(tmp_path: Path) -> None:
+    path = tmp_path / "oversize.jsonl"
+    oversize_line = '{"text": "' + ("x" * 40) + '"}'
+    path.write_text("\n".join([oversize_line, '{"text": "ok"}']))
+    policy = jsonl_source.JSONLReadPolicy(max_line_chars=20, max_text_chars=50)
+
+    src = JSONLTextSource(paths=(path,), check_schema=False, read_policy=policy)
+    with _capture_jsonl_logs(level=logging.WARNING) as records:
+        items = list(src.iter_files())
+
+    assert [item.path for item in items] == ["oversize/line_2.txt"]
+    assert any("Skipping line" in rec.getMessage() for rec in records)
+
+
+def test_jsonl_source_truncates_after_file_budget_for_gzip(tmp_path: Path) -> None:
+    path = tmp_path / "budget.jsonl.gz"
+    lines = ['{"text": "one"}', '{"text": "two"}', '{"text": "three"}']
+    with gzip.open(path, "wt", encoding="utf-8") as fp:
+        fp.write("\n".join(lines))
+    first_line_with_newline = len(lines[0]) + 1
+    policy = jsonl_source.JSONLReadPolicy(
+        max_line_chars=50,
+        max_text_chars=50,
+        max_file_chars=first_line_with_newline,
+    )
+
+    src = JSONLTextSource(paths=(path,), check_schema=False, read_policy=policy)
+    with _capture_jsonl_logs(level=logging.WARNING) as records:
+        items = list(src.iter_files())
+
+    assert [item.path for item in items] == ["budget/line_1.txt"]
+    assert any("Truncated JSONL file" in rec.getMessage() for rec in records)

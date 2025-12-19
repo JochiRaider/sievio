@@ -105,3 +105,51 @@ def test_normalize_extensions_handles_empty_and_none():
     assert normalize_extensions([]) is None
     assert normalize_extensions(None) is None
     assert normalize_extensions([" ", "", None]) is None
+
+
+def test_build_output_basename_github_sanitizes_spdx_expression():
+    name = build_output_basename_github(
+        owner="owner",
+        repo="repo",
+        ref="main",
+        license_spdx="Apache-2.0 OR MIT",
+    )
+    assert "APACHE-2_0_OR_MIT" in name
+    assert "/" not in name
+    assert "\\" not in name
+
+
+def test_build_output_basename_github_rejects_spdx_path_traversal():
+    name = build_output_basename_github(
+        owner="owner",
+        repo="repo",
+        ref="main",
+        license_spdx="../../evil",
+    )
+    assert "EVIL" in name
+    assert "/" not in name
+    assert "\\" not in name
+
+
+def test_build_output_basename_github_strips_forbidden_spdx_chars():
+    name = build_output_basename_github(
+        owner="owner",
+        repo="repo",
+        ref="main",
+        license_spdx='MIT:"<>|?*',
+    )
+    assert "MIT" in name
+    for ch in ':\\/<>"|?*':
+        assert ch not in name
+
+
+def test_build_output_basename_github_avoids_windows_reserved_tokens():
+    name = build_output_basename_github(
+        owner="CON",
+        repo="NUL",
+        ref="AUX",
+        license_spdx="MIT",
+    )
+    assert name.startswith("con_")
+    assert "__nul_" in name
+    assert "__aux_" in name

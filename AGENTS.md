@@ -13,7 +13,7 @@ Use this `AGENTS.md` as the primary rules and “how to work safely” guide.
 
 ## 1. Setup & core commands
 
-Treat this section as the minimal "how to run checks" reference. Full installation details live in `README.md`.
+Treat this section as the minimal "how to run checks" reference. Full installation and configuration details now live in `docs/TECHNICAL_MANUAL.md` (see `README.md` for the overview).
 
 ### Environment
 
