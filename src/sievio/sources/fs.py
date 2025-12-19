@@ -4,10 +4,11 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
-from typing import Iterable, Iterator, Optional, Sequence, Set
+from typing import Callable, IO, Iterable, Iterator, Optional, Sequence, Set
 import os
+import stat
 
 from ..core.interfaces import FileItem, RepoContext, Source
 from ..core.naming import normalize_extensions
@@ -49,12 +50,145 @@ DEFAULT_SKIP_FILES: set[str] = {
 }
 
 
+@dataclass(frozen=True)
+class _RootPathPolicy:
+    """Shared path normalization and containment policy for filesystem sources."""
+
+    root: Path
+    root_resolved: Path = field(init=False)
+    follow_symlinks: bool = False
+
+    def __post_init__(self) -> None:
+        root_path = Path(self.root)
+        object.__setattr__(self, "root", root_path)
+        object.__setattr__(self, "root_resolved", root_path.resolve())
+
+    def _has_symlink_in_chain(self, lexical_rel: Path) -> bool:
+        """Return True when any prefix from root to lexical_rel is a symlink."""
+        current = self.root_resolved
+        for part in lexical_rel.parts:
+            if part in ("", "."):
+                continue
+            current = current / part
+            try:
+                st = current.lstat()
+            except OSError:
+                return True
+            if stat.S_ISLNK(st.st_mode):
+                return True
+        return False
+
+    def normalize_file(self, path: Path, *, lexical_rel: Optional[Path] = None) -> tuple[str, Path] | None:
+        """
+        Normalize a candidate file path against the configured root.
+
+        Returns:
+            tuple[str, Path] | None: (repo-relative POSIX path, resolved absolute path)
+                when the candidate is allowed; None when it violates containment,
+                symlink policy, or cannot be normalized.
+        """
+        if lexical_rel is None:
+            try:
+                lexical_rel = path.relative_to(self.root)
+            except ValueError:
+                try:
+                    lexical_rel = path.relative_to(self.root_resolved)
+                except ValueError:
+                    if not path.is_absolute():
+                        lexical_rel = path
+                    else:
+                        return None
+        candidate = path if path.is_absolute() else self.root_resolved / lexical_rel
+        if any(part == ".." for part in lexical_rel.parts):
+            return None
+        if not self.follow_symlinks:
+            if self._has_symlink_in_chain(lexical_rel):
+                return None
+            resolved = candidate
+        else:
+            try:
+                resolved = candidate.resolve()
+            except (OSError, RuntimeError):
+                return None
+        try:
+            resolved.relative_to(self.root_resolved)
+        except ValueError:
+            return None
+        rel_posix = lexical_rel.as_posix()
+        if not rel_posix:
+            return None
+        return rel_posix, resolved
+
+    def make_open_stream(
+        self,
+        rel_posix: str,
+        *,
+        expected_stat: os.stat_result | None = None,
+    ) -> Callable[[], IO[bytes]]:
+        """Return a safe opener that revalidates containment and symlink policy."""
+
+        rel_path = Path(rel_posix)
+        base_expected: os.stat_result | None = None
+        if expected_stat is None:
+            normalized = self.normalize_file(self.root_resolved / rel_path, lexical_rel=rel_path)
+            if normalized is None:
+                raise FileNotFoundError(f"refused to open path outside root: {rel_posix}")
+            _, resolved = normalized
+            stat_kwargs: dict[str, object] = {}
+            if not self.follow_symlinks:
+                stat_kwargs["follow_symlinks"] = False
+            try:
+                base_expected = os.stat(resolved, **stat_kwargs)
+            except OSError:
+                raise FileNotFoundError(f"refused to open path outside root: {rel_posix}")
+            if not stat.S_ISREG(base_expected.st_mode):
+                raise FileNotFoundError(f"refusing to open non-regular file: {rel_posix}")
+
+        def _open() -> IO[bytes]:
+            normalized = self.normalize_file(self.root_resolved / rel_path, lexical_rel=rel_path)
+            if normalized is None:
+                raise FileNotFoundError(f"refused to open path outside root: {rel_posix}")
+            _, resolved = normalized
+            expected_local = base_expected or expected_stat
+            if expected_local is None:
+                raise FileNotFoundError(f"refused to open path outside root: {rel_posix}")
+            flags = os.O_RDONLY
+            nofollow = getattr(os, "O_NOFOLLOW", None)
+            if nofollow is not None and not self.follow_symlinks:
+                flags |= nofollow
+            cloexec = getattr(os, "O_CLOEXEC", None)
+            if cloexec is not None:
+                flags |= cloexec
+            fd: int | None = None
+            try:
+                fd = os.open(resolved, flags)
+                st = os.fstat(fd)
+                if (
+                    getattr(st, "st_ino", None) != getattr(expected_local, "st_ino", None)
+                    or getattr(st, "st_dev", None) != getattr(expected_local, "st_dev", None)
+                ):
+                    raise FileNotFoundError(f"file changed before open: {rel_posix}")
+                if not stat.S_ISREG(st.st_mode):
+                    raise FileNotFoundError(f"refusing to open non-regular file: {rel_posix}")
+                return os.fdopen(fd, "rb")
+            except Exception:
+                if fd is not None:
+                    try:
+                        os.close(fd)
+                    except Exception:
+                        pass
+                raise
+
+        return _open
+
+
 def read_file_prefix(
     path: Path,
     max_bytes: int | None,
     *,
     chunk_size: int = 1024 * 1024,
     file_size: int | None = None,
+    opener: Callable[[], IO[bytes]] | None = None,
 ) -> tuple[bytes, int]:
     """Read a prefix of a file without spiking memory.
 
@@ -64,6 +198,8 @@ def read_file_prefix(
             whole file.
         chunk_size (int): Chunk size for streaming reads.
         file_size (int | None): Precomputed size to avoid stat calls.
+        opener (Callable[[], IO[bytes]] | None): Optional safe opener to
+            use instead of path.open.
 
     Returns:
         tuple[bytes, int]: The data read and the on-disk file size.
@@ -77,7 +213,8 @@ def read_file_prefix(
         file_size = path.stat().st_size
     limit = max_bytes if max_bytes is not None else None
     buf = bytearray()
-    with path.open("rb") as fh:
+    open_fn = opener or (lambda: path.open("rb"))
+    with open_fn() as fh:
         if limit is None:
             while True:
                 chunk = fh.read(chunk_size)
@@ -219,13 +356,18 @@ def _load_gitignore_file(path: Path, repo_root: Path) -> list[GitignoreRule]:
             lines = f.readlines()
     except OSError:
         return []
-    # base_posix = path.parent.resolve().relative_to(repo_root).as_posix() if path.parent != repo_root else "."
     try:
-        resolved = path.parent.resolve()
-        base_posix = resolved.relative_to(repo_root).as_posix() if resolved != repo_root else "."
+        base_posix = path.parent.relative_to(repo_root).as_posix() if path.parent != repo_root else "."
     except ValueError:
-        return []  # .gitignore lives outside the repo; ignore its rules   
-    return _parse_gitignore_lines(lines, base_posix)
+        try:
+            resolved_parent = path.parent.resolve()
+            base_posix = resolved_parent.relative_to(repo_root).as_posix() if resolved_parent != repo_root else "."
+        except ValueError:
+            return []  # .gitignore lives outside the repo; ignore its rules
+    try:
+        return _parse_gitignore_lines(lines, base_posix)
+    except Exception:
+        return []
 
 
 # ----------------------
@@ -260,14 +402,15 @@ def iter_repo_files(
     Yields:
         Path: Files accepted by the filters.
     """
-    root = Path(root).resolve()
-    if not root.is_dir():
-        raise NotADirectoryError(root)
+    policy = _RootPathPolicy(Path(root), follow_symlinks=follow_symlinks)
+    walk_root = policy.root_resolved
+    if not walk_root.is_dir():
+        raise NotADirectoryError(walk_root)
 
     # Matcher cache per directory path
-    matchers: dict[Path, GitignoreMatcher] = {root: GitignoreMatcher()}
+    matchers: dict[Path, GitignoreMatcher] = {walk_root: GitignoreMatcher()}
 
-    for dirpath, dirnames, filenames in os.walk(root, topdown=True, followlinks=follow_symlinks):
+    for dirpath, dirnames, filenames in os.walk(walk_root, topdown=True, followlinks=follow_symlinks):
         # Ensure deterministic order across platforms
         try:
             dirnames.sort(key=str.casefold)
@@ -285,13 +428,12 @@ def iter_repo_files(
         if respect_gitignore:
             gi = dpath / ".gitignore"
             if gi.is_file():
-                rules = _load_gitignore_file(gi, root)
+                rules = _load_gitignore_file(gi, walk_root)
                 if rules:
                     matcher = matcher.with_additional(rules)
                     matchers[dpath] = matcher
 
         # Prune directories in-place
-        pruned_dirs: list[str] = []
         for name in list(dirnames):
             if skip_hidden and name.startswith('.'):
                 dirnames.remove(name)
@@ -300,12 +442,17 @@ def iter_repo_files(
                 dirnames.remove(name)
                 continue
             subdir = dpath / name
-            if respect_gitignore:
-                rel = _normalize_rel(root, subdir)
-                if matcher.ignores(rel + "/", is_dir=True):
-                    dirnames.remove(name)
-                    continue
-            pruned_dirs.append(name)
+            try:
+                rel = _normalize_rel(walk_root, subdir)
+            except Exception:
+                dirnames.remove(name)
+                continue
+            if policy.normalize_file(subdir, lexical_rel=Path(rel)) is None:
+                dirnames.remove(name)
+                continue
+            if respect_gitignore and matcher.ignores(rel + "/", is_dir=True):
+                dirnames.remove(name)
+                continue
             # seed child's matcher with current matcher; will be extended if child has its own .gitignore
             matchers[subdir] = matcher
 
@@ -316,24 +463,31 @@ def iter_repo_files(
             if fname in DEFAULT_SKIP_FILES:
                 continue
             fpath = dpath / fname
-            if fpath.is_symlink() and not follow_symlinks:
+            try:
+                rel = _normalize_rel(walk_root, fpath)
+            except Exception:
                 continue
-            if max_file_bytes is not None:
-                try:
-                    if fpath.stat().st_size > max_file_bytes:
-                        continue
-                except OSError:
-                    continue
-            if respect_gitignore:
-                rel = _normalize_rel(root, fpath)
-                if matcher.ignores(rel, is_dir=False):
-                    continue
-            ext = fpath.suffix.lower()
+            normalized = policy.normalize_file(fpath, lexical_rel=Path(rel))
+            if normalized is None:
+                continue
+            rel_posix, origin_path = normalized
+            if respect_gitignore and matcher.ignores(rel, is_dir=False):
+                continue
+            ext = Path(rel_posix).suffix.lower()
             if include_exts is not None and ext not in include_exts:
                 continue
             if exclude_exts is not None and ext in exclude_exts:
                 continue
-            yield fpath
+            try:
+                stat_result = origin_path.stat()
+            except Exception:
+                continue
+            if not stat.S_ISREG(stat_result.st_mode):
+                continue
+            size = stat_result.st_size
+            if max_file_bytes is not None and size > max_file_bytes:
+                continue
+            yield origin_path
 
 
 def collect_repo_files(*args, **kwargs) -> list[Path]:
@@ -365,6 +519,7 @@ class LocalDirSource(Source):
         self.context = context
         self.include_exts = normalize_extensions(config.include_exts)
         self.exclude_exts = normalize_extensions(config.exclude_exts)
+        self._policy = _RootPathPolicy(self.root, follow_symlinks=config.follow_symlinks)
 
     def __enter__(self) -> "LocalDirSource":
         return self
@@ -376,38 +531,50 @@ class LocalDirSource(Source):
         """Yield FileItems honoring size, extension, and visibility filters."""
         cfg = self._cfg
         for path in iter_repo_files(
-            self.root,
+            self._policy.root_resolved,
             include_exts=self.include_exts,
             exclude_exts=self.exclude_exts,
             skip_hidden=cfg.skip_hidden,
-            follow_symlinks=cfg.follow_symlinks,
+            follow_symlinks=self._policy.follow_symlinks,
             respect_gitignore=cfg.respect_gitignore,
             max_file_bytes=cfg.max_file_bytes,
         ):
+            normalized = self._policy.normalize_file(path)
+            if normalized is None:
+                continue
+            rel_str, origin_path = normalized
             try:
-                stat = path.stat()
-                size = stat.st_size
+                stat_result = origin_path.stat()
+                size = stat_result.st_size
             except Exception:
                 continue
+
             prefix_limit = getattr(cfg, "read_prefix_bytes", None)
-            limit_for_read: int | None
-            if prefix_limit is None:
-                limit_for_read = None
-            else:
+            prefix_data: bytes | None = None
+            original_size = size
+            should_read_prefix = False
+            if prefix_limit is not None:
                 large_only = getattr(cfg, "read_prefix_for_large_files_only", True)
-                limit_for_read = None if (large_only and size <= prefix_limit) else prefix_limit
-            try:
-                data, original_size = read_file_prefix(path, limit_for_read, file_size=size)
-            except Exception:
-                continue
-            rel = str(path.relative_to(self.root)).replace("\\", "/")
+                should_read_prefix = (not large_only) or size > prefix_limit
+            if should_read_prefix:
+                try:
+                    prefix_data, original_size = read_file_prefix(
+                        origin_path,
+                        prefix_limit,
+                        file_size=size,
+                        opener=self._policy.make_open_stream(rel_str, expected_stat=stat_result),
+                    )
+                except Exception:
+                    continue
+            rel = rel_str.replace("\\", "/")
             yield FileItem(
                 path=rel,
-                data=data,
+                data=prefix_data,
                 size=original_size,
-                origin_path=str(path.resolve()),
+                origin_path=str(origin_path),
                 stream_hint="file",
                 streamable=True,
+                open_stream=self._policy.make_open_stream(rel, expected_stat=stat_result),
             )
 
 
@@ -431,57 +598,64 @@ class PatternFileSource(Source):
         self.context = context
         self.include_exts = normalize_extensions(getattr(config, "include_exts", None))
         self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
+        self._policy = _RootPathPolicy(self.root, follow_symlinks=config.follow_symlinks)
 
     def iter_files(self) -> Iterable[FileItem]:
         """Iterate matching files and emit FileItems with optional prefix reads."""
         cfg = self._cfg
         skip_hidden = getattr(cfg, "skip_hidden", True)
         max_file_bytes = getattr(cfg, "max_file_bytes", None)
-        seen: Set[Path] = set()
+        seen: Set[str] = set()
         for pattern in self.patterns:
-            for path in self.root.glob(pattern):
-                if not path.is_file():
+            for path in self._policy.root_resolved.glob(pattern):
+                if not path.is_file() and not path.is_symlink():
                     continue
-                try:
-                    rel_path = path.relative_to(self.root)
-                except ValueError:
-                    rel_path = Path(path.name)
-                if rel_path in seen:
+                normalized = self._policy.normalize_file(path)
+                if normalized is None:
                     continue
-                seen.add(rel_path)
+                rel_str, origin_path = normalized
+                if not origin_path.is_file():
+                    continue
+                if rel_str in seen:
+                    continue
+                seen.add(rel_str)
+                rel_path = Path(rel_str)
                 if skip_hidden and _is_hidden_rel(rel_path):
                     continue
-                ext = path.suffix.lower()
+                ext = rel_path.suffix.lower()
                 if self.include_exts is not None and ext not in self.include_exts:
                     continue
                 if self.exclude_exts is not None and ext in self.exclude_exts:
                     continue
                 try:
-                    stat = path.stat()
-                    size = stat.st_size
+                    stat_result = origin_path.stat()
+                    size = stat_result.st_size
                 except Exception:
                     continue
                 if max_file_bytes is not None and size > max_file_bytes:
                     continue
                 prefix_limit = getattr(cfg, "read_prefix_bytes", None)
                 large_only = getattr(cfg, "read_prefix_for_large_files_only", True)
-                limit_for_read: int | None
-                if prefix_limit is None or (large_only and size <= prefix_limit):
-                    limit_for_read = None
-                else:
-                    limit_for_read = prefix_limit
-                try:
-                    data, original_size = read_file_prefix(path, limit_for_read, file_size=size)
-                except Exception:
-                    continue
-                rel_str = str(rel_path).replace("\\", "/")
+                prefix_data: bytes | None = None
+                original_size = size
+                should_read_prefix = prefix_limit is not None and ((not large_only) or size > prefix_limit)
+                if should_read_prefix:
+                    try:
+                        prefix_data, original_size = read_file_prefix(
+                            origin_path,
+                            prefix_limit,
+                            file_size=size,
+                            opener=self._policy.make_open_stream(rel_str, expected_stat=stat_result),
+                        )
+                    except Exception:
+                        continue
+                rel_str = rel_path.as_posix()
                 yield FileItem(
                     path=rel_str,
-                    data=data,
+                    data=prefix_data,
                     size=original_size,
-                    origin_path=str(path.resolve()),
+                    origin_path=str(origin_path),
                     stream_hint="file",
                     streamable=True,
+                    open_stream=self._policy.make_open_stream(rel_str, expected_stat=stat_result),
                 )
-
-

@@ -14,6 +14,30 @@ __all__ = [
 ]
 
 _WINDOWS_FORBIDDEN = r'<>:"/\\|?*'
+_WINDOWS_RESERVED = {
+    "con",
+    "prn",
+    "aux",
+    "nul",
+    "com1",
+    "com2",
+    "com3",
+    "com4",
+    "com5",
+    "com6",
+    "com7",
+    "com8",
+    "com9",
+    "lpt1",
+    "lpt2",
+    "lpt3",
+    "lpt4",
+    "lpt5",
+    "lpt6",
+    "lpt7",
+    "lpt8",
+    "lpt9",
+}
 _SEPS_RX = re.compile(r"[^\w\-]+", flags=re.ASCII)
 
 def _sanitize_component(s: Optional[str], *, lower: bool = True, maxlen: int = 64) -> str:
@@ -37,21 +61,27 @@ def _sanitize_component(s: Optional[str], *, lower: bool = True, maxlen: int = 6
     s = _SEPS_RX.sub("_", s).strip("_")
     # collapse repeats of underscores
     s = re.sub(r"_{2,}", "_", s)
-    return (s or "unknown")[:maxlen]
+    token = (s or "unknown")[:maxlen]
+    if token.lower() in _WINDOWS_RESERVED:
+        token = f"{token}_"
+        if len(token) > maxlen:
+            token = f"{token[:maxlen-1]}_"
+    return token
 
 def _normalize_spdx(spdx: Optional[str]) -> str:
-    """Normalize an SPDX identifier into uppercase, defaulting to UNKNOWN.
+    """Normalize an SPDX identifier into a safe uppercase token.
 
     Args:
         spdx (str | None): SPDX string from repository or document metadata.
 
     Returns:
-        str: Uppercase SPDX value or "UNKNOWN" when missing.
+        str: Uppercase, sanitized SPDX value or "UNKNOWN" when missing.
     """
     if not spdx:
         return "UNKNOWN"
-    spdx = spdx.strip().upper()
-    return spdx or "UNKNOWN"
+    spdx_clean = _sanitize_component(spdx, lower=False, maxlen=64)
+    spdx_clean = spdx_clean.upper()
+    return spdx_clean or "UNKNOWN"
 
 def build_output_basename_github(*,
     owner: Optional[str],

@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import (
     IO,
     Any,
+    Callable,
     Dict,
     Iterable,
     Mapping,
@@ -43,7 +44,7 @@ class FileItem:
     Attributes:
         path (str): Repository-relative path using forward slashes, e.g.,
             ``src/main.py``.
-        data (bytes): Raw file bytes as obtained from the source (zip entry,
+        data (bytes | None): Raw file bytes as obtained from the source (zip entry,
             filesystem, etc.). Data may be a truncated prefix when only part of
             a large file was read.
         size (int | None): Original size in bytes on disk or source (may differ
@@ -54,13 +55,17 @@ class FileItem:
             (e.g., ``file``, ``zip-member``).
         streamable (bool): True when a streaming path exists (e.g., local
             filesystem files).
+        open_stream (Callable[[], IO[bytes]] | None): Optional opener for a
+            fresh binary stream positioned at the start of the file. When
+            provided, callers must close the stream.
     """
     path: str
-    data: bytes
+    data: Optional[bytes]
     size: int | None = None
     origin_path: str | None = None
     stream_hint: str | None = None
     streamable: bool = False
+    open_stream: Optional[Callable[[], IO[bytes]]] = None
 
 
 @dataclass(frozen=True, slots=True)

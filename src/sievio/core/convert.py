@@ -7,7 +7,8 @@ import io
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunparse
+from contextlib import closing
 
 from .config import SievioConfig, FileProcessingConfig, DecodeConfig, ChunkConfig
 from .chunk import ChunkPolicy, iter_chunk_dicts
@@ -21,28 +22,107 @@ from .records import build_record
 
 ConfigForRecords = SievioConfig | FileProcessingConfig
 
+_OPEN_STREAM_DEFAULT_MAX_BYTES = 16 * 1024 * 1024  # 16 MiB safety cap for open_stream buffering
 
-class _LimitedStream(io.BufferedReader):
-    """Buffered reader that enforces a hard byte limit on read() calls."""
 
-    def __init__(self, raw: io.BufferedIOBase, limit: int):
-        super().__init__(raw)
+class _LimitedRaw(io.RawIOBase):
+    """Raw IO wrapper enforcing a total byte budget across read APIs."""
+
+    def __init__(self, raw: io.BufferedIOBase, limit: int) -> None:
+        super().__init__()
+        self._raw = raw
         self._remaining = max(0, int(limit))
+
+    def readable(self) -> bool:  # type: ignore[override]
+        return True
 
     def read(self, size: int = -1) -> bytes:  # type: ignore[override]
         if self._remaining <= 0:
             return b""
-        if size < 0 or size > self._remaining:
+        if size is None or size < 0 or size > self._remaining:
             size = self._remaining
-        chunk = super().read(size)
-        self._remaining -= len(chunk)
-        return chunk
+        data = self._raw.read(size) or b""
+        self._remaining -= len(data)
+        return data
+
+    def readinto(self, b: bytearray | memoryview) -> int | None:  # type: ignore[override]
+        if self._remaining <= 0:
+            return 0
+        view = memoryview(b)
+        n = min(len(view), self._remaining)
+        readinto = getattr(self._raw, "readinto", None)
+        if callable(readinto):
+            wrote = readinto(view[:n])
+        else:
+            data = self._raw.read(n) or b""
+            view[: len(data)] = data
+            wrote = len(data)
+        if wrote is None:
+            return None
+        self._remaining -= int(wrote)
+        return int(wrote)
+
+    def readinto1(self, b: bytearray | memoryview) -> int | None:  # type: ignore[override]
+        fn = getattr(self._raw, "readinto1", None)
+        if callable(fn):
+            if self._remaining <= 0:
+                return 0
+            view = memoryview(b)
+            n = min(len(view), self._remaining)
+            wrote = fn(view[:n])
+            if wrote is None:
+                return None
+            self._remaining -= int(wrote)
+            return int(wrote)
+        return self.readinto(b)
+
+    def read1(self, size: int = -1) -> bytes:  # type: ignore[override]
+        fn = getattr(self._raw, "read1", None)
+        if callable(fn):
+            if self._remaining <= 0:
+                return b""
+            if size is None or size < 0 or size > self._remaining:
+                size = self._remaining
+            data = fn(size) or b""
+            self._remaining -= len(data)
+            return data
+        return self.read(size)
+
+    def readline(self, size: int = -1) -> bytes:  # type: ignore[override]
+        if self._remaining <= 0:
+            return b""
+        limit = self._remaining if size is None or size < 0 else min(size, self._remaining)
+        data = self._raw.readline(limit) or b""
+        self._remaining -= len(data)
+        return data
+
+    def seekable(self) -> bool:  # type: ignore[override]
+        return False
+
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:  # type: ignore[override]
+        raise io.UnsupportedOperation("seek not supported on limited stream")
+
+    def close(self) -> None:  # type: ignore[override]
+        try:
+            self._raw.close()
+        finally:
+            super().close()
+
+
+def make_limited_stream(raw: io.BufferedIOBase, limit: Optional[int]) -> io.BufferedReader:
+    """Wrap a raw binary stream with an optional total-byte limiter."""
+
+    if limit is None:
+        return io.BufferedReader(raw)
+    return io.BufferedReader(_LimitedRaw(raw, limit))
 
 __all__ = [
     "list_records_for_file",
     "list_records_from_bytes",
     "iter_records_from_bytes_with_plan",
     "build_records_from_bytes",
+    "make_limited_stream",
+    "maybe_reopenable_local_path",
     "ByteSource",
     "RecordBuilderContext",
     "iter_records_from_bytes",
@@ -93,6 +173,45 @@ class RecordBuilderContext:
     decode: DecodeConfig
     chunk: ChunkConfig
     metadata_seed: Mapping[str, Any] | None = None
+
+
+def _derive_source_domain(source_url: Optional[str], source_domain: Optional[str]) -> Optional[str]:
+    """Return a hostname derived from the source URL when none is provided."""
+
+    if source_domain is not None:
+        return source_domain
+    if source_url:
+        try:
+            return urlparse(source_url).hostname
+        except Exception:
+            return None
+    return None
+
+
+def _normalize_source_ref(
+    source_url: Optional[str],
+    source_domain: Optional[str],
+) -> Tuple[Optional[str], Optional[str]]:
+    """Sanitize source URL metadata to avoid leaking credentials/tokens.
+
+    Only http/https URLs are normalized; other schemes are omitted from
+    record metadata to avoid surprising propagation of opaque identifiers.
+    Userinfo, query strings, and fragments are stripped.
+    """
+
+    if not source_url:
+        return None, source_domain
+    try:
+        parsed = urlparse(source_url)
+    except Exception:
+        return None, source_domain
+    if parsed.scheme not in {"http", "https"}:
+        return None, source_domain
+    host = parsed.hostname
+    port = f":{parsed.port}" if parsed.port else ""
+    netloc = f"{host or ''}{port}"
+    sanitized = urlunparse((parsed.scheme, netloc, parsed.path or "", "", "", ""))
+    return sanitized or None, _derive_source_domain(sanitized, source_domain)
 
 # ---------------------------------------------------------------------------
 # Record creation for a single file
@@ -150,6 +269,54 @@ def _augment_context_with_source(
     )
 
 
+def _can_open_stream(item: FileItem) -> bool:
+    """Return True when the FileItem explicitly allows safe local streaming."""
+
+    return bool(
+        getattr(item, "streamable", False)
+        and getattr(item, "stream_hint", None) == "file"
+        and callable(getattr(item, "open_stream", None))
+    )
+
+
+def maybe_reopenable_local_path(item: FileItem) -> Optional[Path]:
+    """Return a safe local Path to reopen for streaming, or None when disallowed.
+
+    A path is reopenable only when the FileItem is marked streamable, the
+    stream_hint indicates a real local file, and the origin resembles a local
+    path (or file:// URL). Remote-looking origins (http/https/etc.) are
+    rejected to avoid unintended network or filesystem access.
+    """
+
+    origin = getattr(item, "origin_path", None)
+    if not origin or not getattr(item, "streamable", False):
+        return None
+    if getattr(item, "stream_hint", None) != "file":
+        return None
+    origin_str = str(origin)
+    candidate: Optional[Path] = None
+    if "://" in origin_str:
+        try:
+            parsed = urlparse(origin_str)
+        except Exception:
+            return None
+        if parsed.scheme not in ("file",):
+            return None
+        if parsed.netloc not in ("", "localhost"):
+            return None
+        candidate = Path(parsed.path)
+    else:
+        # Treat as filesystem path to avoid mis-parsing Windows drive letters.
+        candidate = Path(origin_str)
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return None
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved
+
+
 def resolve_bytes_from_file_item(item: FileItem, decode_cfg: DecodeConfig) -> ByteSource:
     """Normalize a FileItem into a ByteSource, reopening the origin when needed.
 
@@ -162,16 +329,38 @@ def resolve_bytes_from_file_item(item: FileItem, decode_cfg: DecodeConfig) -> By
     """
     data = getattr(item, "data", None)
     file_size = getattr(item, "size", None)
-    origin = getattr(item, "origin_path", None)
+    reopenable = maybe_reopenable_local_path(item)
 
     if data is not None:
         return ByteSource(data=data, origin=None, size=file_size)
 
-    if getattr(item, "streamable", False) and origin:
-        origin_path = Path(origin)
+    if _can_open_stream(item):
+        try:
+            with closing(item.open_stream()) as raw:  # type: ignore[misc]
+                limit = decode_cfg.max_bytes_per_file
+                if limit is None:
+                    limit = _OPEN_STREAM_DEFAULT_MAX_BYTES
+                limited = make_limited_stream(raw, limit)
+                try:
+                    read = limited.read()
+                finally:
+                    try:
+                        limited.close()
+                    except Exception:
+                        pass
+                return ByteSource(data=read, origin=None, size=file_size)
+        except Exception as exc:
+            log.warning("Failed to open stream for %s: %s", getattr(item, "path", None), exc)
+            return ByteSource(data=None, origin=None, size=file_size)
+
+    if reopenable:
         max_bytes = decode_cfg.max_bytes_per_file
-        reopened, size = read_file_prefix(origin_path, max_bytes, file_size=file_size)
-        return ByteSource(data=reopened, origin=origin_path, size=size)
+        try:
+            reopened, size = read_file_prefix(reopenable, max_bytes, file_size=file_size)
+        except OSError as exc:
+            log.warning("Failed to reopen %s: %s", reopenable, exc)
+        else:
+            return ByteSource(data=reopened, origin=reopenable, size=size)
 
     return ByteSource(data=None, origin=None, size=file_size)
 
@@ -209,19 +398,21 @@ def list_records_for_file(
         List[Dict[str, object]]: Materialized record dictionaries.
     """
     cfg = config
-    record_ctx = _build_record_context(cfg, context)
+    sanitized_url, derived_domain = _normalize_source_ref(source_url, source_domain)
+    ctx_with_source = _augment_context_with_source(context, sanitized_url, derived_domain)
+    record_ctx = _build_record_context(cfg, ctx_with_source)
     return list(
         iter_records_for_file(
             text=text,
             rel_path=rel_path,
             record_ctx=record_ctx,
-            context=context,
+            context=ctx_with_source,
             encoding=encoding,
             had_replacement=had_replacement,
             file_bytes=file_bytes,
             truncated_bytes=truncated_bytes,
-            source_url=source_url,
-            source_domain=source_domain,
+            source_url=sanitized_url,
+            source_domain=derived_domain,
             extractors=cfg.pipeline.extractors,
         )
     )
@@ -266,6 +457,16 @@ def iter_records_for_file(
         for extractor in extractors:
             try:
                 out = extractor.extract(text=text, path=rel_path, context=context)
+                if not out:
+                    continue
+                for rec in out:
+                    if not isinstance(rec, Mapping):
+                        log.warning("Extractor %s produced non-mapping for %s; skipping", getattr(extractor, "name", extractor), rel_path)
+                        continue
+                    try:
+                        extractor_recs.append(dict(rec))
+                    except Exception as exc:
+                        log.warning("Extractor %s record coercion failed for %s: %s", getattr(extractor, "name", extractor), rel_path, exc)
             except Exception as exc:
                 log.warning(
                     "Extractor %s failed for %s: %s",
@@ -274,9 +475,6 @@ def iter_records_for_file(
                     exc,
                 )
                 continue
-            if not out:
-                continue
-            extractor_recs.extend(dict(rec) for rec in out)
 
     mode, fmt = classify_path_kind(rel_path)
     chunk_dicts = list(
@@ -348,13 +546,8 @@ def iter_records_from_bytes(
         Dict[str, object]: Chunk or extractor record dictionaries.
     """
     cfg = config
-    derived_domain = source_domain
-    if derived_domain is None and source_url:
-        try:
-            derived_domain = urlparse(source_url).hostname
-        except Exception:
-            derived_domain = None
-    ctx_with_source = _augment_context_with_source(context, source_url, derived_domain)
+    sanitized_url, derived_domain = _normalize_source_ref(source_url, source_domain)
+    ctx_with_source = _augment_context_with_source(context, sanitized_url, derived_domain)
     record_ctx = _build_record_context(cfg, ctx_with_source)
     handlers = list(cfg.pipeline.bytes_handlers)
     yield from build_records_from_bytes(
@@ -365,7 +558,7 @@ def iter_records_from_bytes(
         extractors=cfg.pipeline.extractors,
         context=ctx_with_source,
         chunk_policy=cfg.chunk.policy,
-        source_url=source_url,
+        source_url=sanitized_url,
         source_domain=derived_domain,
         file_size=file_size,
     )
@@ -460,6 +653,11 @@ def build_records_from_bytes(
     The caller is responsible for deciding streaming versus buffered handling
     and constructing the RecordBuilderContext along with handler lists.
 
+    Bytes handlers follow explicit semantics:
+    - Return None to fall back to decode/chunk processing.
+    - Return any iterable (including empty) to short-circuit downstream decode.
+    - Raise UnsupportedBinary to skip the file entirely.
+
     Args:
         data (bytes): Raw file bytes.
         rel_path (str): Repository-relative path.
@@ -477,14 +675,25 @@ def build_records_from_bytes(
         Dict[str, object]: Chunk or extractor record dictionaries.
     """
     for sniff, handler in bytes_handlers:
-        if sniff(data, rel_path):
+        try:
+            should_handle = sniff(data, rel_path)
+        except Exception as exc:
+            log.warning("Sniffer %s failed for %s: %s", getattr(sniff, "__name__", sniff), rel_path, exc)
+            continue
+        if should_handle:
             try:
                 records = handler(data, rel_path, context, chunk_policy)
             except UnsupportedBinary as e:
                 log.info("Skipping unsupported binary for %s: %s", rel_path, e)
-                records = None
-            if records:
-                yield from records
+                return
+            except Exception as exc:
+                log.warning("Bytes handler %s failed for %s: %s", getattr(handler, "__name__", handler), rel_path, exc)
+                continue
+            if records is not None:
+                try:
+                    yield from records
+                except Exception as exc:
+                    log.warning("Bytes handler %s iteration failed for %s: %s", getattr(handler, "__name__", handler), rel_path, exc)
                 return
 
     max_bytes = record_ctx.decode.max_bytes_per_file
@@ -538,64 +747,67 @@ def iter_records_from_file_item(
 
     Yields:
         Dict[str, object]: Chunk or extractor record dictionaries.
-
-    Raises:
-        ValueError: If the file item lacks bytes and cannot be streamed.
     """
     cfg = config
-    origin_url: Optional[str] = None
-    origin_domain: Optional[str] = None
+    origin_url_raw: Optional[str] = None
+    origin_domain_raw: Optional[str] = None
     if getattr(item, "origin_path", None):
         try:
             parsed = urlparse(str(item.origin_path))
             if parsed.scheme in {"http", "https"}:
-                origin_url = str(item.origin_path)
-                origin_domain = parsed.hostname
+                origin_url_raw = str(item.origin_path)
+                origin_domain_raw = parsed.hostname
         except Exception:
-            origin_url = None
-            origin_domain = None
+            origin_url_raw = None
+            origin_domain_raw = None
 
-    if (
-        streaming_extractor is not None
-        and getattr(item, "streamable", False)
-        and item.origin_path
-    ):
-        origin = Path(item.origin_path)
-        max_bytes = cfg.decode.max_bytes_per_file
-        try:
-            with origin.open("rb") as raw:
-                if max_bytes is not None:
-                    stream: io.BufferedReader = _LimitedStream(raw, max_bytes)
-                else:
-                    stream = io.BufferedReader(raw)
-                rows = streaming_extractor.extract_stream(
-                    stream=stream,
-                    path=item.path,
-                    context=context,
+    source_url, source_domain = _normalize_source_ref(origin_url_raw, origin_domain_raw)
+    ctx_with_source = _augment_context_with_source(context, source_url, source_domain)
+
+    if streaming_extractor is not None and getattr(item, "data", None) is None:
+        opener = getattr(item, "open_stream", None)
+        if _can_open_stream(item) and callable(opener):
+            max_bytes = cfg.decode.max_bytes_per_file
+            if max_bytes is None:
+                max_bytes = _OPEN_STREAM_DEFAULT_MAX_BYTES
+            try:
+                with closing(opener()) as raw:
+                    stream = make_limited_stream(raw, max_bytes)
+                    rows = streaming_extractor.extract_stream(
+                        stream=stream,
+                        path=item.path,
+                        context=ctx_with_source,
+                    )
+                    if rows is not None:
+                        try:
+                            for row in rows:
+                                yield row
+                            return
+                        finally:
+                            try:
+                                stream.close()
+                            except Exception:
+                                pass
+            except Exception as exc:
+                log.warning(
+                    "Streaming extractor failed for %s; falling back to buffered decode (%s)",
+                    item.path,
+                    exc,
                 )
-                if rows is not None:
-                    for row in rows:
-                        yield row
-                    return
-        except Exception as exc:
-            log.warning(
-                "Streaming extractor failed for %s; falling back to buffered decode (%s)",
-                item.path,
-                exc,
-            )
 
     resolved = resolve_bytes_from_file_item(item, cfg.decode)
     if resolved.data is None:
-        raise ValueError(f"FileItem {item.path!r} missing data and not streamable")
+        log.warning("Skipping %s: missing data and cannot reopen origin", item.path)
+        return
 
     yield from iter_records_from_bytes(
         resolved.data,
         item.path,
         config=cfg,
-        context=context,
+        context=ctx_with_source,
         file_size=resolved.size,
-        source_url=origin_url,
-        source_domain=origin_domain,
+        source_url=source_url,
+        source_domain=source_domain,
     )
 
 

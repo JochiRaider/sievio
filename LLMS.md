@@ -385,6 +385,9 @@ Top-level files are summarized in `project_files.md`. Key ones:
 * `README.md`
   Human-facing project overview and usage instructions.
 
+* `docs/TECHNICAL_MANUAL.md`
+  Detailed installation, configuration, and operational notes for running the pipeline and its extras.
+
 * `AGENTS.md`
   Operational rules and invariants for AI coding assistants.
 

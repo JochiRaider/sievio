@@ -13,7 +13,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
-from typing import Dict, Mapping, Optional, Sequence, Union
+from typing import Callable, Dict, Mapping, Optional, Sequence, Union
 
 from .log import get_logger
 
@@ -100,7 +100,9 @@ class SafeHttpResponse:
         return self._response.read(amt)
 
     def readline(self, limit: Optional[int] = None) -> bytes:  
-        return self._response.readline(limit or -1)
+        if limit is None:
+            return self._response.readline()
+        return self._response.readline(limit)
 
     def readinto(self, b) -> int:  
         return self._response.readinto(b)
@@ -118,18 +120,106 @@ class SafeHttpResponse:
         self.close()
 
 
+@dataclass(frozen=True)
+class SafeHttpPolicy:
+    """Policy hooks for SafeHttpClient decisions."""
+
+    allow_ip: Callable[[ipaddress._BaseAddress], bool]
+    allow_redirect: Callable[[Optional[str], Optional[str]], bool]
+    allow_redirect_scheme: Callable[[str, str], bool]
+    redirect_headers: Callable[
+        [Optional[Mapping[str, str]], Optional[str], Optional[str]],
+        Optional[Mapping[str, str]],
+    ]
+
+
+def _default_allow_ip(addr: ipaddress._BaseAddress) -> bool:
+    """Allow only globally routable unicast addresses."""
+    if not addr.is_global:
+        return False
+    if addr.is_multicast or addr.is_unspecified or addr.is_loopback:
+        return False
+    is_link_local = getattr(addr, "is_link_local", None)
+    if bool(is_link_local):
+        return False
+    return True
+
+
+def _default_redirect_headers(
+    headers: Optional[Mapping[str, str]],
+    old_host: Optional[str],
+    new_host: Optional[str],
+) -> Optional[Mapping[str, str]]:
+    """Drop sensitive headers when the redirect target host changes."""
+    if headers is None:
+        return None
+    if SafeHttpClient._normalize_host(old_host) == SafeHttpClient._normalize_host(new_host):
+        return dict(headers)
+    sensitive = {"authorization", "cookie", "proxy-authorization"}
+    return {k: v for k, v in headers.items() if k.lower() not in sensitive}
+
+
+def _default_allow_redirect_scheme(old_scheme: str, new_scheme: str) -> bool:
+    """Block downgrades from HTTPS to HTTP."""
+    if old_scheme == "https" and new_scheme == "http":
+        return False
+    return True
+
+
+def _build_default_allow_redirect(trusted_suffixes: set[str]) -> Callable[[Optional[str], Optional[str]], bool]:
+    """Build the default redirect admission function."""
+
+    def _host_matches_suffix(host: Optional[str], suffix: str) -> bool:
+        normalized = SafeHttpClient._normalize_host(host)
+        return bool(normalized and (normalized == suffix or normalized.endswith("." + suffix)))
+
+    def allow_redirect(origin: Optional[str], target: Optional[str]) -> bool:
+        origin_n = SafeHttpClient._normalize_host(origin)
+        target_n = SafeHttpClient._normalize_host(target)
+        if not origin_n or not target_n:
+            return False
+        if target_n == origin_n:
+            return True
+        if target_n.endswith("." + origin_n):
+            return True
+        if origin_n.endswith("." + target_n) and "." in target_n:
+            return True
+        for suffix in trusted_suffixes:
+            if _host_matches_suffix(origin_n, suffix) and _host_matches_suffix(target_n, suffix):
+                return True
+        return False
+
+    return allow_redirect
+
+
+def _build_default_policy(trusted_suffixes: set[str]) -> SafeHttpPolicy:
+    return SafeHttpPolicy(
+        allow_ip=_default_allow_ip,
+        allow_redirect=_build_default_allow_redirect(trusted_suffixes),
+        allow_redirect_scheme=_default_allow_redirect_scheme,
+        redirect_headers=_default_redirect_headers,
+    )
+
+
+DEFAULT_POLICY = _build_default_policy(set())
+
+
 class SafeHttpClient:
     """HTTP client that blocks private IPs and enforces host-scoped redirects.
+
+    Only globally routable unicast addresses are permitted by default, redirects
+    are limited to related hosts or an explicit allowlist, and sensitive headers
+    are stripped when the redirect target host changes.
 
     Attributes:
         _default_timeout (float): Default request timeout in seconds.
         _max_redirects (int): Maximum redirects to follow.
         _trusted_redirect_suffixes (set[str]): Allowed redirect host suffixes.
+        _policy (SafeHttpPolicy): Policy hooks for IP filtering, redirects, and headers.
     """
 
     _ALLOWED_SCHEMES = ("http", "https")
     _REDIRECT_CODES = {301, 302, 303, 307, 308}
-    _COMMON_PUBLIC_SUFFIX_2LD = {"co", "com", "net", "org", "gov", "edu", "ac"}
 
     def __init__(
         self,
@@ -137,6 +227,7 @@ class SafeHttpClient:
         timeout: float = 30.0,
         max_redirects: int = 5,
         allowed_redirect_suffixes: Optional[Sequence[str]] = None,
+        policy: Optional["SafeHttpPolicy"] = None,
     ):
         self._default_timeout = timeout
         self._max_redirects = max_redirects
@@ -145,6 +236,12 @@ class SafeHttpClient:
             for suffix in (allowed_redirect_suffixes or ())
             if suffix
         }
+        if policy is not None:
+            self._policy = policy
+        elif self._trusted_redirect_suffixes:
+            self._policy = _build_default_policy(self._trusted_redirect_suffixes)
+        else:
+            self._policy = DEFAULT_POLICY
 
     # helpers
     def _resolve_ips(self, hostname: str, *, url: Optional[str] = None) -> list[str]:
@@ -154,46 +251,19 @@ class SafeHttpClient:
         except socket.gaierror as exc:   # noqa: BLE001
             raise urllib.error.URLError(f"DNS resolution failed for {hostname}: {exc}") from exc
         ips: list[str] = []
+        seen: set[str] = set()
         for family, _stype, _proto, _canon, sockaddr in infos:
             ip = sockaddr[0]
             addr = ipaddress.ip_address(ip)
-            if addr.is_private or addr.is_loopback or addr.is_reserved or addr.is_multicast:
+            if not self._policy.allow_ip(addr):
                 continue
-            is_link_local = getattr(addr, "is_link_local", None)
-            if bool(is_link_local):
-                continue
-            ips.append(ip)
+            if ip not in seen:
+                seen.add(ip)
+                ips.append(ip)
         if not ips:
             target = f" for {url}" if url else ""
             raise PrivateAddressBlocked(f"All resolved addresses for {hostname} are disallowed{target}")
         return ips
-
-    def _trusted_suffix_for(self, host: Optional[str]) -> Optional[str]:
-        """Return the trusted redirect suffix for a host, if any."""
-        normalized = self._normalize_host(host)
-        if not normalized:
-            return None
-        for suffix in self._trusted_redirect_suffixes:
-            if normalized == suffix or normalized.endswith("." + suffix):
-                return suffix
-        return None
-
-    @staticmethod
-    def _registrable_domain(host: str) -> Optional[str]:
-        """Return the registrable domain portion of a host."""
-        host = host.rstrip(".").lower()
-        if not host:
-            return None
-        parts = host.split(".")
-        if len(parts) < 2:
-            return None
-        suffix_len = 1
-        tld = parts[-1]
-        if len(parts) >= 3 and len(tld) == 2 and parts[-2] in SafeHttpClient._COMMON_PUBLIC_SUFFIX_2LD:
-            suffix_len = 2
-        if len(parts) <= suffix_len:
-            return None
-        return ".".join(parts[-(suffix_len + 1) :])
 
     @staticmethod
     def _normalize_host(host: Optional[str]) -> Optional[str]:
@@ -205,26 +275,7 @@ class SafeHttpClient:
 
     def _hosts_related(self, origin: Optional[str], target: Optional[str]) -> bool:
         """Determine if two hosts are related enough to allow redirects."""
-        origin = self._normalize_host(origin)
-        target = self._normalize_host(target)
-        if not origin or not target:
-            return False
-        if target == origin:
-            return True
-        if target.endswith("." + origin):
-            return True
-        if origin.startswith("www.") and target == origin[4:]:
-            return True
-        if target.startswith("www.") and target[4:] == origin:
-            return True
-        origin_reg = self._registrable_domain(origin)
-        target_reg = self._registrable_domain(target)
-        if origin_reg and target_reg and origin_reg == target_reg:
-            return True
-        suffix = self._trusted_suffix_for(origin)
-        if suffix and (target == suffix or target.endswith("." + suffix)):
-            return True
-        return False
+        return self._policy.allow_redirect(origin, target)
 
     def _build_connection(
         self,
@@ -299,8 +350,12 @@ class SafeHttpClient:
         req_obj = request
         if isinstance(request, str):
             req_obj = urllib.request.Request(request)
+        explicit_method = getattr(req_obj, "method", None)
+        orig_data = getattr(req_obj, "data", None)
+        payload = data if data is not None else orig_data
         method = req_obj.get_method()
-        payload = req_obj.data if req_obj.data is not None else data
+        if payload is not None and explicit_method is None:
+            method = "POST"
         headers = dict(req_obj.header_items())
         url = req_obj.full_url
         redirect_log = redirect_log if redirect_log is not None else []
@@ -351,7 +406,12 @@ class SafeHttpClient:
         req_obj = request
         if isinstance(request, str):
             req_obj = urllib.request.Request(request)
+        explicit_method = getattr(req_obj, "method", None)
+        orig_data = getattr(req_obj, "data", None)
+        payload = data if data is not None else orig_data
         method = (req_obj.get_method() or "GET").upper()
+        if payload is not None and explicit_method is None:
+            method = "POST"
         if only_get_like and method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
             return self.open(req_obj, data=data, timeout=timeout)
 
@@ -422,18 +482,23 @@ class SafeHttpClient:
                 redirect_scheme = (redirect_parts.scheme or "http").lower()
                 if redirect_scheme not in self._ALLOWED_SCHEMES:
                     raise RedirectBlocked(f"Redirect blocked: scheme {redirect_scheme!r} not permitted")
+                if not self._policy.allow_redirect_scheme(scheme, redirect_scheme):
+                    raise RedirectBlocked(
+                        f"Redirect blocked: scheme change from {scheme} to {redirect_scheme} not permitted"
+                    )
                 new_host = redirect_parts.hostname
                 if not self._hosts_related(origin_host, new_host):
                     raise RedirectBlocked(
                         f"Redirect blocked: cross-host redirect from {origin_host} to {new_host}"
                     )
                 new_method = "GET" if response.status in (301, 302, 303) else method
+                redirected_headers = self._policy.redirect_headers(headers, host, new_host)
                 if redirect_log is not None:
                     redirect_log.append((url, redirect_url, response.status))
                 return self._request(
                     url=redirect_url,
                     method=new_method,
-                    headers=headers,
+                    headers=redirected_headers,
                     body=None if new_method == "GET" else body,
                     timeout=timeout,
                     redirects_remaining=redirects_remaining - 1,

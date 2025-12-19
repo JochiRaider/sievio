@@ -30,7 +30,7 @@ from .concurrency import (
     process_items_parallel,
     resolve_pipeline_executor_config,
 )
-from .convert import DefaultExtractor
+from .convert import DefaultExtractor, make_limited_stream, _can_open_stream, _OPEN_STREAM_DEFAULT_MAX_BYTES
 from .log import get_logger
 from .qc_controller import QCSummaryTracker
 from .records import best_effort_record_path
@@ -141,13 +141,17 @@ class _ProcessFileCallable:
         can_stream = (
             self.executor_kind == "thread"
             and callable(extract_stream)
-            and getattr(item, "streamable", False)
-            and bool(getattr(item, "origin_path", None))
+            and getattr(item, "data", None) is None
+            and _can_open_stream(item)
         )
         if can_stream:
             stream = None
             try:
-                stream = open(str(getattr(item, "origin_path")), "rb")
+                raw_stream = item.open_stream()  # type: ignore[misc]
+                limit = self.config.decode.max_bytes_per_file
+                if limit is None:
+                    limit = _OPEN_STREAM_DEFAULT_MAX_BYTES
+                stream = make_limited_stream(raw_stream, limit)
                 stream_ref = stream
 
                 def _iter_with_close(iterable: Iterable[Record]) -> Iterable[Record]:
