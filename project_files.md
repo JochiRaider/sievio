@@ -3,7 +3,7 @@
 This file is a read-only index of files and tests in the repo for AI assistants
 and humans. It does not contain source; use it to decide which files to open.
 
-For architecture and module descriptions, see `llms.md`.
+For architecture and module descriptions, see `LLMS.md`.
 For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
 
 ```text
@@ -12,11 +12,12 @@ For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
 ├── .gitignore
 ├── LICENSE
 ├── README.md
-├── MIGRATION.md
 ├── AGENTS.md
 ├── core_upload.md
+├── docs
+│   └── TECHNICAL_MANUAL.md
 ├── example_config.toml
-├── llms.md
+├── LLMS.md
 ├── manual_test_github.toml
 ├── project_files.md
 ├── pyproject.toml

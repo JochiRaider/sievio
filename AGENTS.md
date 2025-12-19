@@ -71,8 +71,8 @@ These hold the main invariants and are more sensitive to changes:
 - `core/pipeline.py` – pipeline engine.
 - `core/qc_utils.py`, `core/qc_controller.py`, `core/qc_post.py` – QC utilities, inline QC controller, post-hoc QC driver.
 - `core/dedup_store.py` – SQLite-backed global MinHash LSH store used by QC extras and seeding scripts.
-- `dataset_card.py` – dataset card fragments and rendering.
-- `safe_http.py` – stdlib-only HTTP client with IP/redirect safeguards.
+- `core/dataset_card.py` – dataset card fragments and rendering.
+- `core/safe_http.py` – stdlib-only HTTP client with IP/redirect safeguards.
 - `core/sharding.py`, `core/stats_aggregate.py` – sharded-run helpers (config splitting, stats merging).
 
 When in doubt, prefer changing **non-core** code and wiring via registries/factories rather than patching these core modules.
@@ -116,7 +116,7 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 
 ### Review strategy (for agents doing code review)
 
-1. Fast pass: map the architecture, data flow, and trust boundaries using `llms.md` and the core modules.
+1. Fast pass: map the architecture, data flow, and trust boundaries using `LLMS.md` and the core modules.
 2. Deep pass: focus on the highest-risk or most central files (pipeline, registries, safety/QC, sinks/sources involved in the task).
 
 ---
@@ -125,31 +125,31 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 
 ### 4.1 New source type
 
-1. Implement a `Source` under `src/sievio/sources/` (see `llms.md` §3.4).
+1. Implement a `Source` under `src/sievio/sources/` (see `LLMS.md` §3.4).
 2. Add a `SourceFactory` and register it with the source registry.
 3. Add or update config examples to show usage.
 
 ### 4.2 New sink or output format
 
-1. Implement a `Sink` under `src/sievio/sinks/` (see `llms.md` §3.5).
+1. Implement a `Sink` under `src/sievio/sinks/` (see `LLMS.md` §3.5).
 2. Add a `SinkFactory` and register it with the sink registry.
 3. Add or update config examples and docs.
 
 ### 4.3 New bytes handler (binary format)
 
-1. Implement a bytes handler + sniff function and wire it via the bytes handler registry (see `llms.md` §3.1 for factories/registries).
+1. Implement a bytes handler + sniff function and wire it via the bytes handler registry (see `LLMS.md` §3.1 for factories/registries).
 2. Reuse existing decode/chunk/record helpers where possible.
 3. Add tests or examples for the new format.
 
 ### 4.4 Change or extend QC behavior
 
-1. Start from the QC config/utilities and scorer interfaces (see `llms.md` §3.1 QC modules).
+1. Start from the QC config/utilities and scorer interfaces (see `LLMS.md` §3.1 QC modules).
 2. Implement or update a `QualityScorer` and register it via the QC registry.
 3. Use inline QC controller and/or post-QC driver as appropriate, plus tests.
 
 ### 4.5 Dataset cards
 
-1. Update `dataset_card.py` fragments/merging logic (see `llms.md` §3.1 dataset card).
+1. Update `src/sievio/core/dataset_card.py` fragments/merging logic (see `LLMS.md` §3.1 dataset card).
 2. Ensure pipeline stats feed any new signals into card fragments.
 3. Keep output compatible with HF dataset card conventions (YAML front matter + Markdown).
 
@@ -192,5 +192,5 @@ A change is "done" when:
 - [ ] Tests pass: `PYTHONPATH=src pytest`
 - [ ] Lint and type-check are clean: `ruff check .`, `mypy --config-file pyproject.toml src`
 - [ ] No core invariants are broken (registries, Safe HTTP, config semantics, metadata shape)
-- [ ] Relevant docs/examples updated (`README.md`, `llms.md`, configs if needed)
+- [ ] Relevant docs/examples updated (`README.md`, `LLMS.md`, configs if needed)
 - [ ] Diff is small, focused, and clearly explainable in a commit/PR message

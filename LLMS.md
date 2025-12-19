@@ -43,7 +43,7 @@ For the purposes of this guide:
     * add or tweak behavior for a specific integration,
     * implement new sources/sinks/scorers/safety checks that *use* the core APIs,
     * and experiment with features without destabilizing the architecture. 
-  * When working with an LLM coding assistant, non-core files may not always be shared in full. This `llms.md` exists to give enough high-level context (responsibilities, key entry points, relationships to core) to avoid duplicated work and accidental reimplementation.
+  * When working with an LLM coding assistant, non-core files may not always be shared in full. This `LLMS.md` exists to give enough high-level context (responsibilities, key entry points, relationships to core) to avoid duplicated work and accidental reimplementation.
 
 ---
 
@@ -391,7 +391,7 @@ Top-level files are summarized in `project_files.md`. Key ones:
 * `AGENTS.md`
   Operational rules and invariants for AI coding assistants.
 
-* `llms.md`
+* `LLMS.md`
   This architecture and module-responsibility guide.
 
 * `example_config.toml`, `manual_test_github.toml`

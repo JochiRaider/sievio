@@ -238,18 +238,14 @@ parallel_post = false        # Use process-based parallelism for post-QC when tr
 # scorer_id selects a scorer (None = registry default); scorer_options passes scorer-specific settings
 
 [qc.scorer_options]
-lm_model_id = false            # Optional LM id for perplexity (requires QC extras)
-device = "cuda"               # Device for LM-based perplexity
-dtype = "bfloat16"            # Torch dtype string for LM
-local_files_only = false      # Restrict model loading to local files
-simhash_hamm_thresh = 4       # Hamming threshold for SimHash near-dup detection
-enable_minhash = true         # Enable MinHash-based duplicate detection
-minhash_perms = 128           # Number of permutations for MinHash signatures
-minhash_bands = 32            # Number of bands for MinHash LSH
-minhash_shingle_k = 5         # Byte-level shingle size for MinHash
-minhash_jaccard_thresh = 0.82 # Jaccard threshold to treat MinHash matches as near-duplicates
-enable_gopher = true          # Enable Gopher-style quality heuristic
-gopher_weight = 0.10          # Weight applied to the Gopher quality score
+# scorer_options is scorer-specific. For the built-in "jsonl_default" scorer, the
+# recognized options are:
+# - heuristics (mapping) → QCHeuristics overrides
+# - global_dedup (mapping) → optional GlobalDedupStore settings
+# - exact_dedup (bool) → defaults from [qc].exact_dedup if unset
+#
+# Advanced scorer knobs (e.g., perplexity model selection) require a custom
+# QualityScorerFactory (via plugins/registries) rather than TOML-only wiring.
 
 [qc.scorer_options.heuristics]
 target_code_min = 2000       # Lower bound of target token band for code-like content
@@ -279,7 +275,7 @@ simhash_window = 128         # Window size for simhash-based near-duplicate dete
 
 [qc.safety]
 enabled = false              # Enable safety/PII scoring
-mode = "inline"              # "inline", "advisory", "post" (unsupported), or "off"
+mode = "inline"              # "inline", "advisory", "post", or "off"
 annotate_only = false        # When true, never drop on safety even in inline mode
 fail_on_error = false        # Raise on safety scorer errors instead of logging
 scorer_id = "default_safety" # Safety scorer to use (None → registry default)
