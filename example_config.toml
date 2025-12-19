@@ -7,7 +7,7 @@
 # overrides across multiple specs (matching the SourceSpec/SinkSpec.kind values).
 
 # ---------------------------------------------------------------------------
-# Source defaults (apply to specs unless overridden per-spec)
+# Source defaults (reference only; factories use [sources.defaults.<kind>] for actual overrides)
 # ---------------------------------------------------------------------------
 [sources.local]
 # include_exts = [".py", ".md"] # Optional: only include these extensions (omit to accept all)
@@ -55,6 +55,7 @@ retries = 2                      # Number of retry attempts for downloading a re
 # Optional per-kind defaults (applied to specs before per-spec overrides)
 # Keys match SourceSpec.kind (e.g., "local_dir", "github_zip") or fallback names
 # like "pdf"/"sqlite" used by some factories.
+# These are the defaults actually consumed by source factories.
 # ---------------------------------------------------------------------------
 [sources.defaults.local_dir]
 # max_file_bytes = 104857600     # Example: tighten the default for all local_dir specs

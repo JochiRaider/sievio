@@ -13,22 +13,33 @@ For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
 ├── LICENSE
 ├── README.md
 ├── AGENTS.md
+├── LLMS.md
 ├── core_upload.md
 ├── docs
-│   └── TECHNICAL_MANUAL.md
+│   ├── README.md
+│   ├── CONFIGURATION.md
+│   ├── CONTRIBUTING.md
+│   ├── DEPLOYMENT.md
+│   ├── QUALITY_CONTROL.md
+│   ├── TECHNICAL_MANUAL.md
+│   └── cookbook
+│       ├── README.md
+│       ├── custom_pii_scrubbing.md
+│       ├── dedup_post_qc.md
+│       └── pdf_ingestion.md
 ├── example_config.toml
-├── LLMS.md
 ├── manual_test_github.toml
 ├── project_files.md
 ├── pyproject.toml
 ├── sample.jsonl
 ├── scripts
+│   ├── generate_configuration_md.py
 │   ├── manual_test_github.py
 │   ├── manual_test_github_toml.py
 │   ├── manual_test_web_pdf.py
 │   └── seed_dedup_db.py
 ├── src
-│   ├── sievio
+│   └── sievio
 │       ├── __init__.py
 │       ├── cli
 │       │   ├── __init__.py
@@ -98,14 +109,20 @@ For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
     ├── test_convert.py
     ├── test_convert_integration.py
     ├── test_dataset_card.py
+    ├── test_dataset_card_qc.py
     ├── test_decode.py
     ├── test_decode_fallback.py
     ├── test_dedup_store.py
     ├── test_factories_sources_config_overlays.py
     ├── test_hooks.py
+    ├── test_jsonl_source.py
+    ├── test_language_customization.py
     ├── test_log_and_naming.py
+    ├── test_pipeline_error_rate.py
     ├── test_pipeline_middlewares.py
+    ├── test_pipeline_streaming.py
     ├── test_plugins_and_registries.py
+    ├── test_sources_fs.py
     ├── test_qc_controller.py
     ├── test_qc_defaults.py
     ├── test_qc_integration.py

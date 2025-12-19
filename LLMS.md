@@ -205,7 +205,7 @@ write_csv = true
   * Builds GitHub/local/web-PDF repo profiles.
   * Constructs configs/output paths using the core factories facade.
   * Invokes the builder and pipeline engine to execute runs.
-  * Provides convenience wrappers (e.g., `convert_github`, `convert_local_dir`, `convert_web_pdf`).
+  * Provides convenience wrappers (e.g., `convert_github`, `convert_local_dir`).
 
 ---
 
