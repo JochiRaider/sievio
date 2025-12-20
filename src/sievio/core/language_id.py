@@ -67,10 +67,21 @@ class CodeLanguagePrediction:
 class CodeLanguageDetector(Protocol):
     """Interface for code-language detectors."""
 
-    def detect_code(self, text: str, *, filename: str | None = None) -> CodeLanguagePrediction | None:
+    def detect_code(
+        self,
+        text: str,
+        *,
+        filename: str | None = None,
+    ) -> CodeLanguagePrediction | None:
         ...
 
-    def detect_topk(self, text: str, k: int = 3, *, filename: str | None = None) -> Sequence[CodeLanguagePrediction]:
+    def detect_topk(
+        self,
+        text: str,
+        k: int = 3,
+        *,
+        filename: str | None = None,
+    ) -> Sequence[CodeLanguagePrediction]:
         ...
 
 
@@ -310,7 +321,11 @@ def is_code_file(path: str | Path, cfg: LanguageConfig | None = None) -> bool:
     return Path(path).suffix.lower() in cfg.code_exts
 
 
-def classify_path_kind(rel_path: str, *, cfg: LanguageConfig | None = None) -> tuple[str, str | None]:
+def classify_path_kind(
+    rel_path: str,
+    *,
+    cfg: LanguageConfig | None = None,
+) -> tuple[str, str | None]:
     """Return (kind, lang_or_format) for a path.
 
     kind:
@@ -438,7 +453,12 @@ class BaselineCodeLanguageDetector:
         ext = Path(filename).suffix.lower()
         return self.cfg.ext_lang.get(ext)
 
-    def detect_code(self, text: str, *, filename: str | None = None) -> CodeLanguagePrediction | None:
+    def detect_code(
+        self,
+        text: str,
+        *,
+        filename: str | None = None,
+    ) -> CodeLanguagePrediction | None:
         lang = None
         backend = "baseline"
         if filename:
@@ -447,14 +467,29 @@ class BaselineCodeLanguageDetector:
             lang = _shebang_hint(text)
         if lang is None:
             return None
-        return CodeLanguagePrediction(lang=lang, score=0.6, reliable=False, score_kind="heuristic", backend=backend)
+        return CodeLanguagePrediction(
+            lang=lang,
+            score=0.6,
+            reliable=False,
+            score_kind="heuristic",
+            backend=backend,
+        )
 
-    def detect_topk(self, text: str, k: int = 3, *, filename: str | None = None) -> Sequence[CodeLanguagePrediction]:
+    def detect_topk(
+        self,
+        text: str,
+        k: int = 3,
+        *,
+        filename: str | None = None,
+    ) -> Sequence[CodeLanguagePrediction]:
         pred = self.detect_code(text, filename=filename)
         return [pred] if pred else []
 
 
-def make_code_language_detector(backend: str, cfg: LanguageConfig | None = None) -> CodeLanguageDetector | None:
+def make_code_language_detector(
+    backend: str,
+    cfg: LanguageConfig | None = None,
+) -> CodeLanguageDetector | None:
     """Factory for code-language detectors."""
     backend = (backend or "none").lower()
     if backend == "none":

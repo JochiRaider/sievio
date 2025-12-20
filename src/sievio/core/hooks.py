@@ -140,7 +140,11 @@ def _append_run_summary(jsonl_path: str, summary: Mapping[str, Any]) -> None:
 class LanguageTaggingMiddleware:
     """Attach language metadata using configured detectors."""
 
-    def __init__(self, lang_det: LanguageDetector | None, code_det: CodeLanguageDetector | None) -> None:
+    def __init__(
+        self,
+        lang_det: LanguageDetector | None,
+        code_det: CodeLanguageDetector | None,
+    ) -> None:
         self._lang_det = lang_det
         self._code_det = code_det
 
@@ -153,8 +157,12 @@ class LanguageTaggingMiddleware:
             try:
                 pred = self._lang_det.detect(text)
             except Exception as exc:  # noqa: BLE001
-                log.warning("language detector failed for %s: %s", path_hint or "<unknown>", exc)
-                pred = None
+                log.warning(
+                    "language detector failed for %s: %s",
+                    path_hint or "<unknown>",
+                    exc,
+                )
+            pred = None
             if pred:
                 meta.setdefault("language", pred.code)
                 meta.setdefault("language_confidence", pred.score)
@@ -165,7 +173,11 @@ class LanguageTaggingMiddleware:
             try:
                 pred_code = self._code_det.detect_code(text, filename=path_hint)
             except Exception as exc:  # noqa: BLE001
-                log.warning("code language detector failed for %s: %s", path_hint or "<unknown>", exc)
+                log.warning(
+                    "code language detector failed for %s: %s",
+                    path_hint or "<unknown>",
+                    exc,
+                )
                 pred_code = None
             if pred_code:
                 current_lang = meta.get("lang")

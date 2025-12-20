@@ -97,7 +97,15 @@ def is_probable_kql(text: str) -> bool:
     if "|" in t:
         kws = 0
         tl = t.lower()
-        for k in (" where ", " project", " extend ", " summarize ", " join ", " union ", " mv-expand "):
+        for k in (
+            " where ",
+            " project",
+            " extend ",
+            " summarize ",
+            " join ",
+            " union ",
+            " mv-expand ",
+        ):
             if k in tl:
                 kws += 1
         if kws >= 1:
@@ -107,7 +115,10 @@ def is_probable_kql(text: str) -> bool:
         s = ln.strip().lower()
         if not s or s.startswith("//") or s.startswith("--"):
             continue
-        if s.startswith("let ") or s.startswith("datatable ") or s.startswith("range ") or s.startswith("print "):
+        if any(
+            s.startswith(token)
+            for token in ("let ", "datatable ", "range ", "print ")
+        ):
             return True
     # Count keyword hits overall
     hits = sum(1 for kw in _KQL_KEYWORDS if kw in t.lower())
@@ -129,7 +140,6 @@ def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, str | None, int, int]]:
             pos += len(lines[i])
             i += 1
             continue
-        fence = m.group(1)
         lang = (m.group(2) or "").strip().lower() or None
         start = pos
         i += 1
@@ -142,7 +152,14 @@ def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, str | None, int, int]]:
                 i += 1
                 break
             i += 1
-        yield ("".join(buf[:-1]) if buf and _FENCE_CLOSE.match(buf[-1] if buf else "") else "".join(buf), lang, start, pos)
+        yield (
+            "".join(buf[:-1])
+            if buf and _FENCE_CLOSE.match(buf[-1] if buf else "")
+            else "".join(buf),
+            lang,
+            start,
+            pos,
+        )
 
 
 def _iter_indented_blocks(md: str) -> Iterator[tuple[str, int, int]]:
@@ -193,10 +210,10 @@ def _clean_block_text(t: str) -> str:
     if not lines:
         return ""
     # Compute minimal indent (ignore empty lines)
-    indents = [len(l) - len(l.lstrip(" ")) for l in lines if l.strip()]
+    indents = [len(line) - len(line.lstrip(" ")) for line in lines if line.strip()]
     if indents:
         min_ind = min(indents)
-        lines = [l[min_ind:] if l.strip() else l for l in lines]
+        lines = [line[min_ind:] if line.strip() else line for line in lines]
     return ("\n".join(lines)).strip("\n") + "\n"
 
 def extract_kql_blocks_from_markdown(
@@ -239,7 +256,16 @@ skip_indented_inside_fences: bool = True,
                 title = _find_heading_before(md_text, start)
                 tables = guess_kql_tables(code_clean)
                 # Fences-as-whole: no further splitting here
-                found.append(KQLBlock(code_clean, start, end, lang_norm if is_kql_lang else None, title, tables))
+                found.append(
+                    KQLBlock(
+                        code_clean,
+                        start,
+                        end,
+                        lang_norm if is_kql_lang else None,
+                        title,
+                        tables,
+                    )
+                )
     
     # Helper to decide if a (start, end) range lies within any fence
     def _inside_any_fence(s: int, e: int) -> bool:
@@ -257,7 +283,16 @@ skip_indented_inside_fences: bool = True,
             if is_probable_kql(code_clean) and code_clean.count("\n") + 1 >= min_lines:
                 title = _find_heading_before(md_text, start)
                 tables = guess_kql_tables(code_clean)
-                found.append(KQLBlock(code_clean, start, end, None, title, tables))
+                found.append(
+                    KQLBlock(
+                        code_clean,
+                        start,
+                        end,
+                        None,
+                        title,
+                        tables,
+                    )
+                )
     # Deduplicate by exact spans (some markdown repeats blocks in lists)
     uniq: dict[tuple[int, int], KQLBlock] = {}
     for b in found:
@@ -437,7 +472,14 @@ class KqlFromMarkdownExtractor:
 # Category from relative repo paths
 # ---------------------------------
 
-_DEFENDER_HINTS = {"defender", "mde", "m365d", "microsoft-365-defender", "defenderforendpoint", "defender_for_endpoint"}
+_DEFENDER_HINTS = {
+    "defender",
+    "mde",
+    "m365d",
+    "microsoft-365-defender",
+    "defenderforendpoint",
+    "defender_for_endpoint",
+}
 _SENTINEL_HINTS = {"sentinel", "azure-sentinel", "microsoft-sentinel"}
 _IDENTITY_HINTS = {"mdi", "defender-for-identity", "azure-atp"}
 

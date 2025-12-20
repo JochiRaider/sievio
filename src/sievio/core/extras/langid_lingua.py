@@ -17,7 +17,9 @@ class LinguaLanguageDetector:
         try:
             from lingua import Language, LanguageDetectorBuilder  # type: ignore
         except Exception as exc:  # pragma: no cover - optional dependency
-            raise ImportError("Lingua backend requires the 'lingua-language-detector' package.") from exc
+            raise ImportError(
+                "Lingua backend requires the 'lingua-language-detector' package."
+            ) from exc
 
         if languages:
             lang_objs = []
@@ -26,7 +28,10 @@ class LinguaLanguageDetector:
                     lang_objs.append(Language.from_iso_code_639_1(code))  # type: ignore[attr-defined]
                 except Exception:
                     continue
-            builder = LanguageDetectorBuilder.from_languages(*lang_objs) if lang_objs else LanguageDetectorBuilder.from_all_languages()
+            if lang_objs:
+                builder = LanguageDetectorBuilder.from_languages(*lang_objs)
+            else:
+                builder = LanguageDetectorBuilder.from_all_languages()
         else:
             builder = LanguageDetectorBuilder.from_all_languages()
         self._detector = builder.build()
@@ -48,7 +53,13 @@ class LinguaLanguageDetector:
                         break
         except Exception:
             pass
-        return LanguagePrediction(code=code, score=score, reliable=True, score_kind="probability", backend="lingua")
+        return LanguagePrediction(
+            code=code,
+            score=score,
+            reliable=True,
+            score_kind="probability",
+            backend="lingua",
+        )
 
     def detect_topk(self, text: str, k: int = 3) -> Sequence[LanguagePrediction]:
         primary = self.detect(text)

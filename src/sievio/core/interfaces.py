@@ -19,6 +19,7 @@ if TYPE_CHECKING:  # pragma: no cover - type checking only
         FileProcessingConfig,
         HttpConfig,
         SievioConfig,
+        SinkConfig,
         SinkSpec,
         SourceSpec,
     )
@@ -163,7 +164,11 @@ class RunLifecycleHook(Protocol):
     def on_run_end(self, ctx: RunContext) -> None:  # pragma: no cover - interface
         """Called once after the pipeline finishes (success or failure)."""
 
-    def on_artifacts(self, artifacts: RunArtifacts, ctx: RunContext) -> None:  # pragma: no cover - interface
+    def on_artifacts(
+        self,
+        artifacts: RunArtifacts,
+        ctx: RunContext,
+    ) -> None:  # pragma: no cover - interface
         """
         Called once after run-level artifacts (summary record + summary view)
         have been computed.
@@ -431,7 +436,10 @@ class SafetyScorer(Protocol):
     def score_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
         """Compute safety signals for a single record."""
 
-    def score_jsonl_path(self, path: str) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
+    def score_jsonl_path(
+        self,
+        path: str,
+    ) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
         """Iterate safety signals for every record within a JSONL file."""
 
     def clone_for_parallel(self) -> SafetyScorer:  # pragma: no cover - optional
@@ -454,7 +462,11 @@ class SafetyScorerFactory(Protocol):
 class JsonlAwareScorer(QualityScorer, Protocol):
     """Extension for scorers that can handle JSONL files or parallel clones."""
 
-    def score_jsonl_path(self, path: str, **kwargs: Any) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
+    def score_jsonl_path(
+        self,
+        path: str,
+        **kwargs: Any,
+    ) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
         """Iterate QC metrics for every record within a JSONL file."""
 
     def clone_for_parallel(self) -> QualityScorer:  # pragma: no cover - optional
@@ -543,12 +555,16 @@ class MiddlewareHook(RunLifecycleHook):
         return None
 
     def on_record(self, record: Record) -> Record | None:
-        return self._mw(record) if hasattr(self._mw, "__call__") else record
+        return self._mw(record) if callable(self._mw) else record
 
     def on_run_end(self, ctx: RunContext) -> None:  # pragma: no cover - no-op
         return None
 
-    def on_artifacts(self, artifacts: RunArtifacts, ctx: RunContext) -> None:  # pragma: no cover - no-op
+    def on_artifacts(
+        self,
+        artifacts: RunArtifacts,
+        ctx: RunContext,
+    ) -> None:  # pragma: no cover - no-op
         return None
 
 

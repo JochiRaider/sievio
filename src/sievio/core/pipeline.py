@@ -117,7 +117,9 @@ def _coerce_record_middleware(mw: RecordMiddleware | Callable[[Record], Any]) ->
     return mw if hasattr(mw, "process") else _FuncRecordMiddleware(mw)  # type: ignore[arg-type]
 
 
-def _coerce_file_middleware(mw: FileMiddleware | Callable[[Any, Iterable[Record]], Any]) -> FileMiddleware:
+def _coerce_file_middleware(
+    mw: FileMiddleware | Callable[[Any, Iterable[Record]], Any],
+) -> FileMiddleware:
     """Wrap a bare callable as FileMiddleware when needed."""
     return mw if hasattr(mw, "process") else _FuncFileMiddleware(mw)  # type: ignore[arg-type]
 
@@ -288,7 +290,12 @@ def _open_source_with_stack(stack: ExitStack, src: Source) -> Source:
         stack.callback(close)  
     return src
 
-def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: RepoContext | None, stats: PipelineStats) -> list[Sink]:
+def _prepare_sinks(
+    stack: ExitStack,
+    sinks: Sequence[Sink],
+    ctx: RepoContext | None,
+    stats: PipelineStats,
+) -> list[Sink]:
     """Open sinks once, tracking failures in stats.
 
     Args:
@@ -331,7 +338,10 @@ def _ext_key(path: str) -> str:
         return ""
 
 
-def _build_file_processing_config(cfg: SievioConfig, runtime: PipelineRuntime) -> FileProcessingConfig:
+def _build_file_processing_config(
+    cfg: SievioConfig,
+    runtime: PipelineRuntime,
+) -> FileProcessingConfig:
     """Create per-file configuration for worker processes.
 
     Args:
@@ -372,7 +382,9 @@ class PipelineEngine:
         self.config = plan.spec
         self.stats = PipelineStats()
         self.log = get_logger(__name__)
-        self._hooks: tuple[RunLifecycleHook, ...] = tuple(getattr(plan.runtime, "lifecycle_hooks", ()))
+        self._hooks: tuple[RunLifecycleHook, ...] = tuple(
+            getattr(plan.runtime, "lifecycle_hooks", ())
+        )
         self.before_record_hooks: list[Callable[[Record], Record]] = []
         self.after_record_hooks: list[Callable[[Record], Record]] = []
         self.record_filter_hooks: list[Callable[[Record], bool]] = []
@@ -388,7 +400,8 @@ class PipelineEngine:
             for mw in rt.record_middlewares:
                 self.add_record_middleware(mw)
         self._fail_on_middleware_error = bool(
-            getattr(plan.runtime, "fail_fast", False) or getattr(self.config.pipeline, "fail_fast", False)
+            getattr(plan.runtime, "fail_fast", False)
+            or getattr(self.config.pipeline, "fail_fast", False)
         )
 
     def add_record_middleware(self, middleware: RecordMiddleware | Callable[[Record], Any]) -> None:
@@ -442,7 +455,10 @@ class PipelineEngine:
                 return None
         return current
 
-    def _wrap_before_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Record | None]:
+    def _wrap_before_record_hook(
+        self,
+        hook: Callable[[Record], Record],
+    ) -> Callable[[Record], Record | None]:
         def _step(record: Record) -> Record | None:
             try:
                 return hook(record)
@@ -456,7 +472,10 @@ class PipelineEngine:
 
         return _step
 
-    def _wrap_after_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Record | None]:
+    def _wrap_after_record_hook(
+        self,
+        hook: Callable[[Record], Record],
+    ) -> Callable[[Record], Record | None]:
         def _step(record: Record) -> Record | None:
             try:
                 return hook(record)
@@ -470,7 +489,10 @@ class PipelineEngine:
 
         return _step
 
-    def _wrap_record_filter(self, check: Callable[[Record], bool]) -> Callable[[Record], Record | None]:
+    def _wrap_record_filter(
+        self,
+        check: Callable[[Record], bool],
+    ) -> Callable[[Record], Record | None]:
         def _step(record: Record) -> Record | None:
             try:
                 if check(record):
@@ -526,19 +548,27 @@ class PipelineEngine:
         if self._record_chain_dirty:
             self._build_record_chain()
 
-    def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Iterable[Record] | None:
+    def _apply_file_middlewares(
+        self,
+        item: Any,
+        records: Iterable[Record],
+    ) -> Iterable[Record] | None:
         """Run a file's records through registered file middlewares."""
         current = records
         for middleware in self.file_middlewares:
             middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
-            item_label = getattr(item, "path", None) or getattr(item, "rel_path", None) or "<unknown>"
+            item_label = (
+                getattr(item, "path", None)
+                or getattr(item, "rel_path", None)
+                or "<unknown>"
+            )
             try:
                 item_label = str(item_label)
             except Exception:
                 item_label = "<unknown>"
             try:
                 current = middleware.process(item, current)
-            except Exception:  # noqa: BLE001
+            except Exception as exc:  # noqa: BLE001
                 self.stats.middleware_errors += 1
                 self.log.exception(
                     "File middleware %s failed for %s",
@@ -546,7 +576,9 @@ class PipelineEngine:
                     item_label,
                 )
                 if self._fail_on_middleware_error:
-                    raise MiddlewareError(f"File middleware {middleware_name} failed for {item_label}")
+                    raise MiddlewareError(
+                        f"File middleware {middleware_name} failed for {item_label}"
+                    ) from exc
                 return None
             if current is None:
                 return None
@@ -598,7 +630,10 @@ class PipelineEngine:
         exec_cfg = getattr(self.plan.runtime, "executor_config", None)
         fail_fast = getattr(self.plan.runtime, "fail_fast", False)
         if exec_cfg is None:
-            exec_cfg, fail_fast = resolve_pipeline_executor_config(self.config, runtime=self.plan.runtime)
+            exec_cfg, fail_fast = resolve_pipeline_executor_config(
+                self.config,
+                runtime=self.plan.runtime,
+            )
         return Executor(exec_cfg), fail_fast
 
     def _write_records(
@@ -856,7 +891,6 @@ class PipelineEngine:
 
     def _log_qc_summary(self) -> None:
         """Emit QC summary metrics after pipeline completion."""
-        cfg = self.config
         tracker = self.stats.qc
         if not tracker.enabled:
             return
@@ -888,7 +922,10 @@ class PipelineEngine:
         top = tracker.top_dup_families()
         if top:
             lines = [
-                f"    - {entry['dup_family_id']}: count={entry['count']} examples={entry.get('examples', [])}"
+                (
+                    f"    - {entry['dup_family_id']}: count={entry['count']} "
+                    f"examples={entry.get('examples', [])}"
+                )
                 for entry in top
             ]
             self.log.info("Largest duplicate families:\n%s", "\n".join(lines))
@@ -923,7 +960,12 @@ class PipelineEngine:
                     _open_source_with_stack(stack, src) for src in self.plan.runtime.sources
                 ]
                 initial_ctx: RepoContext | None = cfg.sinks.context
-                open_sinks: list[Sink] = _prepare_sinks(stack, self.plan.runtime.sinks, initial_ctx, stats)
+                open_sinks: list[Sink] = _prepare_sinks(
+                    stack,
+                    self.plan.runtime.sinks,
+                    initial_ctx,
+                    stats,
+                )
                 if not open_sinks:
                     self.log.warning("No sinks are open; processed records will be dropped.")
 
@@ -981,7 +1023,11 @@ class PipelineEngine:
 # Public API
 # ---------------------------------------------------------------------------
 
-def run_pipeline(*, config: SievioConfig, overrides: PipelineOverrides | None = None) -> dict[str, int]:
+def run_pipeline(
+    *,
+    config: SievioConfig,
+    overrides: PipelineOverrides | None = None,
+) -> dict[str, int]:
     """Run the end-to-end pipeline described by config.
 
     Args:

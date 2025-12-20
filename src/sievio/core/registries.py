@@ -73,7 +73,11 @@ class SinkRegistry:
         """Register a sink factory."""
         self._factories[factory.id] = factory
 
-    def build_all(self, ctx: SinkFactoryContext, specs: Sequence[SinkSpec]) -> tuple[list[Sink], Mapping[str, Any], SinkFactoryContext]:
+    def build_all(
+        self,
+        ctx: SinkFactoryContext,
+        specs: Sequence[SinkSpec],
+    ) -> tuple[list[Sink], Mapping[str, Any], SinkFactoryContext]:
         """Instantiate sinks for each spec and merge factory metadata.
 
         The context may be updated by successive factories; the final context
@@ -117,13 +121,27 @@ class BytesHandlerRegistry:
     """Registry for handlers operating on raw bytes inputs."""
 
     def __init__(self) -> None:
-        self._handlers: list[tuple[Callable[[bytes, str], bool], Callable[..., Iterable[Any] | None]]] = []
+        self._handlers: list[
+            tuple[
+                Callable[[bytes, str], bool],
+                Callable[..., Iterable[Any] | None],
+            ]
+        ] = []
 
-    def register(self, sniff: Callable[[bytes, str], bool], handler: Callable[..., Iterable[Any] | None]) -> None:
+    def register(
+        self,
+        sniff: Callable[[bytes, str], bool],
+        handler: Callable[..., Iterable[Any] | None],
+    ) -> None:
         """Register a handler with a sniff predicate."""
         self._handlers.append((sniff, handler))
 
-    def handlers(self) -> tuple[tuple[Callable[[bytes, str], bool], Callable[..., Iterable[Any] | None]], ...]:
+    def handlers(
+        self,
+    ) -> tuple[
+        tuple[Callable[[bytes, str], bool], Callable[..., Iterable[Any] | None]],
+        ...,
+    ]:
         """Return registered (sniff, handler) pairs."""
         return tuple(self._handlers)
 
@@ -180,7 +198,11 @@ class QualityScorerRegistry:
         try:
             return factory.build(options)
         except Exception as exc:
-            self.log.warning("Quality scorer factory %s failed: %s", getattr(factory, "id", None), exc)
+            self.log.warning(
+                "Quality scorer factory %s failed: %s",
+                getattr(factory, "id", None),
+                exc,
+            )
             return None
 
     def ids(self) -> tuple[str, ...]:
@@ -247,7 +269,12 @@ class LifecycleHookRegistry:
     def register(self, factory: LifecycleHookFactory) -> None:
         self._factories[factory.id] = factory
 
-    def build_all(self, cfg: SievioConfig, runtime: PipelineRuntime, ids: Sequence[str]) -> list[RunLifecycleHook]:
+    def build_all(
+        self,
+        cfg: SievioConfig,
+        runtime: PipelineRuntime,
+        ids: Sequence[str],
+    ) -> list[RunLifecycleHook]:
         hooks: list[RunLifecycleHook] = []
         for hook_id in ids:
             factory = self._factories.get(hook_id)

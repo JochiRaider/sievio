@@ -142,20 +142,20 @@ def target_band(lang: str, *, heuristics: QCHeuristics | None = None) -> tuple[i
     Returns:
         tuple[int, int]: Inclusive min and max target token counts.
     """
-    l = (lang or "").lower()
+    lang_key = (lang or "").lower()
     if heuristics is not None:
-        if l in CODE_LANGS_LC:
+        if lang_key in CODE_LANGS_LC:
             return heuristics.target_code_min, heuristics.target_code_max
-        if l in LOG_LIKE_LC:
+        if lang_key in LOG_LIKE_LC:
             return heuristics.target_log_min, heuristics.target_log_max
-        if l in TEXTY_LC:
+        if lang_key in TEXTY_LC:
             return heuristics.target_text_min, heuristics.target_text_max
         return heuristics.target_other_min, heuristics.target_other_max
-    if l in CODE_LANGS_LC:
+    if lang_key in CODE_LANGS_LC:
         return (2000, 4000)
-    if l in LOG_LIKE_LC:
+    if lang_key in LOG_LIKE_LC:
         return (1000, 2000)
-    if l in TEXTY_LC:
+    if lang_key in TEXTY_LC:
         return (1500, 2000)
     return (1000, 3000)
 
@@ -361,7 +361,11 @@ class SimHashWindowIndex:
             bucket = self.tables[idx].get(key)
             if not bucket:
                 continue
-            self.tables[idx][key] = [(h, i) for (h, i) in bucket if not (h == old_h and i == old_id)]
+            self.tables[idx][key] = [
+                (h, i)
+                for (h, i) in bucket
+                if not (h == old_h and i == old_id)
+            ]
             if not self.tables[idx][key]:
                 del self.tables[idx][key]
 
@@ -523,7 +527,7 @@ class MinHashLSH:
         best_j, best_id = 0.0, None
         for cand in self.candidates(sig):
             csig = self.sigs[cand]
-            eq = sum(1 for a, b in zip(sig, csig) if a == b)
+            eq = sum(1 for a, b in zip(sig, csig, strict=False) if a == b)
             j = eq / self.n_perm
             if j > best_j:
                 best_j, best_id = j, cand
@@ -569,17 +573,25 @@ def parse_ok(text: str, lang: str) -> float:
             has_md_heading = bool(re.search(r"(?m)^\s{0,3}#{1,6}\s+\S", text))
             return 1.0 if has_rst_heading or has_md_heading or len(text) > 400 else 0.7
         if lang == "kql":
-            return (
-                1.0
-                if ("|" in text and re.search(r"\b(where|project|summarize|join|extend|parse)\b", text, re.I))
-                else 0.0
+            has_keywords = (
+                "|" in text
+                and re.search(
+                    r"\b(where|project|summarize|join|extend|parse)\b",
+                    text,
+                    re.I,
+                )
             )
+            return 1.0 if has_keywords else 0.0
         if lang == "spl":
-            return (
-                1.0
-                if ("|" in text and re.search(r"\b(eval|where|stats|rex|table|rename|lookup|join)\b", text, re.I))
-                else 0.0
+            has_keywords = (
+                "|" in text
+                and re.search(
+                    r"\b(eval|where|stats|rex|table|rename|lookup|join)\b",
+                    text,
+                    re.I,
+                )
             )
+            return 1.0 if has_keywords else 0.0
         if lang in {"sigma", "yara"}:
             ok_kw = re.search(r"\brule\b|\bdetection\b|\bcondition\b", text, re.I)
             braces_ok = abs(text.count("{") - text.count("}")) <= 3
@@ -679,7 +691,13 @@ def _ellipsis_ratio(text: str) -> float:
     if not lines:
         return 0.0
     return (
-        sum(1 for ln in lines if ln.rstrip().endswith("...") or ln.rstrip().endswith("…")) / len(lines)
+        sum(
+            1
+            for ln in lines
+            if ln.rstrip().endswith("...")
+            or ln.rstrip().endswith("…")
+        )
+        / len(lines)
     )
 
 
@@ -737,8 +755,17 @@ class PerplexityModel:
             self.model = None
             self.tok = None
             return
-        self.tok = AutoTokenizer.from_pretrained(model_id, use_fast=True, local_files_only=local_files_only)
-        dtype_value = getattr(torch, dtype) if hasattr(torch, dtype) else None  # type: ignore[name-defined]
+        self.tok = AutoTokenizer.from_pretrained(
+            model_id,
+            use_fast=True,
+            local_files_only=local_files_only,
+        )
+        dtype_value = (
+            getattr(torch, dtype)
+            if hasattr(torch, dtype)
+            else None
+        )
+        # type: ignore[name-defined]
         model_kwargs = {"local_files_only": local_files_only}
         if dtype_value is not None:
             model_kwargs["dtype"] = dtype_value

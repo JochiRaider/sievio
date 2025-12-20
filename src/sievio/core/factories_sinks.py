@@ -21,7 +21,7 @@ from .config import build_config_from_defaults_and_options
 from .interfaces import RepoContext, Sink, SinkFactory, SinkFactoryContext
 
 if TYPE_CHECKING:  # pragma: no cover - type-only imports
-    from .config import SinkConfig
+    from .config import SinkConfig, SinkSpec
 
 __all__ = [
     "OutputPaths",

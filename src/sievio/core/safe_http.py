@@ -14,7 +14,6 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Union
 
 from .log import get_logger
 
@@ -25,7 +24,7 @@ from .log import get_logger
 
 log = get_logger(__name__)
 
-RequestLike = Union[str, urllib.request.Request]
+RequestLike = str | urllib.request.Request
 
 
 class PrivateAddressBlocked(RuntimeError):
@@ -43,7 +42,7 @@ class _SafeHTTPConnection(http.client.HTTPConnection):
         super().__init__(host=host, **kwargs)
         self._resolved_ip = resolved_ip
 
-    def connect(self) -> None:  
+    def connect(self) -> None:
         self.sock = self._create_connection(
             (self._resolved_ip, self.port), self.timeout, self.source_address
         )
@@ -57,7 +56,7 @@ class _SafeHTTPSConnection(http.client.HTTPSConnection):
         self._resolved_ip = resolved_ip
         self._sni_host = host
 
-    def connect(self) -> None:  
+    def connect(self) -> None:
         self.sock = self._create_connection(
             (self._resolved_ip, self.port), self.timeout, self.source_address
         )
@@ -167,7 +166,9 @@ def _default_allow_redirect_scheme(old_scheme: str, new_scheme: str) -> bool:
     return True
 
 
-def _build_default_allow_redirect(trusted_suffixes: set[str]) -> Callable[[str | None, str | None], bool]:
+def _build_default_allow_redirect(
+    trusted_suffixes: set[str],
+) -> Callable[[str | None, str | None], bool]:
     """Build the default redirect admission function."""
 
     def _host_matches_suffix(host: str | None, suffix: str) -> bool:
@@ -253,7 +254,7 @@ class SafeHttpClient:
             raise urllib.error.URLError(f"DNS resolution failed for {hostname}: {exc}") from exc
         ips: list[str] = []
         seen: set[str] = set()
-        for family, _stype, _proto, _canon, sockaddr in infos:
+        for _family, _stype, _proto, _canon, sockaddr in infos:
             ip = sockaddr[0]
             addr = ipaddress.ip_address(ip)
             if not self._policy.allow_ip(addr):
@@ -263,7 +264,9 @@ class SafeHttpClient:
                 ips.append(ip)
         if not ips:
             target = f" for {url}" if url else ""
-            raise PrivateAddressBlocked(f"All resolved addresses for {hostname} are disallowed{target}")
+            raise PrivateAddressBlocked(
+                f"All resolved addresses for {hostname} are disallowed{target}"
+            )
         return ips
 
     @staticmethod
@@ -457,7 +460,13 @@ class SafeHttpClient:
         port = parsed.port or (443 if scheme == "https" else 80)
         last_error: Exception | None = None
         for ip in self._resolve_ips(host, url=url):
-            conn = self._build_connection(scheme=scheme, host=host, ip=ip, port=port, timeout=timeout)
+            conn = self._build_connection(
+                scheme=scheme,
+                host=host,
+                ip=ip,
+                port=port,
+                timeout=timeout,
+            )
             path = self._build_path(parsed)
             all_headers = self._normalize_headers(headers, host, port, scheme)
             try:
@@ -482,10 +491,13 @@ class SafeHttpClient:
                 redirect_parts = urllib.parse.urlsplit(redirect_url)
                 redirect_scheme = (redirect_parts.scheme or "http").lower()
                 if redirect_scheme not in self._ALLOWED_SCHEMES:
-                    raise RedirectBlocked(f"Redirect blocked: scheme {redirect_scheme!r} not permitted")
+                    raise RedirectBlocked(
+                        f"Redirect blocked: scheme {redirect_scheme!r} not permitted"
+                    )
                 if not self._policy.allow_redirect_scheme(scheme, redirect_scheme):
                     raise RedirectBlocked(
-                        f"Redirect blocked: scheme change from {scheme} to {redirect_scheme} not permitted"
+                        f"Redirect blocked: scheme change from {scheme} "
+                        f"to {redirect_scheme} not permitted"
                     )
                 new_host = redirect_parts.hostname
                 if not self._hosts_related(origin_host, new_host):

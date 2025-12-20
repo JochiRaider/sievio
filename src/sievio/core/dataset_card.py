@@ -15,6 +15,7 @@ from .config import SievioConfig
 from .interfaces import RunArtifacts, RunContext, RunLifecycleHook, RunSummaryView
 from .language_id import CODE_EXTS, DOC_EXTS
 from .log import get_logger
+from .pipeline import PipelineStats
 from .qc_utils import open_jsonl_maybe_gz
 from .records import is_summary_record
 
@@ -181,7 +182,8 @@ class CardFragment:
         schema_version = int(data.get("schema_version") or 0)
         if schema_version != CARD_FRAGMENT_SCHEMA_VERSION:
             raise ValueError(
-                f"Unsupported card fragment schema {schema_version}; expected {CARD_FRAGMENT_SCHEMA_VERSION}"
+                f"Unsupported card fragment schema {schema_version}; "
+                f"expected {CARD_FRAGMENT_SCHEMA_VERSION}"
             )
         language = _normalize_str_list(data.get("language"))
         tags = _normalize_str_list(data.get("tags"))
@@ -307,7 +309,11 @@ def _choose_split(
     if split_from_cfg:
         return str(split_from_cfg)
     try:
-        extra_split = cfg.metadata.extra.get("split") if cfg.metadata and cfg.metadata.extra else None
+        extra_split = (
+            cfg.metadata.extra.get("split")
+            if cfg.metadata and cfg.metadata.extra
+            else None
+        )
         if extra_split:
             return str(extra_split)
     except Exception:
@@ -351,8 +357,9 @@ def _coerce_numeric(value: Any) -> float | None:
 def _aggregate_signal_stats(fragments: Sequence[CardFragment]) -> dict[str, dict[str, Any]] | None:
     """Aggregate scalar quality signals for the dataset card.
 
-    Source: qc_summary['screeners']['quality']['signal_stats'] (quality only). Safety/other screeners are
-    summarized separately (counts/flags), not as scalar signals.
+    Source: qc_summary['screeners']['quality']['signal_stats'] (quality only).
+    Safety/other screeners are summarized separately (counts/flags), not as
+    scalar signals.
     """
     merged: dict[str, dict[str, Any]] = {}
     for frag in fragments:
@@ -366,7 +373,11 @@ def _aggregate_signal_stats(fragments: Sequence[CardFragment]) -> dict[str, dict
         if not isinstance(signal_stats, Mapping) or not signal_stats:
             screeners = qc_stats.get("screeners")
             quality_stats = screeners.get("quality") if isinstance(screeners, Mapping) else None
-            signal_stats = quality_stats.get("signal_stats") if isinstance(quality_stats, Mapping) else None
+            signal_stats = (
+                quality_stats.get("signal_stats")
+                if isinstance(quality_stats, Mapping)
+                else None
+            )
         if not isinstance(signal_stats, Mapping):
             continue
         for name, payload in signal_stats.items():
@@ -496,7 +507,9 @@ def _aggregate_screening_summaries(fragments: Sequence[CardFragment]) -> dict[st
                     merged_bucket: dict[str, int] = merged_entry[bucket_key]
                     for name, count in payload.items():
                         try:
-                            merged_bucket[str(name)] = merged_bucket.get(str(name), 0) + int(count or 0)
+                            merged_bucket[str(name)] = (
+                                merged_bucket.get(str(name), 0) + int(count or 0)
+                            )
                         except Exception:
                             continue
 
@@ -523,7 +536,11 @@ def _format_screening_summary_for_card(qc_summary: Mapping[str, Any] | None) -> 
     screeners = qc_summary.get("screeners")
     if not isinstance(screeners, Mapping) or not screeners:
         return "[More Information Needed]"
-    top_safety_flags = qc_summary.get("top_safety_flags") if isinstance(qc_summary, Mapping) else None
+    top_safety_flags = (
+        qc_summary.get("top_safety_flags")
+        if isinstance(qc_summary, Mapping)
+        else None
+    )
 
     def _counter_parts(payload: Mapping[str, Any] | None) -> list[str]:
         if not isinstance(payload, Mapping):
@@ -598,7 +615,10 @@ def _format_screening_summary_for_card(qc_summary: Mapping[str, Any] | None) -> 
     return "\n".join(lines) if lines else "[More Information Needed]"
 
 
-def _format_quality_sections(signal_stats: Mapping[str, Any] | None, screening_summary: Mapping[str, Any] | None) -> str:
+def _format_quality_sections(
+    signal_stats: Mapping[str, Any] | None,
+    screening_summary: Mapping[str, Any] | None,
+) -> str:
     """Compose the quality section with screening summary + scalar signals."""
     screening_block = _format_screening_summary_for_card(screening_summary)
     signals_block = _format_signal_stats_for_card(signal_stats)
@@ -627,7 +647,11 @@ def build_card_fragment_for_run(
     if primary_jsonl_override is None:
         primary_jsonl_override = stats_dict.get("primary_jsonl_path")
 
-    jsonl_path_str = primary_jsonl_override or cfg.metadata.primary_jsonl or cfg.sinks.primary_jsonl_name
+    jsonl_path_str = (
+        primary_jsonl_override
+        or cfg.metadata.primary_jsonl
+        or cfg.sinks.primary_jsonl_name
+    )
     if not jsonl_path_str:
         raise ValueError("cfg.metadata.primary_jsonl is required to build a card fragment.")
     jsonl_path = Path(jsonl_path_str)
@@ -786,7 +810,11 @@ def merge_fragments(
     task_categories_list = sorted(task_categories) if task_categories else None
     if overrides.get("task_categories") is not None:
         override_tasks = _normalize_str_list(overrides["task_categories"])
-        task_categories_list = override_tasks if override_tasks is not None else task_categories_list
+        task_categories_list = (
+            override_tasks
+            if override_tasks is not None
+            else task_categories_list
+        )
 
     task_ids_list = sorted(task_ids) if task_ids else None
     if overrides.get("task_ids") is not None:
@@ -859,7 +887,11 @@ def _format_scalar(value: Any) -> str:
     if isinstance(value, (int, float)):
         return str(value)
     text = str(value)
-    needs_quotes = not text or text.strip() != text or any(ch in text for ch in [":", "-", "#", "{", "}", "[", "]"])
+    needs_quotes = (
+        not text
+        or text.strip() != text
+        or any(ch in text for ch in [":", "-", "#", "{", "}", "[", "]"])
+    )
     if needs_quotes:
         return json.dumps(text)
     return text
@@ -910,15 +942,38 @@ def _human_readable_bytes(n: int) -> str:
 
 def _default_summary(fields: DatasetCardFields) -> str:
     """Produce a default summary paragraph for the dataset card."""
-    total_examples = fields.extra.get("total_examples") if isinstance(fields.extra, Mapping) else None
-    total_bytes = fields.extra.get("total_bytes") if isinstance(fields.extra, Mapping) else None
-    splits = fields.dataset_info.get("splits") if isinstance(fields.dataset_info, Mapping) else None
+    total_examples = (
+        fields.extra.get("total_examples")
+        if isinstance(fields.extra, Mapping)
+        else None
+    )
+    total_bytes = (
+        fields.extra.get("total_bytes")
+        if isinstance(fields.extra, Mapping)
+        else None
+    )
+    splits = (
+        fields.dataset_info.get("splits")
+        if isinstance(fields.dataset_info, Mapping)
+        else None
+    )
     parts: list[str] = []
     if total_examples is not None:
-        size_txt = f" (~{_human_readable_bytes(int(total_bytes))})" if total_bytes is not None else ""
-        parts.append(f"This dataset contains approximately {int(total_examples):,} examples{size_txt}.")
+        size_txt = (
+            f" (~{_human_readable_bytes(int(total_bytes))})"
+            if total_bytes is not None
+            else ""
+        )
+        parts.append(
+            f"This dataset contains approximately {int(total_examples):,} "
+            f"examples{size_txt}."
+        )
     if splits:
-        split_labels = ", ".join(f"{s.get('name')} ({s.get('num_examples', '?')})" for s in splits if s)
+        split_labels = ", ".join(
+            f"{s.get('name')} ({s.get('num_examples', '?')})"
+            for s in splits
+            if s
+        )
         if split_labels:
             parts.append(f"Splits covered: {split_labels}.")
     langs = _normalize_str_list(fields.language)
@@ -1153,10 +1208,17 @@ def build_dataset_card_from_fragments(
     overrides_combined.setdefault(
         "quality_signals_section", _format_quality_sections(signal_stats, screening_summary)
     )
-    screeners = screening_summary.get("screeners") if isinstance(screening_summary, Mapping) else None
+    screeners = (
+        screening_summary.get("screeners")
+        if isinstance(screening_summary, Mapping)
+        else None
+    )
     if isinstance(screeners, Mapping) and "safety" in screeners:
         overrides_combined.setdefault(
             "personal_and_sensitive_information_section",
-            "Automated safety screening was applied; see Screening Summary for aggregate counts and top flag categories.",
+            (
+                "Automated safety screening was applied; "
+                "see Screening Summary for aggregate counts and top flag categories."
+            ),
         )
     return render_dataset_card(fields, body_overrides=overrides_combined)

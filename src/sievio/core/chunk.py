@@ -372,7 +372,15 @@ def _split_rst_blocks(text: str, tokenizer) -> list[Block]:
                 pos += len(block_text)
                 i += 3
                 tokens = count_tokens(block_text, tokenizer, "doc")
-                out.append(Block(block_text, start, start + len(block_text), tokens, kind="heading"))
+                out.append(
+                    Block(
+                        block_text,
+                        start,
+                        start + len(block_text),
+                        tokens,
+                        kind="heading",
+                    )
+                )
                 bstart = pos
                 continue
 
@@ -389,7 +397,15 @@ def _split_rst_blocks(text: str, tokenizer) -> list[Block]:
             pos += len(block_text)
             i += 2
             tokens = count_tokens(block_text, tokenizer, "doc")
-            out.append(Block(block_text, start, start + len(block_text), tokens, kind="heading"))
+            out.append(
+                Block(
+                    block_text,
+                    start,
+                    start + len(block_text),
+                    tokens,
+                    kind="heading",
+                )
+            )
             bstart = pos
             continue
 
@@ -588,7 +604,12 @@ def _paragraph_spans(text: str) -> list[tuple[int, int]]:
     return spans
 
 
-def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, tokenizer) -> list[Block]:
+def _split_sentences(
+    segment_text: str,
+    abs_start: int,
+    limit_tokens: int,
+    tokenizer,
+) -> list[Block]:
     """Split a paragraph segment into sentence-based blocks.
 
     Sentences are grouped so that each block stays under the given
@@ -1051,12 +1072,12 @@ def detect_fmt_from_lang(lang: str | None) -> str:
         str: Splitter format name, for example ``"markdown"`` or
             ``"restructuredtext"``.
     """
-    l = (lang or "").strip().lower()
-    if l in {"rst", "restructuredtext"}:
+    lang_key = (lang or "").strip().lower()
+    if lang_key in {"rst", "restructuredtext"}:
         return "restructuredtext"
-    if l in {"markdown", "md"}:
+    if lang_key in {"markdown", "md"}:
         return "markdown"
     # default for texty docs
-    if l in {"text", "txt", "html"}:
+    if lang_key in {"text", "txt", "html"}:
         return "markdown"
     return "markdown"

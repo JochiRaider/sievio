@@ -222,7 +222,10 @@ def _normalize_source_ref(
 # (it wraps interfaces.Extractor.extract and returns an Iterable[Record])
 ExtractorFn = Callable[[str, str], Iterable[Record] | None]
 
-def _build_record_context(config: ConfigForRecords, context: RepoContext | None) -> RecordBuilderContext:
+def _build_record_context(
+    config: ConfigForRecords,
+    context: RepoContext | None,
+) -> RecordBuilderContext:
     """Build a RecordBuilderContext from config and repository context.
 
     Args:
@@ -462,12 +465,21 @@ def iter_records_for_file(
                     continue
                 for rec in out:
                     if not isinstance(rec, Mapping):
-                        log.warning("Extractor %s produced non-mapping for %s; skipping", getattr(extractor, "name", extractor), rel_path)
+                        log.warning(
+                            "Extractor %s produced non-mapping for %s; skipping",
+                            getattr(extractor, "name", extractor),
+                            rel_path,
+                        )
                         continue
                     try:
                         extractor_recs.append(dict(rec))
                     except Exception as exc:
-                        log.warning("Extractor %s record coercion failed for %s: %s", getattr(extractor, "name", extractor), rel_path, exc)
+                        log.warning(
+                            "Extractor %s record coercion failed for %s: %s",
+                            getattr(extractor, "name", extractor),
+                            rel_path,
+                            exc,
+                        )
             except Exception as exc:
                 log.warning(
                     "Extractor %s failed for %s: %s",
@@ -679,7 +691,12 @@ def build_records_from_bytes(
         try:
             should_handle = sniff(data, rel_path)
         except Exception as exc:
-            log.warning("Sniffer %s failed for %s: %s", getattr(sniff, "__name__", sniff), rel_path, exc)
+            log.warning(
+                "Sniffer %s failed for %s: %s",
+                getattr(sniff, "__name__", sniff),
+                rel_path,
+                exc,
+            )
             continue
         if should_handle:
             try:
@@ -688,13 +705,23 @@ def build_records_from_bytes(
                 log.info("Skipping unsupported binary for %s: %s", rel_path, e)
                 return
             except Exception as exc:
-                log.warning("Bytes handler %s failed for %s: %s", getattr(handler, "__name__", handler), rel_path, exc)
+                log.warning(
+                    "Bytes handler %s failed for %s: %s",
+                    getattr(handler, "__name__", handler),
+                    rel_path,
+                    exc,
+                )
                 continue
             if records is not None:
                 try:
                     yield from records
                 except Exception as exc:
-                    log.warning("Bytes handler %s iteration failed for %s: %s", getattr(handler, "__name__", handler), rel_path, exc)
+                    log.warning(
+                        "Bytes handler %s iteration failed for %s: %s",
+                        getattr(handler, "__name__", handler),
+                        rel_path,
+                        exc,
+                    )
                 return
 
     max_bytes = record_ctx.decode.max_bytes_per_file
@@ -781,8 +808,7 @@ def iter_records_from_file_item(
                     )
                     if rows is not None:
                         try:
-                            for row in rows:
-                                yield row
+                            yield from rows
                             return
                         finally:
                             try:

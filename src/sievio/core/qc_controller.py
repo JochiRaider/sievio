@@ -114,7 +114,12 @@ def _coerce_int(value: Any, *, default: int = 0, strict: bool = False) -> int:
         return default
 
 
-def _coerce_float(value: Any, *, default: float | None = None, strict: bool = False) -> float | None:
+def _coerce_float(
+    value: Any,
+    *,
+    default: float | None = None,
+    strict: bool = False,
+) -> float | None:
     if value is None:
         return default
     try:
@@ -254,13 +259,25 @@ class ScreenerStats:
             stats.signal_stats = parsed
         flags = data.get("flags")
         if isinstance(flags, Mapping):
-            stats.flags = {str(k): _coerce_int(v, strict=strict) for k, v in flags.items() if v is not None}
+            stats.flags = {
+                str(k): _coerce_int(v, strict=strict)
+                for k, v in flags.items()
+                if v is not None
+            }
         candidates = data.get("candidates")
         if isinstance(candidates, Mapping):
-            stats.candidates = {str(k): _coerce_int(v, strict=strict) for k, v in candidates.items() if v is not None}
+            stats.candidates = {
+                str(k): _coerce_int(v, strict=strict)
+                for k, v in candidates.items()
+                if v is not None
+            }
         drops = data.get("drops")
         if isinstance(drops, Mapping):
-            stats.drops = {str(k): _coerce_int(v, strict=strict) for k, v in drops.items() if v is not None}
+            stats.drops = {
+                str(k): _coerce_int(v, strict=strict)
+                for k, v in drops.items()
+                if v is not None
+            }
         return stats
 
     def clone(self) -> ScreenerStats:
@@ -291,13 +308,21 @@ class ScreenerStats:
                 self.signal_stats[name] = stats.clone()
             else:
                 existing.merge_from(stats)
-        for bucket, incoming in (("flags", other.flags), ("candidates", other.candidates), ("drops", other.drops)):
+        for bucket, incoming in (
+            ("flags", other.flags),
+            ("candidates", other.candidates),
+            ("drops", other.drops),
+        ):
             target = getattr(self, bucket)
             for key, value in incoming.items():
                 target[key] = target.get(key, 0) + int(value)
 
 
-def _parse_scalar_signal_stats(payload: Mapping[str, Any], *, strict: bool = False) -> ScalarSignalStats:
+def _parse_scalar_signal_stats(
+    payload: Mapping[str, Any],
+    *,
+    strict: bool = False,
+) -> ScalarSignalStats:
     stats = ScalarSignalStats()
     stats.count = _coerce_int(payload.get("count"), strict=strict)
     stats.min = _coerce_float(payload.get("min"), strict=strict)
@@ -387,7 +412,10 @@ class QCSummaryTracker:
         screener_id: str = "quality",
     ) -> None:
         """Update counters based on a QC row and explicit gate outcome."""
-        screener = self.get_screener(screener_id, mode=self.mode if screener_id == "quality" else None)
+        screener = self.get_screener(
+            screener_id,
+            mode=self.mode if screener_id == "quality" else None,
+        )
         screener.enabled = True
         screener.scored += 1
         family_id = qc_result.get("dup_family_id") or qc_result.get("doc_id")
@@ -466,7 +494,12 @@ class QCSummaryTracker:
         return top_dup_families(self.dup_families)
 
     @classmethod
-    def from_summary_dict(cls, data: Mapping[str, Any], *, strict: bool = False) -> QCSummaryTracker:
+    def from_summary_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        strict: bool = False,
+    ) -> QCSummaryTracker:
         """Rehydrate a tracker from a serialized summary dictionary.
 
         Args:
@@ -486,17 +519,30 @@ class QCSummaryTracker:
             mode=data.get("mode") or QCMode.INLINE,
             min_score=_coerce_float(data.get("min_score"), default=None, strict=strict),
             drop_near_dups=_coerce_bool(data.get("drop_near_dups", False), strict=strict),
-            top_dup_snapshot=[dict(entry) for entry in data.get("top_dup_families") or [] if isinstance(entry, dict)],
+            top_dup_snapshot=[
+                dict(entry)
+                for entry in data.get("top_dup_families") or []
+                if isinstance(entry, dict)
+            ],
         )
         screeners_payload = data.get("screeners")
         if isinstance(screeners_payload, Mapping):
             for sid, payload in screeners_payload.items():
                 if not isinstance(payload, Mapping):
                     continue
-                tracker.screeners[str(sid)] = ScreenerStats.from_dict(payload, default_id=str(sid), strict=strict)
+                tracker.screeners[str(sid)] = ScreenerStats.from_dict(
+                    payload,
+                    default_id=str(sid),
+                    strict=strict,
+                )
         return tracker
 
-    def _observe_signals(self, qc_result: Mapping[str, Any], *, screener_id: str = "quality") -> None:
+    def _observe_signals(
+        self,
+        qc_result: Mapping[str, Any],
+        *,
+        screener_id: str = "quality",
+    ) -> None:
         """Update scalar stats for numeric/boolean QC signals."""
         if screener_id != "quality":
             return
@@ -551,7 +597,12 @@ class QCSummaryTracker:
         else:
             stats.kept += 1
 
-    def record_safety_error(self, *, screener_id: str = "safety", mode: str = QCMode.INLINE) -> None:
+    def record_safety_error(
+        self,
+        *,
+        screener_id: str = "safety",
+        mode: str = QCMode.INLINE,
+    ) -> None:
         """Increment error count for a failed safety scoring attempt."""
         stats = self.get_screener(screener_id, mode=mode)
         if stats is None:
@@ -702,7 +753,11 @@ class InlineScreeningController:
             if isinstance(existing, QCSummaryTracker):
                 tracker = existing
         if tracker is None:
-            tracker = self.summary if isinstance(self.summary, QCSummaryTracker) else QCSummaryTracker()
+            tracker = (
+                self.summary
+                if isinstance(self.summary, QCSummaryTracker)
+                else QCSummaryTracker()
+            )
             if stats is not None and not isinstance(getattr(stats, "qc", None), QCSummaryTracker):
                 try:
                     stats.qc = tracker  # attach summary on PipelineStats
@@ -710,7 +765,10 @@ class InlineScreeningController:
                     pass
         self.summary = tracker
 
-        enabled = bool(effective_qc and effective_qc.enabled) or bool(effective_safety and effective_safety.enabled)
+        enabled = (
+            bool(effective_qc and effective_qc.enabled)
+            or bool(effective_safety and effective_safety.enabled)
+        )
         tracker.reset_for_run(
             enabled=enabled,
             mode=effective_qc.mode if effective_qc is not None else QCMode.INLINE,
@@ -724,7 +782,9 @@ class InlineScreeningController:
             self.apply_qc_gates = None
         if effective_safety is not None:
             self.apply_safety_gates = (
-                effective_safety.enabled and effective_safety.mode == QCMode.INLINE and not effective_safety.annotate_only
+                effective_safety.enabled
+                and effective_safety.mode == QCMode.INLINE
+                and not effective_safety.annotate_only
             )
         else:
             self.apply_safety_gates = None
@@ -743,7 +803,11 @@ class InlineScreeningController:
             try:
                 result = screener.process_record(current)
             except Exception:
-                self.logger.warning("screener %s failed", getattr(screener, "id", screener), exc_info=True)
+                self.logger.warning(
+                    "screener %s failed",
+                    getattr(screener, "id", screener),
+                    exc_info=True,
+                )
                 screener_id = getattr(screener, "id", "")
                 enforce = getattr(screener, "enforce_drops", True)
                 if enforce is None:
@@ -898,7 +962,13 @@ class SafetyInlineScreener:
 
         decision = self.decision_policy.decide(result, cfg=self.cfg)
         did_drop = apply_gates and bool(decision.would_drop)
-        self.summary.observe_safety(result, decision, did_drop=did_drop, screener_id=self.id, mode=self.cfg.mode)
+        self.summary.observe_safety(
+            result,
+            decision,
+            did_drop=did_drop,
+            screener_id=self.id,
+            mode=self.cfg.mode,
+        )
         if did_drop:
             return None
 
@@ -936,7 +1006,11 @@ class InlineQCController:
         summary = QCSummaryTracker()
         screeners: list[InlineScreener] = []
 
-        if config.enabled and scorer is not None and config.mode in {QCMode.INLINE, QCMode.ADVISORY}:
+        if (
+            config.enabled
+            and scorer is not None
+            and config.mode in {QCMode.INLINE, QCMode.ADVISORY}
+        ):
             qc_screener = QualityInlineScreener(
                 cfg=config,
                 scorer=scorer,
@@ -946,7 +1020,12 @@ class InlineQCController:
             )
             screeners.append(qc_screener)
 
-        if safety_cfg and safety_cfg.enabled and safety_scorer is not None and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
+        if (
+            safety_cfg
+            and safety_cfg.enabled
+            and safety_scorer is not None
+            and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}
+        ):
             safety_screener = SafetyInlineScreener(
                 cfg=safety_cfg,
                 scorer=safety_scorer,

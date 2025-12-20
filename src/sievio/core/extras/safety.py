@@ -41,7 +41,9 @@ class RegexSafetyScorer(SafetyScorer):
         toxicity_threshold: float | None = None,
     ) -> None:
         self.allowed_licenses = {lic.lower(): True for lic in (allowed_licenses or [])}
-        self.toxicity_terms = tuple(term.lower() for term in (toxicity_terms or _DEFAULT_TOXICITY_TERMS))
+        self.toxicity_terms = tuple(
+            term.lower() for term in (toxicity_terms or _DEFAULT_TOXICITY_TERMS)
+        )
         self.toxicity_threshold = toxicity_threshold
         self._init_kwargs = {
             "allowed_licenses": allowed_licenses,
@@ -73,7 +75,10 @@ class RegexSafetyScorer(SafetyScorer):
         )
 
         pii_detected = (num_emails + num_phones + num_ips) > 0
-        license_blocked = bool(self.allowed_licenses) and (not license_id or license_id.lower() not in self.allowed_licenses)
+        license_blocked = (
+            bool(self.allowed_licenses)
+            and (not license_id or license_id.lower() not in self.allowed_licenses)
+        )
 
         drop_reasons: list[str] = []
         if license_blocked:

@@ -180,7 +180,8 @@ ANCHOR_PHRASES = {
         "creative commons corporation is not a law firm",
     ),
     "BSL-1.0": (
-        "permission is hereby granted, free of charge, to any person or organization obtaining a copy of the software",
+        "permission is hereby granted, free of charge, to any person or organization "
+        "obtaining a copy of the software",
         "boost software license",
     ),
     "Unlicense": (
@@ -721,7 +722,13 @@ def _attach_content_license(
     return license_id, merged
 
 
-def _handle_package_json(text: str, rel_name: str, reader, root_files, lower_map) -> DetectionResult | None:
+def _handle_package_json(
+    text: str,
+    rel_name: str,
+    reader,
+    root_files,
+    lower_map,
+) -> DetectionResult | None:
     """Resolve licenses declared in package.json."""
     try:
         data = json.loads(text)
@@ -785,7 +792,13 @@ def _resolve_package_json_license(
     return None, None, None
 
 
-def _handle_cargo_toml(text: str, rel_name: str, reader, root_files, lower_map) -> DetectionResult | None:
+def _handle_cargo_toml(
+    text: str,
+    rel_name: str,
+    reader,
+    root_files,
+    lower_map,
+) -> DetectionResult | None:
     """Resolve licenses declared in Cargo.toml."""
     if tomllib is None:
         return None
@@ -830,7 +843,13 @@ def _handle_cargo_toml(text: str, rel_name: str, reader, root_files, lower_map) 
     return None
 
 
-def _handle_pyproject_toml(text: str, rel_name: str, reader, root_files, lower_map) -> DetectionResult | None:
+def _handle_pyproject_toml(
+    text: str,
+    rel_name: str,
+    reader,
+    root_files,
+    lower_map,
+) -> DetectionResult | None:
     """Resolve licenses declared in pyproject.toml."""
     if tomllib is None:
         return None

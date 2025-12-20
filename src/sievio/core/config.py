@@ -39,7 +39,10 @@ from .safe_http import SafeHttpClient
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
-BytesHandler = Callable[[bytes, str, RepoContext | None, ChunkPolicy | None], Iterable[Record] | None]
+BytesHandler = Callable[
+    [bytes, str, RepoContext | None, ChunkPolicy | None],
+    Iterable[Record] | None,
+]
 # ---------------------------------------------------------------------------
 # QC mode helpers
 # ---------------------------------------------------------------------------
@@ -148,7 +151,8 @@ class GitHubSourceConfig:
 @dataclass(slots=True)
 class PdfSourceConfig:
     """
-    Settings for web PDF fetching; download_* controls concurrency for WebPdfListSource/WebPagePdfSource only.
+    Settings for web PDF fetching; download_* controls concurrency for
+    WebPdfListSource/WebPagePdfSource only.
 
     download_executor_kind:
         "thread" only; "process" is currently not supported for web downloads and will
@@ -373,7 +377,8 @@ class SinkConfig:
     compress_jsonl: bool = False
     jsonl_basename: str = "data"
     # Generic per-kind defaults for sinks, keyed by SinkSpec.kind.
-    defaults: dict[str, dict[str, Any]] = field(default_factory=dict)  # Merge with spec.options via build_config_from_defaults_and_options.
+    defaults: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Merge with spec.options via build_config_from_defaults_and_options.
 
 
 @dataclass(slots=True)
@@ -567,10 +572,13 @@ class SafetyConfig:
 
         mode = self.normalize_mode()
         if self.scorer_options is None or not isinstance(self.scorer_options, dict):
-            raise TypeError("qc.safety.scorer_options must be a mapping (use {} for defaults).")
+            raise TypeError(
+                "qc.safety.scorer_options must be a mapping (use {} for defaults)."
+            )
         if self.enabled and mode == QCMode.OFF:
             raise ValueError(
-                "qc.safety.enabled=True but qc.safety.mode='off'; disable safety or choose 'inline'/'advisory'."
+                "qc.safety.enabled=True but qc.safety.mode='off'; "
+                "disable safety or choose 'inline'/'advisory'."
             )
         if self.signals_format not in {"csv", "parquet"}:
             raise ValueError("qc.safety.signals_format must be 'csv' or 'parquet'.")
@@ -618,7 +626,8 @@ class QCConfig:
     scorer: Any | None = None  # optional extra
     scorer_id: str | None = None  # None → registry default (first registered scorer)
     scorer_options: dict[str, Any] = field(default_factory=dict)
-    heuristics: QCHeuristics | None = None  # Convenience mirror of scorer_options["heuristics"] when normalized.
+    heuristics: QCHeuristics | None = None  # Convenience mirror of
+    # scorer_options["heuristics"] when normalized.
     fail_on_error: bool = False
     min_score: float | None = 60.0
     drop_near_dups: bool = False
@@ -649,15 +658,22 @@ class QCConfig:
         """    
         mode = self.normalize_mode()
         if self.enabled and mode == QCMode.OFF:
-            raise ValueError("QC enabled but mode is 'off'; disable qc.enabled or choose an active mode.")
+            raise ValueError(
+                "QC enabled but mode is 'off'; disable qc.enabled or choose an active mode."
+            )
         needs_scorer = self.enabled and mode in {QCMode.INLINE, QCMode.ADVISORY}
         has_resolved_scorer = self.scorer is not None
         has_planned_scorer = bool(self.scorer_id)
 
         if needs_scorer and not (has_resolved_scorer or has_planned_scorer):
-            raise ValueError("Inline/advisory QC requires a scorer; set qc.scorer_id or install QC extras.")
+            raise ValueError(
+                "Inline/advisory QC requires a scorer; "
+                "set qc.scorer_id or install QC extras."
+            )
         if self.scorer_options is None or not isinstance(self.scorer_options, dict):
-            raise TypeError("qc.scorer_options must be a mapping (use {} for defaults).")
+            raise TypeError(
+                "qc.scorer_options must be a mapping (use {} for defaults)."
+            )
         self.heuristics = None
         if "exact_dedup" not in self.scorer_options:
             self.scorer_options["exact_dedup"] = bool(self.exact_dedup)
@@ -843,9 +859,15 @@ class SievioConfig:
         if not isinstance(self.code_lang, CodeLanguageConfig):
             self.code_lang = CodeLanguageConfig(**dict(self.code_lang or {}))
         if self.sources.sources:
-            raise ValueError("sources.sources must be empty in declarative specs; use sources.specs instead.")
+            raise ValueError(
+                "sources.sources must be empty in declarative specs; "
+                "use sources.specs instead."
+            )
         if self.sinks.sinks:
-            raise ValueError("sinks.sinks must be empty in declarative specs; use sinks.specs instead.")
+            raise ValueError(
+                "sinks.sinks must be empty in declarative specs; "
+                "use sinks.specs instead."
+            )
 
     def with_context(self, ctx: RepoContext) -> SievioConfig:
         """Return a shallow copy with the given RepoContext attached.
@@ -864,23 +886,27 @@ class SievioConfig:
         This validates paths, QC settings, and executor kind, normalizing
         ``pipeline.executor_kind`` to one of ``{"thread", "process",
         "auto"}`` and raising ValueError when an invalid value is used.
-        """        
+        """
         self._validate_paths()
-        # QC validation is structural here (scorer object or scorer_id present); builder still resolves scorer_id.
+        # QC validation is structural here (scorer object or scorer_id present).
+        # The builder still resolves scorer_id.
         self.qc.validate()
         allowed = {"thread", "process", "auto"}
         kind = (self.pipeline.executor_kind or "auto").strip().lower()
         if kind not in allowed:
             raise ValueError(
-                f"pipeline.executor_kind must be one of {sorted(allowed)}; got {self.pipeline.executor_kind!r}."
+                "pipeline.executor_kind must be one of "
+                f"{sorted(allowed)}; got {self.pipeline.executor_kind!r}."
             )
         self.pipeline.executor_kind = kind
         max_error_rate = self.pipeline.max_error_rate
         if max_error_rate is not None:
             try:
                 rate_val = float(max_error_rate)
-            except (TypeError, ValueError):
-                raise ValueError("pipeline.max_error_rate must be a float between 0.0 and 1.0 when set.")
+            except (TypeError, ValueError) as exc:
+                raise ValueError(
+                    "pipeline.max_error_rate must be a float between 0.0 and 1.0 when set."
+                ) from exc
             if rate_val < 0.0 or rate_val > 1.0:
                 raise ValueError("pipeline.max_error_rate must be between 0.0 and 1.0 when set.")
             self.pipeline.max_error_rate = rate_val
@@ -890,7 +916,7 @@ class SievioConfig:
 
         Raises:
             ValueError: If both paths resolve to the same file.
-        """        
+        """
         meta = self.metadata
         p_jsonl = meta.primary_jsonl
         prompt = meta.prompt_path
@@ -899,9 +925,11 @@ class SievioConfig:
         try:
             if Path(p_jsonl).resolve() == Path(prompt).resolve():
                 raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
-        except Exception:
+        except Exception as exc:
             if p_jsonl == prompt:
-                raise ValueError("primary_jsonl and prompt_path refer to the same file path.")
+                raise ValueError(
+                    "primary_jsonl and prompt_path refer to the same file path."
+                ) from exc
 
     # -------------------------
     # Serialization helpers
@@ -910,8 +938,9 @@ class SievioConfig:
         """
         Return a JSON-serializable representation of this configuration.
 
-        Suitable for embedding in RunSummaryMeta.config or persisting via to_json();
-        skips non-serializable runtime objects like sources, sinks, HTTP clients, or scorer instances.
+        Suitable for embedding in RunSummaryMeta.config or persisting via to_json().
+        Skips non-serializable runtime objects like sources, sinks, HTTP clients, or scorer
+        instances.
         """
         return _dataclass_to_dict(self)
 
@@ -973,7 +1002,10 @@ class SievioConfig:
         data = tomllib.loads(raw.decode("utf-8"))
 
         if not isinstance(data, Mapping):
-            raise TypeError(f"Top-level TOML document must be a mapping; got {type(data).__name__}.")
+            raise TypeError(
+                "Top-level TOML document must be a mapping; "
+                f"got {type(data).__name__}."
+            )
 
         return cls.from_dict(data)
 

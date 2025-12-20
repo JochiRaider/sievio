@@ -1,1 +1,20 @@
 * text=auto eol=lf
+
+# If Windows scripts are ever added, keep them CRLF for compatibility.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.ps1 text eol=crlf
+
+# Treat common binary artifacts explicitly.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.pdf binary
+*.zip binary
+*.tar binary
+*.gz binary
+*.7z binary
+*.parquet binary
+*.db binary
+*.sqlite binary

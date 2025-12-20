@@ -70,7 +70,10 @@ log = get_logger(__name__)
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
-BytesHandler = Callable[[bytes, str, RepoContext | None, ChunkPolicy | None], Iterable[Record] | None]
+BytesHandler = Callable[
+    [bytes, str, RepoContext | None, ChunkPolicy | None],
+    Iterable[Record] | None,
+]
 
 if TYPE_CHECKING:  # pragma: no cover
     pass
@@ -128,7 +131,9 @@ class PipelineOverrides:
 # Public type aliases kept here to avoid importing middleware protocols
 # at runtime in hot paths while still giving callers precise signatures.
 RecordMiddlewareLike = "RecordMiddleware | Callable[[Record], Optional[Record]]"
-FileMiddlewareLike = "FileMiddleware | Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]"
+FileMiddlewareLike = (
+    "FileMiddleware | Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]"
+)
 
 
 @dataclass(slots=True)
@@ -368,7 +373,6 @@ def build_pipeline_plan(
     cfg.validate()
 
     lifecycle_hooks: list[RunLifecycleHook] = list(qc_res.hooks)
-    primary_jsonl_path = cfg.sinks.primary_jsonl_name or cfg.metadata.primary_jsonl
     lifecycle_hooks.append(RunSummaryHook())
     dc_cfg = getattr(cfg, "dataset_card", None)
     # Default to enabled when config is missing, but respect an explicit flag.
@@ -399,7 +403,10 @@ def build_pipeline_plan(
     return PipelinePlan(spec=cfg, runtime=runtime)
 
 
-def _prepare_http(cfg: SievioConfig, overrides: PipelineOverrides | None = None) -> SafeHttpClient | None:
+def _prepare_http(
+    cfg: SievioConfig,
+    overrides: PipelineOverrides | None = None,
+) -> SafeHttpClient | None:
     """Resolve the SafeHttpClient to use for remote-capable sources.
 
     If an override is provided via PipelineOverrides, it is returned
@@ -434,30 +441,48 @@ def _assert_runtime_free_spec(cfg: SievioConfig) -> None:
         ValueError: If any runtime-only field is populated.
     """
     if getattr(cfg.sources, "sources", None):
-        raise ValueError("sources.sources must be empty in declarative specs; provide declarative specs instead.")
+        raise ValueError(
+            "sources.sources must be empty in declarative specs; "
+            "provide declarative specs instead."
+        )
     if getattr(cfg.sinks, "sinks", None):
-        raise ValueError("sinks.sinks must be empty in declarative specs; provide declarative specs instead.")
+        raise ValueError(
+            "sinks.sinks must be empty in declarative specs; "
+            "provide declarative specs instead."
+        )
     if getattr(cfg.http, "client", None) is not None:
         raise ValueError(
-            "http.client must be unset in declarative specs; provide HTTP client via runtime wiring or PipelineOverrides.http_client."
+            "http.client must be unset in declarative specs; "
+            "provide HTTP client via runtime wiring or PipelineOverrides.http_client."
         )
     if getattr(cfg.qc, "scorer", None) is not None:
         raise ValueError(
-            "qc.scorer must be unset in declarative specs; use QC registry/plugins or PipelineOverrides.qc_scorer instead."
+            "qc.scorer must be unset in declarative specs; "
+            "use QC registry/plugins or PipelineOverrides.qc_scorer instead."
         )
     if getattr(cfg.pipeline, "file_extractor", None) is not None:
         raise ValueError(
-            "pipeline.file_extractor must be unset in declarative specs; register extractors or use PipelineOverrides.file_extractor instead."
+            "pipeline.file_extractor must be unset in declarative specs; "
+            "register extractors or use PipelineOverrides.file_extractor instead."
         )
     if getattr(cfg.pipeline, "extractors", None):
-        raise ValueError("pipeline.extractors must be empty in declarative specs; register extractors via runtime wiring instead.")
+        raise ValueError(
+            "pipeline.extractors must be empty in declarative specs; "
+            "register extractors via runtime wiring instead."
+        )
     if getattr(cfg.pipeline, "bytes_handlers", None):
         raise ValueError(
-            "pipeline.bytes_handlers must be empty in declarative specs; use registries/plugins or PipelineOverrides.bytes_handlers instead."
+            "pipeline.bytes_handlers must be empty in declarative specs; "
+            "use registries/plugins or PipelineOverrides.bytes_handlers instead."
         )
 
 
-def _prepare_sources(cfg: SievioConfig, registry: SourceRegistry, *, ctx: SourceFactoryContext) -> tuple[Source, ...]:
+def _prepare_sources(
+    cfg: SievioConfig,
+    registry: SourceRegistry,
+    *,
+    ctx: SourceFactoryContext,
+) -> tuple[Source, ...]:
     """Build concrete Source instances from declarative specs.
 
     Args:
@@ -472,13 +497,21 @@ def _prepare_sources(cfg: SievioConfig, registry: SourceRegistry, *, ctx: Source
         ValueError: If ``cfg.sources.sources`` is already populated.
     """
     if cfg.sources.sources:
-        raise ValueError("sources.sources must be empty in specs; provide declarative specs instead.")
+        raise ValueError(
+            "sources.sources must be empty in specs; "
+            "provide declarative specs instead."
+        )
     if not cfg.sources.specs:
         return ()
     return tuple(registry.build_all(ctx, cfg.sources.specs))
 
 
-def _prepare_sinks(cfg: SievioConfig, registry: SinkRegistry, *, ctx: SinkFactoryContext) -> SinksPreparationResult:
+def _prepare_sinks(
+    cfg: SievioConfig,
+    registry: SinkRegistry,
+    *,
+    ctx: SinkFactoryContext,
+) -> SinksPreparationResult:
     """Build sinks and derive normalized sink config and metadata.
 
     This function leaves ``cfg.sinks.sinks`` empty in the spec while
@@ -498,7 +531,10 @@ def _prepare_sinks(cfg: SievioConfig, registry: SinkRegistry, *, ctx: SinkFactor
         ValueError: If ``cfg.sinks.sinks`` is already populated.
     """
     if cfg.sinks.sinks:
-        raise ValueError("sinks.sinks must be empty in specs; provide declarative specs instead.")
+        raise ValueError(
+            "sinks.sinks must be empty in specs; "
+            "provide declarative specs instead."
+        )
     sinks_cfg = replace(cfg.sinks, sinks=tuple())
     metadata = cfg.metadata
     runtime_sinks: tuple[Sink, ...] = ()
@@ -582,18 +618,30 @@ def _prepare_language_detectors(
     lang_cfg = getattr(cfg, "language", None)
     lang_enabled = True if lang_cfg is None else getattr(lang_cfg, "enabled", True)
     lang_backend = (lang_cfg.backend if lang_cfg else "baseline") if lang_enabled else "none"
-    language_detector = lang_override if lang_override is not None else make_language_detector(lang_backend)
+    language_detector = (
+        lang_override
+        if lang_override is not None
+        else make_language_detector(lang_backend)
+    )
 
     code_cfg = getattr(cfg, "code_lang", None)
     code_enabled = True if code_cfg is None else getattr(code_cfg, "enabled", True)
     code_backend = (code_cfg.backend if code_cfg else "baseline") if code_enabled else "none"
-    hints: LanguageConfig | None = getattr(code_cfg, "hints", DEFAULT_LANGCFG) if code_cfg is not None else DEFAULT_LANGCFG
+    hints: LanguageConfig | None = (
+        getattr(code_cfg, "hints", DEFAULT_LANGCFG)
+        if code_cfg is not None
+        else DEFAULT_LANGCFG
+    )
     if not isinstance(hints, LanguageConfig):
         try:
             hints = LanguageConfig(**dict(hints or {}))
         except Exception:
             hints = DEFAULT_LANGCFG
-    code_language_detector = code_override if code_override is not None else make_code_language_detector(code_backend, hints)
+    code_language_detector = (
+        code_override
+        if code_override is not None
+        else make_code_language_detector(code_backend, hints)
+    )
 
     return language_detector, code_language_detector
 
@@ -635,13 +683,24 @@ def _prepare_qc(
         if safety_cfg is not None:
             safety_cfg.scorer = None  # type: ignore[attr-defined]
         return QCPreparationResult(
-            qc_cfg=qc_cfg, hooks=tuple(), scorer_for_csv=None, post_qc_scorer=None, post_safety_scorer=None
+            qc_cfg=qc_cfg,
+            hooks=tuple(),
+            scorer_for_csv=None,
+            post_qc_scorer=None,
+            post_safety_scorer=None,
         )
 
     qc_scorer = overrides.qc_scorer if overrides and overrides.qc_scorer is not None else None
     safety_scorer: SafetyScorer | None = None
     safety_requested = bool(
-        safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY, QCMode.POST}
+        safety_cfg
+        and safety_cfg.enabled
+        and safety_cfg.mode
+        in {
+            QCMode.INLINE,
+            QCMode.ADVISORY,
+            QCMode.POST,
+        }
     )
 
     if safety_requested:
@@ -651,7 +710,9 @@ def _prepare_qc(
             else make_safety_scorer(safety_cfg, registry=safety_scorer_registry)  # type: ignore[arg-type]
         )
         if safety_scorer is None:
-            log.warning("Safety requested but safety scorer unavailable; disabling safety for this run.")
+            log.warning(
+                "Safety requested but safety scorer unavailable; disabling safety for this run."
+            )
             try:
                 safety_cfg.enabled = False  # type: ignore[assignment]
                 safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]
@@ -659,7 +720,15 @@ def _prepare_qc(
                 pass
 
     screeners: list[InlineScreener] = []
-    tracker_mode = qc_cfg.mode if qc_cfg.enabled else (safety_cfg.mode if safety_cfg is not None else qc_cfg.mode)
+    tracker_mode = (
+        qc_cfg.mode
+        if qc_cfg.enabled
+        else (
+            safety_cfg.mode
+            if safety_cfg is not None
+            else qc_cfg.mode
+        )
+    )
     tracker = QCSummaryTracker(
         enabled=qc_cfg.enabled or bool(safety_cfg and safety_cfg.enabled),
         mode=tracker_mode,
@@ -687,7 +756,12 @@ def _prepare_qc(
         if qc_cfg.write_csv:
             scorer_for_csv = qc_scorer
 
-    safety_inline = safety_cfg and safety_cfg.enabled and safety_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}
+    safety_inline = (
+        safety_cfg
+        and safety_cfg.enabled
+        and safety_cfg.mode
+        in {QCMode.INLINE, QCMode.ADVISORY}
+    )
     safety_post = safety_cfg and safety_cfg.enabled and safety_cfg.mode == QCMode.POST
     if safety_inline and safety_scorer is not None:
         screeners.append(
@@ -720,20 +794,38 @@ def _prepare_qc(
 
     # Post-QC (quality only for now)
     if qc_cfg.enabled and qc_cfg.mode == QCMode.POST:
-        post_qc_scorer = qc_scorer or make_qc_scorer(qc_cfg, new_instance=True, scorer_registry=scorer_registry)
+        post_qc_scorer = (
+            qc_scorer
+            or make_qc_scorer(
+                qc_cfg,
+                new_instance=True,
+                scorer_registry=scorer_registry,
+            )
+        )
         if post_qc_scorer is None:
-            log.warning("QC POST mode enabled but QC extras are not installed; skipping QC for this run.")
+            log.warning(
+                "QC POST mode enabled but QC extras are not installed; "
+                "skipping QC for this run."
+            )
             qc_cfg.enabled = False
             qc_cfg.mode = QCMode.OFF
         else:
             hooks.append(PostQCHook(qc_cfg, post_qc_scorer, executor_hint=None))
 
     if safety_post:
-        post_safety_scorer = safety_scorer or make_safety_scorer(
-            safety_cfg, new_instance=True, registry=safety_scorer_registry  # type: ignore[arg-type]
+        post_safety_scorer = (
+            safety_scorer
+            or make_safety_scorer(
+                safety_cfg,
+                new_instance=True,
+                registry=safety_scorer_registry,  # type: ignore[arg-type]
+            )
         )
         if post_safety_scorer is None:
-            log.warning("Safety POST mode enabled but safety extras are not installed; skipping safety for this run.")
+            log.warning(
+                "Safety POST mode enabled but safety extras are not installed; "
+                "skipping safety for this run."
+            )
             try:
                 safety_cfg.enabled = False  # type: ignore[assignment]
                 safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]

@@ -58,7 +58,8 @@ def sha256_text(text: str) -> str:
 # Metadata helpers
 # -----------------------
 
-RECORD_META_SCHEMA_VERSION = "2"  # bump when core schema fields change so downstream consumers can detect mixes
+# Bump when core schema fields change so downstream consumers can detect mixes.
+RECORD_META_SCHEMA_VERSION = "2"
 SUMMARY_META_SCHEMA_VERSION = "1"
 
 # Canonical record meta fields used across the pipeline. Additional analyzer-specific
@@ -92,9 +93,12 @@ STANDARD_META_FIELDS: set[str] = {
 }
 # Field overview:
 #   - Identity / provenance: ``source``, ``repo``, ``path``, ``url``, ``source_domain``.
-#   - Content structure: ``bytes``, ``file_bytes``, ``truncated_bytes``, ``nlines``, ``file_nlines``.
-#   - Language & sampling: ``lang``, ``lang_score``, ``perplexity``, ``ppl_bucket``.
-#   - Chunking / processing: ``kind``, ``chunk_id``, ``n_chunks``, ``encoding``, ``had_replacement``.
+#   - Content structure: ``bytes``, ``file_bytes``, ``truncated_bytes``,
+#     ``nlines``, ``file_nlines``.
+#   - Language & sampling: ``lang``, ``lang_score``, ``perplexity``,
+#     ``ppl_bucket``.
+#   - Chunking / processing: ``kind``, ``chunk_id``, ``n_chunks``,
+#     ``encoding``, ``had_replacement``.
 #   - Integrity & versioning: ``sha256``, ``schema_version``.
 #   - Token counts: ``tokens``, ``approx_tokens``.
 # Any other analyzer metadata should flow through ``RecordMeta.extra``.
@@ -259,14 +263,16 @@ def check_record_schema(record: Mapping[str, Any], logger: Any | None = None) ->
     if version_str > RECORD_META_SCHEMA_VERSION:
         _emit(
             logging.WARNING,
-            "Record schema_version %s is newer than library schema_version %s; ensure compatibility before scoring.",
+            "Record schema_version %s is newer than library schema_version %s; "
+            "ensure compatibility before scoring.",
             version_str,
             RECORD_META_SCHEMA_VERSION,
         )
     elif version_str < RECORD_META_SCHEMA_VERSION:
         _emit(
             logging.DEBUG,
-            "Record schema_version %s is older than library schema_version %s; proceeding with backward compatibility.",
+            "Record schema_version %s is older than library schema_version %s; "
+            "proceeding with backward compatibility.",
             version_str,
             RECORD_META_SCHEMA_VERSION,
         )
@@ -462,7 +468,10 @@ def ensure_meta_dict(record: MutableMapping[str, Any]) -> dict[str, Any]:
     return meta
 
 
-def merge_meta_defaults(record: MutableMapping[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
+def merge_meta_defaults(
+    record: MutableMapping[str, Any],
+    defaults: Mapping[str, Any],
+) -> dict[str, Any]:
     """Fill in default meta values without overriding existing entries."""
     meta = ensure_meta_dict(record)
     for key, value in defaults.items():

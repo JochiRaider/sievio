@@ -75,7 +75,13 @@ class PostQCHook(RunLifecycleHook):
 class PostSafetyHook(RunLifecycleHook):
     """Run post-hoc safety screening after the pipeline completes."""
 
-    def __init__(self, safety_cfg: SafetyConfig, scorer: SafetyScorer, *, executor_hint: Any | None = None) -> None:
+    def __init__(
+        self,
+        safety_cfg: SafetyConfig,
+        scorer: SafetyScorer,
+        *,
+        executor_hint: Any | None = None,
+    ) -> None:
         self._safety_cfg = safety_cfg
         self._scorer = scorer
         self._executor_hint = executor_hint
@@ -132,7 +138,10 @@ def run_qc_over_jsonl(
     """
 
     if scorer is None:
-        raise RuntimeError("QC scorer unavailable for post-QC; configuration should have disabled QC when extras were missing.")
+        raise RuntimeError(
+            "QC scorer unavailable for post-QC; configuration should have disabled QC "
+            "when extras were missing."
+        )
 
     tracker = QCSummaryTracker(
         enabled=bool(qc_cfg.enabled),
@@ -142,11 +151,17 @@ def run_qc_over_jsonl(
     )
     policy = QualityDecisionPolicy()
     should_write_csv = qc_cfg.write_csv if write_csv is None else bool(write_csv)
-    should_write_signals = qc_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
+    should_write_signals = (
+        qc_cfg.write_signals_sidecar
+        if write_signals_sidecar is None
+        else bool(write_signals_sidecar)
+    )
     signals_format_val = (signals_format or qc_cfg.signals_format or "csv").lower()
     if signals_format_val not in {"csv", "parquet"}:
         raise ValueError("signals_format must be 'csv' or 'parquet'.")
-    rows_for_csv: list[dict[str, Any]] | None = [] if (should_write_csv or should_write_signals) else None
+    rows_for_csv: list[dict[str, Any]] | None = (
+        [] if (should_write_csv or should_write_signals) else None
+    )
 
     def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
         for row in rows:
@@ -191,7 +206,13 @@ def run_qc_over_jsonl(
         rows: list[dict[str, Any]] = []
         if shards:
             if qc_cfg.parallel_post:
-                parallel_rows = _score_jsonl_parallel_collecting(shards, qc_cfg, config, runtime, executor_hint=executor_hint)
+                parallel_rows = _score_jsonl_parallel_collecting(
+                    shards,
+                    qc_cfg,
+                    config,
+                    runtime,
+                    executor_hint=executor_hint,
+                )
                 if parallel_rows is None:
                     rows = _score_jsonl_sequential(
                         shards,
@@ -226,13 +247,22 @@ def run_qc_over_jsonl(
             quality_payload["errors"] = tracker_quality.errors
             screeners_payload["quality"] = quality_payload
         rows_result = rows
-        out_csv = _derive_csv_path(jsonl_path, csv_suffix if csv_suffix is not None else qc_cfg.csv_suffix)
+        out_csv = _derive_csv_path(
+            jsonl_path,
+            csv_suffix if csv_suffix is not None else qc_cfg.csv_suffix,
+        )
         if should_write_csv and out_csv:
             emit_qc_csv(rows, jsonl_path_str, out_csv)
         if should_write_signals:
-            derived_suffix = signals_suffix if signals_suffix is not None else qc_cfg.signals_suffix
+            derived_suffix = (
+                signals_suffix if signals_suffix is not None else qc_cfg.signals_suffix
+            )
             if not derived_suffix:
-                derived_suffix = "_signals.parquet" if signals_format_val == "parquet" else "_signals.csv"
+                derived_suffix = (
+                    "_signals.parquet"
+                    if signals_format_val == "parquet"
+                    else "_signals.csv"
+                )
             out_signals = _derive_csv_path(jsonl_path, derived_suffix)
             if out_signals:
                 if signals_format_val == "parquet":
@@ -296,24 +326,39 @@ def run_safety_over_jsonl(
 
     if scorer is None:
         raise RuntimeError(
-            "Safety scorer unavailable for post-safety; configuration should have disabled safety when extras were missing."
+            "Safety scorer unavailable for post-safety; "
+            "configuration should have disabled safety when extras were missing."
         )
 
     tracker = QCSummaryTracker(enabled=bool(safety_cfg.enabled), mode=safety_cfg.mode)
     policy = SafetyDecisionPolicy()
     apply_gates = not getattr(safety_cfg, "annotate_only", False)
     should_write_csv = safety_cfg.write_csv if write_csv is None else bool(write_csv)
-    should_write_signals = safety_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
+    should_write_signals = (
+        safety_cfg.write_signals_sidecar
+        if write_signals_sidecar is None
+        else bool(write_signals_sidecar)
+    )
     signals_format_val = (signals_format or safety_cfg.signals_format or "csv").lower()
     if signals_format_val not in {"csv", "parquet"}:
         raise ValueError("signals_format must be 'csv' or 'parquet'.")
-    rows_for_output: list[dict[str, Any]] | None = [] if (should_write_csv or should_write_signals) else None
+    rows_for_output: list[dict[str, Any]] | None = (
+        []
+        if (should_write_csv or should_write_signals)
+        else None
+    )
 
     def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
         for row in rows:
             decision = policy.decide(row, cfg=safety_cfg)
             did_drop = apply_gates and bool(decision.would_drop)
-            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
+            tracker.observe_safety(
+                row,
+                decision,
+                did_drop=did_drop,
+                screener_id="safety",
+                mode=QCMode.POST,
+            )
             if rows_for_output is not None:
                 rows_for_output.append(row)
 
@@ -377,16 +422,33 @@ def run_safety_over_jsonl(
         for row in rows:
             decision = policy.decide(row, cfg=safety_cfg)
             did_drop = apply_gates and bool(decision.would_drop)
-            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
+            tracker.observe_safety(
+                row,
+                decision,
+                did_drop=did_drop,
+                screener_id="safety",
+                mode=QCMode.POST,
+            )
 
         rows_result = rows
-        out_csv = _derive_csv_path(jsonl_path, csv_suffix if csv_suffix is not None else safety_cfg.csv_suffix)
+        out_csv = _derive_csv_path(
+            jsonl_path,
+            csv_suffix if csv_suffix is not None else safety_cfg.csv_suffix,
+        )
         if should_write_csv and out_csv:
             emit_safety_csv(rows, jsonl_path_str, out_csv)
         if should_write_signals:
-            derived_suffix = signals_suffix if signals_suffix is not None else safety_cfg.signals_suffix
+            derived_suffix = (
+                signals_suffix
+                if signals_suffix is not None
+                else safety_cfg.signals_suffix
+            )
             if not derived_suffix:
-                derived_suffix = "_safety_signals.parquet" if signals_format_val == "parquet" else "_safety_signals.csv"
+                derived_suffix = (
+                    "_safety_signals.parquet"
+                    if signals_format_val == "parquet"
+                    else "_safety_signals.csv"
+                )
             out_signals = _derive_csv_path(jsonl_path, derived_suffix)
             if out_signals:
                 if signals_format_val == "parquet":
@@ -579,7 +641,10 @@ def emit_qc_signals_parquet(
         import pyarrow as pa  # type: ignore
         import pyarrow.parquet as pq  # type: ignore
     except Exception as exc:
-        raise RuntimeError("PyArrow is required for Parquet signal sidecars; install sievio[parquet].") from exc
+        raise RuntimeError(
+            "PyArrow is required for Parquet signal sidecars; "
+            "install sievio[parquet]."
+        ) from exc
 
     fieldnames, signal_rows = _collect_signal_rows(rows)
     table = pa.Table.from_pylist(signal_rows).select(fieldnames)
@@ -639,12 +704,19 @@ def _run_parallel_qc(
     executor_hint: Any | None = None,
 ) -> bool:
     try:
-        runtime_scorer = getattr(runtime, "post_qc_scorer", None) if runtime is not None else None
+        runtime_scorer = (
+            getattr(runtime, "post_qc_scorer", None)
+            if runtime is not None
+            else None
+        )
         scorer_proto = runtime_scorer or make_qc_scorer(qc_cfg, new_instance=True)
     except Exception:
         scorer_proto = None
     if scorer_proto is None:
-        log.warning("QC parallel_post requested but scorer could not be instantiated; falling back to sequential mode.")
+        log.warning(
+            "QC parallel_post requested but scorer could not be instantiated; "
+            "falling back to sequential mode."
+        )
         return False
 
     def _scorer_factory():
@@ -722,7 +794,14 @@ def _score_jsonl_parallel_collecting(
     def _handle_rows(idx: int, rows: list[dict[str, Any]]) -> None:
         shard_results[idx] = rows
 
-    ok = _run_parallel_qc(shards, qc_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
+    ok = _run_parallel_qc(
+        shards,
+        qc_cfg,
+        config,
+        runtime,
+        _handle_rows,
+        executor_hint=executor_hint,
+    )
     if not ok:
         return None
 
@@ -744,7 +823,14 @@ def _score_jsonl_parallel_streaming(
     def _handle_rows(_: int, rows: list[dict[str, Any]]) -> None:
         consume_rows(rows)
 
-    return _run_parallel_qc(shards, qc_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
+    return _run_parallel_qc(
+        shards,
+        qc_cfg,
+        config,
+        runtime,
+        _handle_rows,
+        executor_hint=executor_hint,
+    )
 
 
 @dataclass(slots=True)
@@ -762,7 +848,10 @@ def _qc_worker_initializer(qc_cfg_payload: dict[str, Any]) -> None:
     qc_cfg = QCConfig(**qc_cfg_payload)
     scorer = make_qc_scorer(qc_cfg, new_instance=True)
     if scorer is None:
-        raise RuntimeError("QC worker failed to initialize scorer (missing optional dependencies?).")
+        raise RuntimeError(
+            "QC worker failed to initialize scorer "
+            "(missing optional dependencies?)."
+        )
     _QC_WORKER_SCORER = scorer
 
 
@@ -815,22 +904,27 @@ def _score_lines(
             if tracker is not None:
                 tracker.record_error()
             if fail_on_error:
-                raise RuntimeError(
-                    f"Failed to parse JSONL line {idx} in {label}: {exc} (source_path={source_path})"
-                ) from exc
-            else:
-                log.warning(
-                    "Failed to parse JSONL line %d in %s: %s (this may indicate compressed JSONL or a corrupted line)",
-                    idx,
-                    label,
-                    exc,
+                msg = (
+                    "Failed to parse JSONL line "
+                    f"{idx} in {label}: {exc} "
+                    f"(source_path={source_path})"
                 )
-                continue
+                raise RuntimeError(msg) from exc
+            log.warning(
+                "Failed to parse JSONL line %d in %s: %s "
+                "(this may indicate compressed JSONL or a corrupted line)",
+                idx,
+                label,
+                exc,
+            )
+            continue
         if not isinstance(record, dict):
             continue
         meta = record.get("meta") if isinstance(record, dict) else None
-        if isinstance(meta, dict) and meta.get("kind") in {"run_header", "run_summary", "qc_summary"}:
-            continue
+        if isinstance(meta, dict):
+            kind = meta.get("kind")
+            if kind in {"run_header", "run_summary", "qc_summary"}:
+                continue
         if not checked_schema:
             check_record_schema(record, log)
             checked_schema = True
@@ -870,11 +964,15 @@ def _score_safety_lines(
             if tracker is not None:
                 tracker.record_safety_error(mode=screener_mode)
             if fail_on_error:
-                raise RuntimeError(
-                    f"Failed to parse JSONL line {idx} in {label}: {exc} (source_path={source_path})"
-                ) from exc
+                msg = (
+                    "Failed to parse JSONL line "
+                    f"{idx} in {label}: {exc} "
+                    f"(source_path={source_path})"
+                )
+                raise RuntimeError(msg) from exc
             log.warning(
-                "Failed to parse JSONL line %d in %s: %s (this may indicate compressed JSONL or a corrupted line)",
+                "Failed to parse JSONL line %d in %s: %s "
+                "(this may indicate compressed JSONL or a corrupted line)",
                 idx,
                 label,
                 exc,
@@ -883,8 +981,10 @@ def _score_safety_lines(
         if not isinstance(record, dict):
             continue
         meta = record.get("meta") if isinstance(record, dict) else None
-        if isinstance(meta, Mapping) and meta.get("kind") in {"run_header", "run_summary", "qc_summary"}:
-            continue
+        if isinstance(meta, Mapping):
+            kind = meta.get("kind")
+            if kind in {"run_header", "run_summary", "qc_summary"}:
+                continue
         if not checked_schema:
             check_record_schema(record, log)
             checked_schema = True
@@ -896,9 +996,12 @@ def _score_safety_lines(
             if tracker is not None:
                 tracker.record_safety_error(mode=screener_mode)
             if fail_on_error:
-                raise RuntimeError(
-                    f"Safety scorer failed for line {idx} in {label}: {exc} (source_path={source_path})"
-                ) from exc
+                msg = (
+                    "Safety scorer failed for line "
+                    f"{idx} in {label}: {exc} "
+                    f"(source_path={source_path})"
+                )
+                raise RuntimeError(msg) from exc
             log.warning("Safety scorer failed for line %d in %s: %s", idx, label, exc)
             continue
         if not isinstance(raw_result, Mapping):
@@ -929,7 +1032,10 @@ def _log_post_qc_summary(summary: dict[str, Any]) -> None:
     top = summary.get("top_dup_families") or []
     if top:
         lines = [
-            f"    - {entry['dup_family_id']}: count={entry['count']} examples={entry.get('examples', [])}"
+            (
+                f"    - {entry['dup_family_id']}: count={entry['count']} "
+                f"examples={entry.get('examples', [])}"
+            )
             for entry in top
             if isinstance(entry, Mapping)
         ]
@@ -981,11 +1087,19 @@ def _score_jsonl_safety_streaming(
             consume_rows(rows)
 
 
-def _resolve_safety_executor_config(cfg: SievioConfig, safety_cfg: SafetyConfig, runtime: Any | None = None) -> ExecutorConfig:
+def _resolve_safety_executor_config(
+    cfg: SievioConfig,
+    safety_cfg: SafetyConfig,
+    runtime: Any | None = None,
+) -> ExecutorConfig:
     pc = cfg.pipeline
     pipeline_max_workers = pc.max_workers or (os.cpu_count() or 1)
     pipeline_max_workers = max(1, pipeline_max_workers)
-    max_workers = pipeline_max_workers if safety_cfg.post_max_workers is None else safety_cfg.post_max_workers
+    max_workers = (
+        pipeline_max_workers
+        if safety_cfg.post_max_workers is None
+        else safety_cfg.post_max_workers
+    )
     max_workers = max(1, max_workers)
 
     if safety_cfg.post_submit_window is not None:
@@ -995,7 +1109,9 @@ def _resolve_safety_executor_config(cfg: SievioConfig, safety_cfg: SafetyConfig,
     else:
         window = max_workers * 4
 
-    raw_kind = (safety_cfg.post_executor_kind or pc.executor_kind or "thread").strip().lower()
+    raw_kind = (
+        safety_cfg.post_executor_kind or pc.executor_kind or "thread"
+    ).strip().lower()
     if raw_kind == "auto":
         kind = infer_executor_kind(cfg, runtime=runtime)
     else:
@@ -1019,12 +1135,19 @@ def _run_parallel_safety(
     executor_hint: Any | None = None,
 ) -> bool:
     try:
-        runtime_scorer = getattr(runtime, "post_safety_scorer", None) if runtime is not None else None
+        runtime_scorer = (
+            getattr(runtime, "post_safety_scorer", None)
+            if runtime is not None
+            else None
+        )
         scorer_proto = runtime_scorer or make_safety_scorer(safety_cfg, new_instance=True)
     except Exception:
         scorer_proto = None
     if scorer_proto is None:
-        log.warning("Safety parallel_post requested but scorer could not be instantiated; falling back to sequential mode.")
+        log.warning(
+            "Safety parallel_post requested but scorer could not be instantiated; "
+            "falling back to sequential mode."
+        )
         return False
 
     def _scorer_factory():
@@ -1102,7 +1225,14 @@ def _score_jsonl_safety_parallel_collecting(
     def _handle_rows(idx: int, rows: list[dict[str, Any]]) -> None:
         shard_results[idx] = rows
 
-    ok = _run_parallel_safety(shards, safety_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
+    ok = _run_parallel_safety(
+        shards,
+        safety_cfg,
+        config,
+        runtime,
+        _handle_rows,
+        executor_hint=executor_hint,
+    )
     if not ok:
         return None
 
@@ -1124,7 +1254,14 @@ def _score_jsonl_safety_parallel_streaming(
     def _handle_rows(_: int, rows: list[dict[str, Any]]) -> None:
         consume_rows(rows)
 
-    return _run_parallel_safety(shards, safety_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
+    return _run_parallel_safety(
+        shards,
+        safety_cfg,
+        config,
+        runtime,
+        _handle_rows,
+        executor_hint=executor_hint,
+    )
 
 
 _SAFETY_WORKER_SCORER: SafetyScorer | None = None
@@ -1135,7 +1272,10 @@ def _safety_worker_initializer(safety_cfg_payload: dict[str, Any]) -> None:
     cfg = SafetyConfig(**safety_cfg_payload)
     scorer = make_safety_scorer(cfg, new_instance=True)
     if scorer is None:
-        raise RuntimeError("Safety worker failed to initialize scorer (missing optional dependencies?).")
+        raise RuntimeError(
+            "Safety worker failed to initialize scorer "
+            "(missing optional dependencies?)."
+        )
     _SAFETY_WORKER_SCORER = scorer
 
 
@@ -1176,8 +1316,14 @@ def emit_safety_csv(rows: Sequence[dict[str, Any]], jsonl_path: str, out_csv: st
             canonical, signals = filter_safety_meta(row)
             flags_payload = row.get("safety_flags")
             if not isinstance(flags_payload, Mapping):
-                flags_payload = signals.get("safety_flags") if isinstance(signals.get("safety_flags"), Mapping) else {}
-            signals_payload = {k: v for k, v in signals.items() if k != "safety_flags"}
+                saved_flags = signals.get("safety_flags")
+                if isinstance(saved_flags, Mapping):
+                    flags_payload = saved_flags
+                else:
+                    flags_payload = {}
+            signals_payload = {
+                k: v for k, v in signals.items() if k != "safety_flags"
+            }
             writer.writerow(
                 {
                     "record_path": row.get("record_path") or "",
@@ -1192,7 +1338,9 @@ def emit_safety_csv(rows: Sequence[dict[str, Any]], jsonl_path: str, out_csv: st
             )
 
 
-def _collect_safety_signal_rows(rows: Sequence[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+def _collect_safety_signal_rows(
+    rows: Sequence[dict[str, Any]],
+) -> tuple[list[str], list[dict[str, Any]]]:
     signal_keys: set[str] = set()
     raw_signals: list[tuple[Any, dict[str, Any]]] = []
     for row in rows:
@@ -1243,7 +1391,10 @@ def emit_safety_signals_parquet(
         import pyarrow as pa  # type: ignore
         import pyarrow.parquet as pq  # type: ignore
     except Exception as exc:
-        raise RuntimeError("PyArrow is required for Parquet safety sidecars; install sievio[parquet].") from exc
+        raise RuntimeError(
+            "PyArrow is required for Parquet safety sidecars; "
+            "install sievio[parquet]."
+        ) from exc
 
     fieldnames, signal_rows = _collect_safety_signal_rows(rows)
     table = pa.Table.from_pylist(signal_rows).select(fieldnames)

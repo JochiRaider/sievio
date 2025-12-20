@@ -427,7 +427,11 @@ class SQLiteSourceFactory(SourceFactory):
 
         options = spec.options or {}
 
-        defaults = ctx.source_defaults.get(self.id, {}) or ctx.source_defaults.get("sqlite", {}) or {}
+        defaults = (
+            ctx.source_defaults.get(self.id, {})
+            or ctx.source_defaults.get("sqlite", {})
+            or {}
+        )
         validate_options_for_dataclass(
             SQLiteSourceConfig,
             options=options,
@@ -536,18 +540,38 @@ class CsvTextSourceFactory(SourceFactory):
 
         options = spec.options or {}
 
-        defaults = ctx.source_defaults.get(self.id, {}) or ctx.source_defaults.get("csv", {}) or {}
+        defaults = (
+            ctx.source_defaults.get(self.id, {})
+            or ctx.source_defaults.get("csv", {})
+            or {}
+        )
         validate_options_for_dataclass(
             CsvSourceConfig,
             options=options,
-            ignore_keys=("paths", "path", "text_column", "delimiter", "encoding", "has_header", "text_column_index"),
+            ignore_keys=(
+                "paths",
+                "path",
+                "text_column",
+                "delimiter",
+                "encoding",
+                "has_header",
+                "text_column_index",
+            ),
             context="sources.specs.csv_text",
         )
         csv_cfg = build_config_from_defaults_and_options(
             CsvSourceConfig,
             defaults=defaults,
             options=options,
-            ignore_keys=("paths", "path", "text_column", "delimiter", "encoding", "has_header", "text_column_index"),
+            ignore_keys=(
+                "paths",
+                "path",
+                "text_column",
+                "delimiter",
+                "encoding",
+                "has_header",
+                "text_column_index",
+            ),
         )
         raw_paths = options.get("paths") or options.get("path")
         if not raw_paths:
@@ -675,7 +699,9 @@ def make_web_pdf_source(
     )
 
 
-def make_bytes_handlers(registry: BytesHandlerRegistry | None = None) -> Sequence[tuple[Sniff, BytesHandler]]:
+def make_bytes_handlers(
+    registry: BytesHandlerRegistry | None = None,
+) -> Sequence[tuple[Sniff, BytesHandler]]:
     """
     Return the default sniff/handler pairs for binary formats.
 

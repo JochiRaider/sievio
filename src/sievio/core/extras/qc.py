@@ -38,7 +38,13 @@ from ..qc_utils import (
     target_band,
 )
 
-__all__ = ["JSONLScoreStats", "JSONLQualityScorer", "score_jsonl_to_csv", "write_csv", "DefaultQualityScorerFactory"]
+__all__ = [
+    "JSONLScoreStats",
+    "JSONLQualityScorer",
+    "score_jsonl_to_csv",
+    "write_csv",
+    "DefaultQualityScorerFactory",
+]
 
 log = get_logger(__name__)
 
@@ -162,22 +168,29 @@ class JSONLQualityScorer:
                 circuit global dedup matches before MinHash LSH.
         """
         self.last_stats: JSONLScoreStats | None = None
-        # Heuristic overrides: constructor args override heuristics; heuristics override baked-in defaults.
+        # Heuristic overrides: constructor args override heuristics; heuristics override defaults.
         if heuristics is not None:
-            if getattr(heuristics, "simhash_window", None) is not None and simhash_window == _DEFAULT_SIMHASH_WINDOW:
-                simhash_window = int(heuristics.simhash_window)
-            if getattr(heuristics, "simhash_hamm_thresh", None) is not None and simhash_hamm_thresh == _DEFAULT_SIMHASH_HAMM:
-                simhash_hamm_thresh = int(heuristics.simhash_hamm_thresh)
-            if getattr(heuristics, "enable_minhash", None) is not None and enable_minhash == True:
-                enable_minhash = bool(heuristics.enable_minhash)
-            if getattr(heuristics, "minhash_perms", None) is not None and minhash_perms == _DEFAULT_MINHASH_PERMS:
-                minhash_perms = int(heuristics.minhash_perms)
-            if getattr(heuristics, "minhash_bands", None) is not None and minhash_bands == _DEFAULT_MINHASH_BANDS:
-                minhash_bands = int(heuristics.minhash_bands)
-            if getattr(heuristics, "minhash_shingle_k", None) is not None and minhash_shingle_k == _DEFAULT_MINHASH_K:
-                minhash_shingle_k = int(heuristics.minhash_shingle_k)
-            if getattr(heuristics, "minhash_jaccard_thresh", None) is not None and minhash_jaccard_thresh == _DEFAULT_MINHASH_JACCARD:
-                minhash_jaccard_thresh = float(heuristics.minhash_jaccard_thresh)
+            heur_simhash_window = getattr(heuristics, "simhash_window", None)
+            if heur_simhash_window is not None and simhash_window == _DEFAULT_SIMHASH_WINDOW:
+                simhash_window = int(heur_simhash_window)
+            heur_simhash_thresh = getattr(heuristics, "simhash_hamm_thresh", None)
+            if heur_simhash_thresh is not None and simhash_hamm_thresh == _DEFAULT_SIMHASH_HAMM:
+                simhash_hamm_thresh = int(heur_simhash_thresh)
+            heur_enable_minhash = getattr(heuristics, "enable_minhash", None)
+            if heur_enable_minhash is not None and enable_minhash:
+                enable_minhash = bool(heur_enable_minhash)
+            heur_perms = getattr(heuristics, "minhash_perms", None)
+            if heur_perms is not None and minhash_perms == _DEFAULT_MINHASH_PERMS:
+                minhash_perms = int(heur_perms)
+            heur_bands = getattr(heuristics, "minhash_bands", None)
+            if heur_bands is not None and minhash_bands == _DEFAULT_MINHASH_BANDS:
+                minhash_bands = int(heur_bands)
+            heur_k = getattr(heuristics, "minhash_shingle_k", None)
+            if heur_k is not None and minhash_shingle_k == _DEFAULT_MINHASH_K:
+                minhash_shingle_k = int(heur_k)
+            heur_jaccard = getattr(heuristics, "minhash_jaccard_thresh", None)
+            if heur_jaccard is not None and minhash_jaccard_thresh == _DEFAULT_MINHASH_JACCARD:
+                minhash_jaccard_thresh = float(heur_jaccard)
         self.lm: PerplexityModel | None = None
         if lm_model_id:
             try:
@@ -282,7 +295,12 @@ class JSONLQualityScorer:
 
         N = int(meta.get("tokens") or approx_tokens(text))
         Tlo, Thi = target_band(lang_l, heuristics=self.heuristics)
-        length_ok = 1.0 if Tlo <= N <= Thi else max(0.0, 1.0 - abs(N - ((Tlo + Thi) // 2)) / max(1, Thi))
+        mid_range = (Tlo + Thi) // 2
+        length_ok = (
+            1.0
+            if Tlo <= N <= Thi
+            else max(0.0, 1.0 - abs(N - mid_range) / max(1, Thi))
+        )
 
         ascii_r = ascii_ratio(text)
         rep = repetition_rate(text, heuristics=self.heuristics)
@@ -344,7 +362,12 @@ class JSONLQualityScorer:
             + 0.20 * p_ok
             + 0.15 * lm_score
         )
-        score = base + (self.gopher_weight * goph_score if self.enable_gopher and self.gopher_weight > 0 else 0.0)
+        extra = (
+            self.gopher_weight * goph_score
+            if self.enable_gopher and self.gopher_weight > 0
+            else 0.0
+        )
+        score = base + extra
         minhash_dup_of = mh_of if (near_dup_mh and mh_of) else None
         simhash_dup_of = sim_dup_of if near_dup_sim else None
         dup_family_id = minhash_dup_of or simhash_dup_of or doc_id
@@ -387,7 +410,9 @@ class JSONLQualityScorer:
             "doc_id": doc_id,
             "url": meta.get("url"),
             "source_domain": meta.get("source_domain"),
-            "nlines": meta.get("nlines") if meta.get("nlines") is not None else (0 if text == "" else text.count("\n") + 1),
+            "nlines": meta.get("nlines")
+            if meta.get("nlines") is not None
+            else (0 if text == "" else text.count("\n") + 1),
             "file_nlines": meta.get("file_nlines"),
             "lang_score": meta.get("lang_score"),
             "ppl_bucket": meta.get("ppl_bucket"),
@@ -567,7 +592,11 @@ def score_jsonl_to_csv(
         write_csv=True,
         csv_suffix=out_csv,
     )
-    quality_summary = (summary.get("screeners") or {}).get("quality", {}) if isinstance(summary, Mapping) else {}
+    quality_summary = (
+        (summary.get("screeners") or {}).get("quality", {})
+        if isinstance(summary, Mapping)
+        else {}
+    )
     scored_val = int(quality_summary.get("scored", 0) or 0)
     error_val = int(quality_summary.get("errors", 0) or 0)
     stats = JSONLScoreStats(
@@ -581,7 +610,8 @@ def score_jsonl_to_csv(
     scorer.last_stats = stats
     if stats.parse_errors or stats.score_errors:
         log.warning(
-            "QC: scored %d records from %d lines in %s (parse_errors=%d, score_errors=%d); some lines were skipped.",
+            "QC: scored %d records from %d lines in %s "
+            "(parse_errors=%d, score_errors=%d); some lines were skipped.",
             stats.scored_ok,
             stats.total_lines,
             jsonl_path,
@@ -616,7 +646,8 @@ class DefaultQualityScorerFactory:
             heuristics = QCHeuristics(**dict(heur_opt))
         else:
             raise TypeError(
-                f"heuristics must be QCHeuristics or a mapping when using {self.id}; got {type(heur_opt).__name__}"
+                "heuristics must be QCHeuristics or a mapping when using "
+                f"{self.id}; got {type(heur_opt).__name__}"
             )
         if heuristics is not None:
             heuristics.validate()
@@ -640,5 +671,6 @@ except Exception:
 def main(argv: Sequence[str] | None = None) -> int:
     """Deprecated console entry point; use the library API instead."""
     raise SystemExit(
-        "sievio.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."
+        "sievio.core.extras.qc.main is deprecated; use the library API "
+        "(JSONLQualityScorer/score_jsonl_to_csv) instead."
     )

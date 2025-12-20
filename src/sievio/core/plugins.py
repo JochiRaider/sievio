@@ -53,17 +53,32 @@ def load_entrypoint_plugins(
         log.debug("Plugin discovery skipped: %s", exc)
         return
 
-    eps = entry_points.select(group=group) if hasattr(entry_points, "select") else entry_points.get(group, [])
+    eps = (
+        entry_points.select(group=group)
+        if hasattr(entry_points, "select")
+        else entry_points.get(group, [])
+    )
     for ep in eps:
         try:
             func = ep.load()
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to import plugin %s: %s", ep.name, exc)
             continue
-        try:
             try:
-                func(source_registry, sink_registry, bytes_registry, scorer_registry, safety_scorer_registry)
-            except TypeError:
-                func(source_registry, sink_registry, bytes_registry, scorer_registry)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("Plugin %s execution failed: %s", ep.name, exc)
+                try:
+                    func(
+                        source_registry,
+                        sink_registry,
+                        bytes_registry,
+                        scorer_registry,
+                        safety_scorer_registry,
+                    )
+                except TypeError:
+                    func(
+                        source_registry,
+                        sink_registry,
+                        bytes_registry,
+                        scorer_registry,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                log.warning("Plugin %s execution failed: %s", ep.name, exc)

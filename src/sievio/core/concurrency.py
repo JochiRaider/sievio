@@ -303,12 +303,20 @@ def _normalize_preferred_executor(raw: Any, component: str, attr_path: str) -> s
     if raw is _MISSING or raw is None:
         return None
     if not isinstance(raw, str):
-        _invalid_hint(component, attr_path, f"must be a string (\"thread\" or \"process\"), got {type(raw).__name__}.")
+        _invalid_hint(
+            component,
+            attr_path,
+            f"must be a string (\"thread\" or \"process\"), got {type(raw).__name__}.",
+        )
         return None
     val = raw.strip().lower()
     if val in {"thread", "process"}:
         return val
-    _invalid_hint(component, attr_path, f"must be \"thread\" or \"process\", got {raw!r}.")
+    _invalid_hint(
+        component,
+        attr_path,
+        f"must be \"thread\" or \"process\", got {raw!r}.",
+    )
     return None
 
 
@@ -348,7 +356,8 @@ def _extract_concurrency_hint(obj: Any) -> tuple[str | None, bool]:
             _invalid_hint(
                 component,
                 "concurrency_profile",
-                f"must satisfy ConcurrencyProfile (preferred_executor, cpu_intensive); got {type(profile_raw).__name__}.",
+                "must satisfy ConcurrencyProfile (preferred_executor, cpu_intensive); "
+                f"got {type(profile_raw).__name__}.",
             )
 
     if profile:
@@ -456,7 +465,12 @@ def _infer_executor_kind(cfg: SievioConfig, runtime: Any | None = None) -> str:
     return "thread"
 
 
-def infer_executor_kind(cfg: SievioConfig, *, default: str = "thread", runtime: Any | None = None) -> Literal["thread", "process"]:
+def infer_executor_kind(
+    cfg: SievioConfig,
+    *,
+    default: str = "thread",
+    runtime: Any | None = None,
+) -> Literal["thread", "process"]:
     """Return a validated executor kind for the pipeline.
 
 
@@ -480,7 +494,9 @@ def infer_executor_kind(cfg: SievioConfig, *, default: str = "thread", runtime: 
     return kind  # type: ignore[return-value]
 
 
-def resolve_pipeline_executor_config(cfg: SievioConfig, runtime: Any | None = None) -> tuple[ExecutorConfig, bool]:
+def resolve_pipeline_executor_config(
+    cfg: SievioConfig, runtime: Any | None = None
+) -> tuple[ExecutorConfig, bool]:
     """Build executor settings for the main ingestion pipeline.
 
     The pipeline section of the configuration controls the maximum

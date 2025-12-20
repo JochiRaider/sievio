@@ -119,10 +119,19 @@ def merge_pipeline_stats(stats_dicts: Sequence[dict[str, Any]]) -> dict[str, Any
         if qc_agg is None:
             qc_agg = _init_qc_template(qc)
         else:
-            if qc_agg.get("mode") != qc.get("mode") or qc_agg.get("min_score") != qc.get("min_score"):
-                raise ValueError("Inconsistent QC config across stats (mode/min_score).")
+            if (
+                qc_agg.get("mode") != qc.get("mode")
+                or qc_agg.get("min_score") != qc.get("min_score")
+            ):
+                raise ValueError(
+                    "Inconsistent QC config across stats "
+                    "(mode/min_score)."
+                )
             if qc_agg.get("drop_near_dups") != qc.get("drop_near_dups"):
-                raise ValueError("Inconsistent QC config across stats (drop_near_dups).")
+                raise ValueError(
+                    "Inconsistent QC config across stats "
+                    "(drop_near_dups)."
+                )
         _accumulate_qc_counts(qc_agg, qc)
 
     merged["qc"] = qc_agg or {}

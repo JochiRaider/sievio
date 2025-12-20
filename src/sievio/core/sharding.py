@@ -84,7 +84,9 @@ def generate_shard_configs(
     except KeyError as exc:
         supported = ", ".join(sorted(SHARDING_STRATEGIES))
         raise ValueError(
-            f"Unsupported source_kind {source_kind!r} for sharding; supported kinds are: {supported}"
+            "Unsupported source_kind "
+            f"{source_kind!r} for sharding; "
+            f"supported kinds are: {supported}"
         ) from exc
 
     n = len(input_list)

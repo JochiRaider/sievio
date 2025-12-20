@@ -140,7 +140,9 @@ def _maybe_repair_cp1252_utf8(text_cp1252: str) -> str:
     except Exception:
         return text_cp1252
     # Accept the repair only if it *reduces* the mojibake noise.
-    return fixed if _mojibake_score(fixed) * 3 < max(1, _mojibake_score(text_cp1252)) else text_cp1252
+    fixed_score = _mojibake_score(fixed)
+    orig_score = max(1, _mojibake_score(text_cp1252))
+    return fixed if fixed_score * 3 < orig_score else text_cp1252
 
 
 # ------------------------
@@ -205,16 +207,19 @@ def decode_bytes(
 
     # 3) cp1252 fallback (always succeeds), with optional mojibake repair
     try:
-        text1252 = data.decode("cp1252", errors="strict"); enc_used = "cp1252"
+        text1252 = data.decode("cp1252", errors="strict")
+        enc_used = "cp1252"
     except Exception:
         # As a last resort, latin-1 (will never fail)
-        text1252 = data.decode("latin-1", errors="replace"); enc_used = "latin-1"
-        
+        text1252 = data.decode("latin-1", errors="replace")
+        enc_used = "latin-1"
+
     if fix_mojibake:
         text1252 = _maybe_repair_cp1252_utf8(text1252)
 
     text = _postprocess(text1252, normalize=normalize, strip_controls=strip_controls)
     return DecodedText(text, enc_used, "\ufffd" in text)
+
 
 def _postprocess(s: str, *, normalize: str | None, strip_controls: bool) -> str:
     """Normalize newlines, strip controls, and apply Unicode normalization."""
