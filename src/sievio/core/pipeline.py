@@ -861,8 +861,8 @@ class PipelineEngine:
             "QC summary (min_score=%s, drop_near_dups=%s)\n"
             "  scored: %d\n"
             "  kept: %d\n"
-            "  dropped_low_score: %d\n"
-            "  dropped_near_dup: %d\n"
+            "  would_drop_low_score: %d\n"
+            "  would_drop_near_dup: %d\n"
             "  candidates_low_score: %d\n"
             "  candidates_near_dup: %d\n"
             "  errors: %d",

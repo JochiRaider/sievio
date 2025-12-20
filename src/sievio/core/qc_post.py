@@ -14,7 +14,7 @@ from .concurrency import Executor, ExecutorConfig, resolve_qc_executor_config, i
 from .factories_qc import make_qc_scorer, make_safety_scorer
 from .interfaces import RunLifecycleHook, RunContext, RunArtifacts, SafetyScorer
 from .log import get_logger
-from .qc_controller import QCSummaryTracker, summarize_qc_rows, _derive_csv_path
+from .qc_controller import QCSummaryTracker, QualityDecisionPolicy, SafetyDecisionPolicy, summarize_qc_rows, _derive_csv_path
 from .records import filter_qc_meta, filter_safety_meta, check_record_schema, best_effort_record_path
 from .qc_utils import open_jsonl_maybe_gz
 
@@ -128,6 +128,7 @@ def run_qc_over_jsonl(
         min_score=qc_cfg.min_score,
         drop_near_dups=bool(qc_cfg.drop_near_dups),
     )
+    policy = QualityDecisionPolicy()
     should_write_csv = qc_cfg.write_csv if write_csv is None else bool(write_csv)
     should_write_signals = qc_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
     signals_format_val = (signals_format or qc_cfg.signals_format or "csv").lower()
@@ -137,7 +138,8 @@ def run_qc_over_jsonl(
 
     def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
         for row in rows:
-            tracker.observe(row, apply_gates=False)
+            decision = policy.decide(row, cfg=qc_cfg)
+            tracker.observe_quality(row, decision, did_drop=False)
             if rows_for_csv is not None:
                 rows_for_csv.append(row)
 
@@ -286,6 +288,7 @@ def run_safety_over_jsonl(
         )
 
     tracker = QCSummaryTracker(enabled=bool(safety_cfg.enabled), mode=safety_cfg.mode)
+    policy = SafetyDecisionPolicy()
     apply_gates = not getattr(safety_cfg, "annotate_only", False)
     should_write_csv = safety_cfg.write_csv if write_csv is None else bool(write_csv)
     should_write_signals = safety_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
@@ -296,7 +299,9 @@ def run_safety_over_jsonl(
 
     def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
         for row in rows:
-            tracker.observe_safety(row, apply_gates=apply_gates, screener_id="safety", mode=QCMode.POST)
+            decision = policy.decide(row, cfg=safety_cfg)
+            did_drop = apply_gates and bool(decision.would_drop)
+            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
             if rows_for_output is not None:
                 rows_for_output.append(row)
 
@@ -358,7 +363,9 @@ def run_safety_over_jsonl(
                     tracker=tracker,
                 )
         for row in rows:
-            tracker.observe_safety(row, apply_gates=apply_gates, screener_id="safety", mode=QCMode.POST)
+            decision = policy.decide(row, cfg=safety_cfg)
+            did_drop = apply_gates and bool(decision.would_drop)
+            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
 
         rows_result = rows
         out_csv = _derive_csv_path(jsonl_path, csv_suffix if csv_suffix is not None else safety_cfg.csv_suffix)
@@ -426,10 +433,13 @@ def iter_qc_rows_from_jsonl(
     def _generator() -> Iterator[Dict[str, Any]]:
         buffer: List[Dict[str, Any]] = []
 
+        policy = QualityDecisionPolicy()
+
         def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
             for row in rows:
                 if tracker is not None:
-                    tracker.observe(row, apply_gates=False)
+                    decision = policy.decide(row, cfg=qc_cfg)
+                    tracker.observe_quality(row, decision, did_drop=False)
                 buffer.append(row)
 
         jsonl_path_str = str(jsonl_path)

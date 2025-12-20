@@ -18,6 +18,7 @@ def _init_qc_template(sample_qc: Dict[str, Any]) -> Dict[str, Any]:
     Build an aggregation template using config fields from sample_qc and zeroed counts.
     """
     tmpl: Dict[str, Any] = {
+        "schema_version": sample_qc.get("schema_version"),
         "enabled": sample_qc.get("enabled"),
         "mode": sample_qc.get("mode"),
         "min_score": sample_qc.get("min_score"),
