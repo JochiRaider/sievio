@@ -31,11 +31,13 @@ At a high level:
 - Add a new source: start with `src/sievio/sources/`,
   `src/sievio/core/interfaces.py`, `src/sievio/core/factories_sources.py`,
   `src/sievio/core/registries.py`, `src/sievio/core/config.py`.
-  Avoid: `src/sievio/core/pipeline.py`.
+  Avoid: editing the engine loop in `src/sievio/core/pipeline.py` unless the
+  change is truly orchestration-level.
 - Add a new sink/output format: start with `src/sievio/sinks/sinks.py`,
   `src/sievio/sinks/parquet.py`, `src/sievio/core/interfaces.py`,
   `src/sievio/core/factories_sinks.py`, `src/sievio/core/registries.py`.
-  Avoid: `src/sievio/core/pipeline.py`.
+  Avoid: editing the engine loop in `src/sievio/core/pipeline.py` unless the
+  change is truly orchestration-level.
 - Add a bytes handler (binary format): start with
   `src/sievio/core/factories_sources.py`, `src/sievio/core/registries.py`,
   `src/sievio/core/interfaces.py`, and patterns in `src/sievio/sources/pdfio.py`,
@@ -410,98 +412,19 @@ part of the public API).
 
 ### 6.7 Tests - `tests/`
 
-Pytest-based test suite validating core behavior and non-core wiring.
-
+Key tests to start with:
 - `tests/test_builder_runtime_layering.py`
-  Tests around separation of config vs runtime (`PipelinePlan`,
-  `PipelineRuntime`) and layering behavior in the builder.
-- `tests/test_chunk.py`
-  Unit tests for chunking logic (`ChunkPolicy`, `iter_chunk_dicts`, token
-  limits, etc.).
-- `tests/test_cli_main.py`
-  Tests for the CLI entrypoint (`cli.main`) and argument handling.
-- `tests/test_concurrency.py`
-  Tests for `concurrency.py` executors, bounded submission, and configuration
-  via `SievioConfig`.
-- `tests/test_config_builder_pipeline.py`
-  End-to-end tests tying together config parsing, builder wiring, and pipeline
-  execution.
-- `tests/test_config_merge_helper.py`
-  Tests the config/options merge helper (`build_config_from_defaults_and_options`)
-  used by factories.
-- `tests/test_convert.py`
-  Tests for `convert.py` helpers (decode + chunk -> records) and mode/format
-  detection.
-- `tests/test_convert_integration.py`
-  Integration tests covering decode -> chunk -> record flows under
-  representative configs.
-- `tests/test_dataset_card.py`
-  Tests dataset card generation and rendering behavior.
-- `tests/test_dataset_card_qc.py`
-  Tests dataset card QC section behavior.
-- `tests/test_decode.py`
-  Tests for byte decoding, encoding detection, and normalization rules.
-- `tests/test_decode_fallback.py`
-  Tests fallback decode heuristics/codecs when preferred paths are unavailable.
-- `tests/test_dedup_store.py`
-  Tests deduplication store schema/metadata enforcement and LSH lookups.
-- `tests/test_factories_sources_config_overlays.py`
-  Tests source config overlay behavior (defaults vs per-spec options).
-- `tests/test_hooks.py`
-  Tests lifecycle hook wiring and behavior.
-- `tests/test_jsonl_source.py`
-  Tests JSONL source behavior (schema checks, logging, limits).
-- `tests/test_language_customization.py`
-  Tests language detection customization and configuration.
-- `tests/test_log_and_naming.py`
-  Tests for logging helpers and naming utilities (`naming.py`).
-- `tests/test_pipeline_error_rate.py`
-  Tests for pipeline error-rate handling.
 - `tests/test_pipeline_middlewares.py`
-  Focused tests for `PipelineEngine` middleware behavior (record/file middleware
-  adapters, QC hooks) and basic sink error handling. Middleware-related
-  override wiring should be covered here when adding new behavior to
-  `PipelineOverrides` or `build_engine`.
-- `tests/test_pipeline_streaming.py`
-  Tests streaming extraction behavior.
-- `tests/test_plugins_and_registries.py`
-  Tests plugin discovery and registry behavior for sources, sinks, and scorers.
-- `tests/test_sources_fs.py`
-  Tests filesystem source behavior and filtering.
 - `tests/test_qc_controller.py`
-  Tests inline QC controller behavior and interaction with the pipeline.
-- `tests/test_qc_defaults.py`
-  Tests default QC configuration and behavior (default scorers, thresholds).
-- `tests/test_qc_integration.py`
-  Integration tests that run QC wiring end-to-end through the pipeline.
 - `tests/test_qc_post.py`
-  Tests post-hoc QC driver behavior (`PostQCHook`, `run_qc_over_jsonl`).
-- `tests/test_qc_safety_modes.py`
-  Tests safety scorer modes (inline/advisory) and their interaction with QC and
-  summary stats.
-- `tests/test_qc_simhash_optimization.py`
-  Tests QC SimHash/MinHash optimization and dedup behaviors.
-- `tests/test_qc_utils.py`
-  Tests low-level QC utilities (similarity hashing, duplicate detection,
-  heuristics).
-- `tests/test_records.py`
-  Tests record construction, metadata propagation, and header generation.
-- `tests/test_runner_finalizers.py`
-  Tests that sinks and finalizers run correctly at the end of a pipeline run
-  (run-summary, prompt files, etc.).
 - `tests/test_safe_http.py`
-  Tests `safe_http.py` HTTP client behavior, redirect/IP safety, and global
-  client helpers.
-- `tests/test_schema_validation.py`
-  Tests config/schema validation behavior.
-- `tests/test_sharding.py`
-  Tests sharding helpers and config splitting logic.
-- `tests/test_sqlite_source_security.py`
-  Tests SQLite source download/allowlist safeguards and security constraints.
-- `tests/test_sqlite_source_validation.py`
-  Tests SQLite source validation rules.
-- `tests/test_stats_aggregate.py`
-  Tests stats aggregation behavior.
+- `tests/test_config_builder_pipeline.py`
+- `tests/test_concurrency.py`
+- `tests/test_records.py`
+- `tests/test_dataset_card.py`
+- `tests/test_plugins_and_registries.py`
+
+Full suite: see `tests/`.
 
 ### 6.8 Repository root
 
@@ -554,6 +477,8 @@ Top-level files are summarized in `project_files.md`. Key ones:
 - Update this file whenever core modules, extension points, or key symbols are
   added, removed, or renamed.
 - Verify references by grepping symbols and checking `project_files.md`.
+- `rg` every symbol mentioned in Sections 2–7.
+- Verify every referenced path exists.
 - Keep this doc task-first and concise; link to README/technical manual for
   broader narrative.
 - Reviewer checklist for core-wiring PRs: confirm registry usage, safe HTTP
