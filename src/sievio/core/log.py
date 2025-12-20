@@ -46,7 +46,7 @@ def configure_logging(
     stream = None,
     fmt: str | None = None,
     datefmt: str | None = None,
-    propagate: bool = False,
+    propagate: bool | None = None,
     logger_name: str = PACKAGE_LOGGER_NAME,
 ) -> logging.Logger:
     """Configure a stream handler for a sievio logger.
@@ -58,7 +58,8 @@ def configure_logging(
         fmt (str | None): Log format string. Defaults to a basic format when
             omitted.
         datefmt (str | None): Date format string for the handler.
-        propagate (bool): Whether log records bubble up to ancestor loggers.
+        propagate (bool | None): Whether log records bubble up to ancestor loggers.
+            When None, defaults to True to allow root handlers (e.g., pytest caplog).
         logger_name (str): Logger name to configure. Defaults to the package
             logger.
 
@@ -70,15 +71,24 @@ def configure_logging(
     if isinstance(level, str):
         level = getattr(logging, level.upper(), logging.INFO)
     logger.setLevel(level)
-    logger.propagate = bool(propagate)
+    if propagate is None:
+        logger.propagate = True
+    else:
+        logger.propagate = bool(propagate)
 
     if stream is None:
         stream = sys.stderr
     if fmt is None:
         fmt = "%(asctime)s %(levelname)s %(name)s: %(message)s"
 
-    # Add a single StreamHandler if none present
-    has_stream = any(isinstance(h, logging.StreamHandler) for h in logger.handlers)
+    # Add a single StreamHandler if none present; refresh closed streams.
+    has_stream = False
+    for handler in logger.handlers:
+        if not isinstance(handler, logging.StreamHandler):
+            continue
+        has_stream = True
+        if getattr(getattr(handler, "stream", None), "closed", False):
+            handler.stream = stream
     if not has_stream:
         handler = logging.StreamHandler(stream)
         handler.setFormatter(logging.Formatter(fmt=fmt, datefmt=datefmt))

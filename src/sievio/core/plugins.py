@@ -64,21 +64,21 @@ def load_entrypoint_plugins(
         except Exception as exc:  # noqa: BLE001
             log.warning("Failed to import plugin %s: %s", ep.name, exc)
             continue
+        try:
             try:
-                try:
-                    func(
-                        source_registry,
-                        sink_registry,
-                        bytes_registry,
-                        scorer_registry,
-                        safety_scorer_registry,
-                    )
-                except TypeError:
-                    func(
-                        source_registry,
-                        sink_registry,
-                        bytes_registry,
-                        scorer_registry,
-                    )
-            except Exception as exc:  # noqa: BLE001
-                log.warning("Plugin %s execution failed: %s", ep.name, exc)
+                func(
+                    source_registry,
+                    sink_registry,
+                    bytes_registry,
+                    scorer_registry,
+                    safety_scorer_registry,
+                )
+            except TypeError:
+                func(
+                    source_registry,
+                    sink_registry,
+                    bytes_registry,
+                    scorer_registry,
+                )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("Plugin %s execution failed: %s", ep.name, exc)

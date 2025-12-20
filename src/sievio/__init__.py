@@ -129,7 +129,8 @@ from .core.naming import (
     build_output_basename_github,
     build_output_basename_pdf,
 )
-from .core.pipeline import PipelineEngine, PipelineStats, run_pipeline
+from .core.pipeline import PipelineEngine, PipelineStats
+from .core.runner import run_pipeline
 from .core.records import (
     QCSummaryMeta,
     RecordMeta,

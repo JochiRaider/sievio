@@ -278,7 +278,7 @@ def _can_open_stream(item: FileItem) -> bool:
 
     return bool(
         getattr(item, "streamable", False)
-        and getattr(item, "stream_hint", None) == "file"
+        and getattr(item, "stream_hint", None) in (None, "file")
         and callable(getattr(item, "open_stream", None))
     )
 
@@ -295,7 +295,7 @@ def maybe_reopenable_local_path(item: FileItem) -> Path | None:
     origin = getattr(item, "origin_path", None)
     if not origin or not getattr(item, "streamable", False):
         return None
-    if getattr(item, "stream_hint", None) != "file":
+    if getattr(item, "stream_hint", None) not in (None, "file"):
         return None
     origin_str = str(origin)
     candidate: Path | None = None

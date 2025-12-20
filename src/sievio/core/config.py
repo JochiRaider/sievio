@@ -30,6 +30,10 @@ from typing import (
     get_origin,
     get_type_hints,
 )
+try:  # pragma: no cover - Python 3.10+ UnionType
+    from types import UnionType
+except Exception:  # pragma: no cover
+    UnionType = None  # type: ignore[assignment]
 
 from .chunk import ChunkPolicy
 from .interfaces import Extractor, FileExtractor, Record, RepoContext, Sink, Source
@@ -1222,7 +1226,8 @@ def _strip_optional(typ: Any) -> tuple[Any, bool]:
         ``is_optional`` is True if ``None`` was present in the union.
     """    
     origin = get_origin(typ)
-    if origin is Union:
+    union_types = (Union, UnionType) if UnionType is not None else (Union,)
+    if origin in union_types:
         args = [arg for arg in get_args(typ) if arg is not type(None)]
         if len(args) == 1:
             inner = args[0]

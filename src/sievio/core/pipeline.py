@@ -9,14 +9,7 @@ from collections.abc import Callable, Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any
-
-from .builder import (
-    PipelineOverrides,
-    PipelinePlan,
-    PipelineRuntime,
-    build_engine,
-)
+from typing import TYPE_CHECKING, Any
 from .concurrency import (
     Executor,
     process_items_parallel,
@@ -28,6 +21,7 @@ from .convert import (
     DefaultExtractor,
     _can_open_stream,
     make_limited_stream,
+    maybe_reopenable_local_path,
 )
 from .interfaces import (
     FileExtractor,
@@ -46,6 +40,9 @@ from .qc_controller import QCSummaryTracker
 from .records import best_effort_record_path
 
 log = get_logger(__name__)
+
+if TYPE_CHECKING:  # pragma: no cover
+    from .builder import PipelineOverrides, PipelinePlan, PipelineRuntime
 
 
 class MiddlewareError(RuntimeError):
@@ -149,16 +146,30 @@ class _ProcessFileCallable:
             raise ValueError("FileItem missing 'path'")
         recs_iter: Iterable[Record]
         extract_stream = getattr(self.file_extractor, "extract_stream", None)
+        data = getattr(item, "data", None)
+        data_len = len(data) if isinstance(data, (bytes, bytearray)) else None
+        size = getattr(item, "size", None)
+        should_stream = (
+            data is None
+            or data_len == 0
+            or (size is not None and data_len is not None and data_len < size)
+        )
+        stream_opener = getattr(item, "open_stream", None) if _can_open_stream(item) else None
+        reopenable = None
+        if stream_opener is None:
+            reopenable = maybe_reopenable_local_path(item)
+            if reopenable is not None:
+                stream_opener = lambda: reopenable.open("rb")
         can_stream = (
             self.executor_kind == "thread"
             and callable(extract_stream)
-            and getattr(item, "data", None) is None
-            and _can_open_stream(item)
+            and should_stream
+            and callable(stream_opener)
         )
         if can_stream:
             stream = None
             try:
-                raw_stream = item.open_stream()  # type: ignore[misc]
+                raw_stream = stream_opener()  # type: ignore[misc]
                 limit = self.config.decode.max_bytes_per_file
                 if limit is None:
                     limit = _OPEN_STREAM_DEFAULT_MAX_BYTES
@@ -1019,27 +1030,4 @@ class PipelineEngine:
         self._log_qc_summary()
         return stats
 
-# ---------------------------------------------------------------------------
-# Public API
-# ---------------------------------------------------------------------------
-
-def run_pipeline(
-    *,
-    config: SievioConfig,
-    overrides: PipelineOverrides | None = None,
-) -> dict[str, int]:
-    """Run the end-to-end pipeline described by config.
-
-    Args:
-        config (SievioConfig): Pipeline configuration object.
-        overrides (PipelineOverrides | None): Optional runtime overrides
-            merged into the plan and engine.
-
-    Returns:
-        dict[str, int]: Statistics from execution as primitive values.
-    """
-    engine = build_engine(config, overrides=overrides)
-    stats_obj = engine.run()
-    return stats_obj.as_dict()
-
-__all__ = ["run_pipeline", "PipelineStats", "PipelineEngine", "process_items_parallel"]
+__all__ = ["PipelineStats", "PipelineEngine", "process_items_parallel"]

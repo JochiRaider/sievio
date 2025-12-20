@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import functools
 import os
+import pickle
 from collections.abc import Callable, Iterable
 from concurrent.futures import (
     FIRST_COMPLETED,
@@ -112,6 +113,7 @@ class Executor:
         fail_fast: bool = False,
         on_error: Callable[[BaseException], None] | None = None,
         on_submit_error: Callable[[T, BaseException], None] | None = None,
+        is_submit_error: Callable[[BaseException], bool] | None = None,
     ) -> None:
         """Submit items to workers and consume results as they complete.
 
@@ -133,6 +135,9 @@ class Executor:
             on_submit_error (Callable[[T, BaseException], None] | None):
                 Optional callback invoked when submitting a task to the
                 executor fails.
+            is_submit_error (Callable[[BaseException], bool] | None):
+                Optional predicate to classify exceptions raised while
+                resolving futures as submission-time failures.
 
         Raises:
             Exception: Propagates the first worker or submission error
@@ -141,22 +146,34 @@ class Executor:
 
         window = max(self.cfg.window, self.cfg.max_workers)
         with self._make_executor() as pool:
-            pending: list[Future[R]] = []
+            pending: dict[Future[R], T] = {}
 
             def _drain(block: bool = False) -> None:
                 nonlocal pending
                 if not pending:
                     return
                 done, still = wait(
-                    pending,
+                    list(pending.keys()),
                     timeout=None if block else 0.0,
                     return_when=FIRST_COMPLETED,
                 )
-                pending = list(still)
+                done_items = {fut: pending.pop(fut, None) for fut in done}
+                pending = {fut: pending[fut] for fut in still}
                 for fut in done:
+                    item = done_items.get(fut)
                     try:
                         result = fut.result()
                     except Exception as exc:  # noqa: BLE001
+                        if (
+                            on_submit_error
+                            and item is not None
+                            and is_submit_error
+                            and is_submit_error(exc)
+                        ):
+                            on_submit_error(item, exc)
+                            if fail_fast:
+                                raise
+                            continue
                         if on_error:
                             on_error(exc)
                         if fail_fast:
@@ -167,7 +184,7 @@ class Executor:
             for item in items:
                 try:
                     fut = pool.submit(fn, item)
-                    pending.append(fut)
+                    pending[fut] = item
                 except Exception as exc:  # noqa: BLE001
                     if on_submit_error:
                         on_submit_error(item, exc)
@@ -267,6 +284,8 @@ def process_items_parallel(
         if on_worker_error:
             on_worker_error(exc)
 
+    is_submit_error = _looks_like_process_submit_error if normalized_kind == "process" else None
+
     executor.map_unordered(
         items,
         worker_fn,
@@ -274,7 +293,18 @@ def process_items_parallel(
         fail_fast=fail_fast,
         on_error=_on_error,
         on_submit_error=on_submit_error,
+        is_submit_error=is_submit_error,
     )
+
+
+def _looks_like_process_submit_error(exc: BaseException) -> bool:
+    """Return True if the exception indicates process-pool pickling failure."""
+    if isinstance(exc, pickle.PicklingError):
+        return True
+    if isinstance(exc, (TypeError, AttributeError)):
+        msg = str(exc).lower()
+        return "pickle" in msg or "pickling" in msg
+    return False
 
 
 def _strict_hint_mode_enabled() -> bool:
