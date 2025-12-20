@@ -100,8 +100,11 @@ sievio qc out.jsonl --csv out_quality.csv
 # Generate shard configs from a base config + targets list
 sievio shard --targets targets.txt --base config.toml --shards 8 --out-dir shards/ --kind web_pdf_list
 
+# Run a shard and capture stats JSON (stdout)
+sievio run -c shards/shard_0000.json > shards/shard_0000.stats.json
+
 # Merge stats JSON files from multiple shards
-sievio merge-stats shards/*/stats.json > merged_stats.json
+sievio merge-stats shards/*.stats.json > merged_stats.json
 
 # See all commands and options
 sievio --help

@@ -377,13 +377,16 @@ POST safety semantics:
 - `csv_source.py`
   CSV-backed source emitting text rows with configurable column selection.
 - `jsonl_source.py`
-  JSONL source that streams records from existing JSONL files.
+  JSONL source that streams records from existing JSONL files (not registered
+  by default; wire via a custom factory or helper).
 - `parquetio.py`
-  Parquet source for ingesting Parquet datasets as records.
+  Parquet bytes handler for reading Parquet payloads into records when the
+  `[parquet]` extra is installed.
 - `sqlite_source.py`
   SQLite source for reading text columns from database files.
 - `evtxio.py`
-  Windows Event Log (EVTX) source for ingesting event records.
+  Windows Event Log (EVTX) bytes handler for `.evtx` files when the `[evtx]`
+  extra is installed.
 
 ### 6.5 Sinks - `src/sievio/sinks/`
 

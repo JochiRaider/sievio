@@ -1,6 +1,6 @@
 # example_config.toml
 # Comprehensive example of the TOML layout supported by SievioConfig.
-# All tunable fields are shown with their library defaults; tweak as needed.
+# Most tunable fields are shown with their library defaults; runtime-only/derived fields are omitted.
 # Array-of-table entries under [[sources.specs]] and [[sinks.specs]] hold the
 # declarative wiring for sources/sinks; everything else sets global defaults.
 # Use [sources.defaults.<kind>] and [sinks.defaults.<kind>] to share per-kind
@@ -67,11 +67,11 @@ retries = 2                      # Number of retry attempts for downloading a re
 
 [sources.defaults.web_pdf_list]
 # download_max_workers = 8
-# include_exts = [".pdf"]
+# require_pdf = true
 
 [sources.defaults.web_page_pdf]
 # max_links = 100
-# include_exts = [".pdf"]
+# include_ambiguous = false
 
 [sources.defaults.csv_text]
 # default_delimiter = ","
@@ -162,6 +162,7 @@ max_workers = 0               # 0 → auto (os.cpu_count or 1)
 # submit_window = 8            # Optional max number of pending tasks (else max_workers * 4)
 fail_fast = false             # Abort the pipeline on the first worker error when true
 executor_kind = "auto"        # Executor kind: "thread", "process", or "auto" (auto-infers based on sources/handlers)
+# max_error_rate = 0.05        # Optional abort threshold for source errors (fraction of attempted files)
 
 # ---------------------------------------------------------------------------
 # Sinks (defaults + declarative specs)

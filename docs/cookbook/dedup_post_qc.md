@@ -35,7 +35,7 @@ enabled = false  # enable + tune if you want safety scoring too
 ```bash
 sievio qc merged.jsonl --config qc_post.toml --csv merged_quality.csv
 ```
-This uses the same scorer as inline QC (`jsonl_default`) but enforces gates in the post pass and emits a CSV report. Near-duplicate checks consult the seeded DB.
+This runs post-QC with the config settings for gating/summary. Note: `--csv` uses the default scorer settings (it does not apply `qc.scorer_options` such as `global_dedup`); use `run_qc_over_jsonl` programmatically if you need config-driven CSV output.
 
 ## Validate
 - Inspect `merged_quality.csv` for drops/flags.

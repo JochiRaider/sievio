@@ -18,12 +18,12 @@ Operational guidance for running Sievio at scale. For API details, see `docs/TEC
 2. **Run shards in parallel**  
    Use your scheduler of choice (Slurm/K8s/parallel). Example:
    ```bash
-   parallel 'sievio run -c {}' ::: shards/*.json
+   parallel 'sievio run -c {} > {.}.stats.json' ::: shards/*.json
    ```
 
 3. **Merge stats**  
    ```bash
-   sievio merge-stats shards/*/stats.json > merged_stats.json
+   sievio merge-stats shards/*.stats.json > merged_stats.json
    ```
    Stats merging keeps counts/flags and clears non-additive QC fields.
 
@@ -34,8 +34,8 @@ Operational guidance for running Sievio at scale. For API details, see `docs/TEC
    ```
 
 ## Observability
-- Each run writes a stats JSON (via run-summary hook) next to outputs; inspect counts/errors/QC summaries there.
-- CLI emits JSON stats to stdout; capture logs for failures (`--log-level DEBUG` for more detail).
+- CLI emits JSON stats to stdout; redirect per shard if you plan to merge stats.
+- Run summary records are appended to the primary JSONL; the last record carries config/stats/QC summary.
 - QC/safety post passes can emit CSV/Parquet sidecars (see `docs/QUALITY_CONTROL.md`).
 
 ## Runtime knobs
@@ -44,5 +44,5 @@ Operational guidance for running Sievio at scale. For API details, see `docs/TEC
 - QC post-processing: `qc.parallel_post` and `qc.post_*` override concurrency for post passes.
 
 ## Footnotes
-- Sharding currently targets source kinds registered in `SourceRegistry` (e.g., `github_zip`, `web_pdf_list`); use `--kind` accordingly.
+- Sharding currently supports `github_zip`, `web_pdf_list`, `local_dir`, and `sqlite`; use `--kind` accordingly.
 - For very large PDFs/EVTX workloads, set `pipeline.executor_kind="process"` in the base config to bias toward process workers.

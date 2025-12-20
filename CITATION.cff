@@ -1,0 +1,18 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata in this file."
+title: "Sievio"
+type: software
+license: MIT
+
+authors:
+  - name: "JochiRaider"
+
+keywords:
+  - "data pipelines"
+  - "dataset generation"
+  - "ETL"
+  - "quality control"
+  - "LLM fine-tuning"
+
+repository-code: "https://github.com/JochiRaider/sievio"
+url: "https://github.com/JochiRaider/sievio/tree/main/docs"

@@ -104,10 +104,10 @@ End-to-end split-and-run workflow for distributed launches:
      --out-dir shards/ \
      --kind web_pdf_list
    ```
-2. Run each shard independently (Slurm/K8s array jobs or `parallel 'sievio run -c {}' ::: shards/*.json`), writing stats next to outputs.
+2. Run each shard independently (Slurm/K8s array jobs or `parallel 'sievio run -c {} > {.}.stats.json' ::: shards/*.json`), capturing stats JSON from stdout.
 3. Aggregate stats:
    ```bash
-   sievio merge-stats shards/*/stats.json > merged_stats.json
+   sievio merge-stats shards/*.stats.json > merged_stats.json
    ```
 4. Merge artifacts: `cat`/`zcat` JSONL shards, and combine dataset-card fragments via the existing `sievio card` command or custom tooling.
 

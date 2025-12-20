@@ -31,6 +31,7 @@ For rules, invariants, and AI usage guidelines, see `AGENTS.md`.
 ├── manual_test_github.toml
 ├── project_files.md
 ├── pyproject.toml
+├── uv.lock
 ├── sample.jsonl
 ├── scripts
 │   ├── generate_configuration_md.py

@@ -27,7 +27,7 @@ Sievio’s screening layer evaluates records for quality and safety. It can anno
   ```bash
   sievio qc primary.jsonl --config qc_post.toml --csv primary_quality.csv
   ```
-  Requires `[qc]` extras.
+  Requires `[qc]` extras. Note: `--csv` uses `score_jsonl_to_csv` defaults and does not apply `qc.scorer_options` from the config.
 
 ## Deduplication
 - Local near-dup detection uses SimHash/MinHash heuristics controlled by `qc.scorer_options.heuristics`.

@@ -8,7 +8,7 @@ Goal: Download a list of remote PDFs and emit JSONL (and optional prompt text). 
 
 ## Minimal config (`pdf_run.toml`)
 ```toml
-[sources.pdf]
+[sources.defaults.web_pdf_list]
 max_pdf_bytes = 104857600      # 100 MiB cap
 download_max_workers = 8
 retries = 2
@@ -37,8 +37,21 @@ sievio run -c pdf_run.toml
 ```
 
 ## Validate
-- Check counts in `out/pdf_corpus.stats.json` (written by the run summary hook).
-- Spot-check records: `python - <<'PY'\nimport json\nfrom pathlib import Path\nprint(json.loads(Path('out/pdf_corpus.stats.json').read_text())['files'])\nPY`
+- Capture stats JSON from stdout if you want a file (e.g., `sievio run -c pdf_run.toml > out/pdf_corpus.stats.json`).
+- Spot-check counts from the run-summary record appended to the JSONL:
+  ```bash
+  python - <<'PY'
+  import json
+  from pathlib import Path
+
+  path = Path("out/pdf_corpus.jsonl")
+  with path.open(encoding="utf-8") as handle:
+      for line in handle:
+          pass
+  meta = json.loads(line).get("meta", {})
+  print(meta.get("stats", {}).get("files"))
+  PY
+  ```
 
 ## Troubleshooting
 - Non-PDF responses are skipped when `require_pdf=true` (default). Set `require_pdf=false` only if you accept ambiguous content.

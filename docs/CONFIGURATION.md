@@ -95,7 +95,8 @@ Default settings for reading text from CSV files.
         default_text_column (str): Column name used as the text field
             when none is specified.
         default_delimiter (str | None): Delimiter override; when None
-            the CSV sniffer is used.
+            the delimiter is inferred from the file suffix (.tsv → tab,
+            otherwise comma).
         encoding (str): Text encoding used to decode CSV bytes.
 
 | Field | Type | Default |
@@ -570,4 +571,3 @@ Declarative source entry; factories map kind -> concrete sources.
 | --- | --- | --- |
 | `kind` | `str` | `required` |
 | `options` | `dict[str, Any]` | `<factory dict>` |
-

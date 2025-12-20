@@ -9,7 +9,7 @@ Goal: redact PII-like patterns before they hit sinks/QC by adding a record middl
 ## Minimal script
 ```python
 import re
-from sievio import PipelineOverrides, convert_local_dir
+from sievio import PipelineOverrides, convert, make_local_repo_config
 
 EMAIL_RE = re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}")
 
@@ -20,13 +20,11 @@ def scrub_pii(record):
     return record
 
 overrides = PipelineOverrides(record_middlewares=[scrub_pii])
-
-stats = convert_local_dir(
+cfg = make_local_repo_config(
     root_dir="./repo",
     out_jsonl="out/repo_scrubbed.jsonl",
-    base_config=None,
-    overrides=overrides,
 )
+stats = convert(cfg, overrides=overrides)
 print(stats)
 ```
 
