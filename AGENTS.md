@@ -46,6 +46,19 @@ ruff check .
 mypy --config-file pyproject.toml src
 ```
 
+Targeted test patterns:
+
+```bash
+# Run a single test file
+PYTHONPATH=src pytest tests/test_pipeline_middlewares.py
+
+# Run a single test function
+PYTHONPATH=src pytest tests/test_pipeline_middlewares.py::test_record_middleware_adapter_sets_tag
+
+# Run a keyword subset
+PYTHONPATH=src pytest -k "qc and safety"
+```
+
 ---
 
 ## 2. Mental model & project structure
@@ -119,41 +132,102 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 1. Fast pass: map the architecture, data flow, and trust boundaries using `LLMS.md` and the core modules.
 2. Deep pass: focus on the highest-risk or most central files (pipeline, registries, safety/QC, sinks/sources involved in the task).
 
+See “Review guidelines” for P0/P1 risk classification and required checks.
+
 ---
 
-## 4. Golden paths (common tasks)
+## 4. Review guidelines
 
-### 4.1 New source type
+### P0 / P1 severity
+
+P0 (must be called out in review and only changed with explicit scope):
+- HTTP safety boundary: `SafeHttpClient`, `safe_http.py`, `make_http_client`, or any bypass of safe HTTP usage.
+- QC/safety gating semantics: `QCMode`, `SafetyConfig.annotate_only`, inline vs post hooks (`InlineQCHook`, `PostQCHook`), and `score_record` decisions.
+- Record schema/metadata compatibility: `core/records.py`, QC metadata fields, or summary schema changes.
+- Per-record loop/middleware ordering: `PipelineEngine`, `apply_overrides_to_engine`, `record_middlewares`, `file_middlewares`.
+
+P1 (must be called out with risk notes and test evidence):
+- New network access paths or remote sources.
+- Dependency additions or new extras.
+- Output layout changes in sinks that affect downstream consumers.
+
+### Always verify
+
+- `PYTHONPATH=src pytest`
+- `ruff check .`
+- `mypy --config-file pyproject.toml src`
+- Schema remains additive, and Safe HTTP + QC/safety modes keep their existing semantics.
+
+## 5. Code style
+
+Source of truth: `pyproject.toml` under `[tool.ruff]` (line length 100; select `E`, `F`, `I`, `B`, `UP`).
+- Run `ruff check .` (includes import sorting via `I`).
+- No formatter is configured in-repo; avoid broad reformatting. If a formatter is added, follow the repo docs/`pyproject.toml`.
+- Keep changes minimal and avoid whitespace churn.
+
+## 6. Git workflow
+
+- Follow the repo’s documented flow (README / `docs/CONTRIBUTING.md`): feature branch, commit, PR.
+- PR summaries MUST include intent, key files touched, tests run (commands), and P0/P1 risk notes when applicable.
+- Avoid incidental formatting or unrelated cleanup.
+
+## 7. Hard boundaries
+
+DO NOT change without explicit instruction:
+- Generated or indexed docs: `docs/CONFIGURATION.md`, `project_files.md` (regenerate via scripts if needed).
+- Core orchestration “golden spine” modules (`core/config.py`, `core/registries.py`, `core/factories_*.py`, `core/builder.py`, `core/pipeline.py`, `core/qc_*.py`, `core/records.py`, `core/safe_http.py`).
+- Safe HTTP boundary: no new network access or direct `requests`/`urllib` usage.
+- Secrets/PII: never commit secrets or log PII; avoid adding debug logging in hot paths.
+- Lockfiles or build artifacts if added (e.g., `poetry.lock`, `uv.lock`, `dist/`, `build/`).
+- Run outputs (JSONL/Parquet/*.card.json) should be regenerated, not edited by hand.
+
+Directory-scoped overrides use `AGENTS.override.md` only when explicitly introduced.
+
+## 8. Definition of done for agent-generated changes
+
+A change is "done" when:
+
+- [ ] Tests pass: `PYTHONPATH=src pytest`
+- [ ] Lint and type-check are clean: `ruff check .`, `mypy --config-file pyproject.toml src`
+- [ ] No core invariants are broken (registries, Safe HTTP, config semantics, metadata shape)
+- [ ] Relevant docs/examples updated (`README.md`, `LLMS.md`, configs if needed)
+- [ ] Diff is small, focused, and clearly explainable in a commit/PR message
+
+---
+
+## 9. Golden paths (common tasks)
+
+### 9.1 New source type
 
 1. Implement a `Source` under `src/sievio/sources/` (see `LLMS.md` §3.4).
 2. Add a `SourceFactory` and register it with the source registry.
 3. Add or update config examples to show usage.
 
-### 4.2 New sink or output format
+### 9.2 New sink or output format
 
 1. Implement a `Sink` under `src/sievio/sinks/` (see `LLMS.md` §3.5).
 2. Add a `SinkFactory` and register it with the sink registry.
 3. Add or update config examples and docs.
 
-### 4.3 New bytes handler (binary format)
+### 9.3 New bytes handler (binary format)
 
 1. Implement a bytes handler + sniff function and wire it via the bytes handler registry (see `LLMS.md` §3.1 for factories/registries).
 2. Reuse existing decode/chunk/record helpers where possible.
 3. Add tests or examples for the new format.
 
-### 4.4 Change or extend QC behavior
+### 9.4 Change or extend QC behavior
 
 1. Start from the QC config/utilities and scorer interfaces (see `LLMS.md` §3.1 QC modules).
 2. Implement or update a `QualityScorer` and register it via the QC registry.
 3. Use inline QC controller and/or post-QC driver as appropriate, plus tests.
 
-### 4.5 Dataset cards
+### 9.5 Dataset cards
 
 1. Update `src/sievio/core/dataset_card.py` fragments/merging logic (see `LLMS.md` §3.1 dataset card).
 2. Ensure pipeline stats feed any new signals into card fragments.
 3. Keep output compatible with HF dataset card conventions (YAML front matter + Markdown).
 
-### 4.6 Sharded runs / distributed execution
+### 9.6 Sharded runs / distributed execution
 
 1. Show agents the sharding/stats helpers: `core/sharding.py`, `core/stats_aggregate.py`, configs in `core/config.py`, pipeline wiring in `core/pipeline.py`, QC summaries in `core/qc_controller.py`.
 2. Ask the agent to generate shard configs via the CLI (`sievio shard ...`) or by calling `generate_shard_configs`.
@@ -161,7 +235,7 @@ Per-kind defaults and per-spec options should converge into small dataclasses be
 
 ---
 
-## 5. How humans should ask agents for help
+## 10. How humans should ask agents for help
 
 When asking an AI assistant to change this repo, provide:
 
@@ -182,15 +256,3 @@ Example:
 Agents should:
 - Start with a fast, top-down scan (architecture, core modules, config impact).
 - Then deep dive into the smallest set of files needed to implement the change safely.
-
----
-
-## 6. Definition of done for agent-generated changes
-
-A change is "done" when:
-
-- [ ] Tests pass: `PYTHONPATH=src pytest`
-- [ ] Lint and type-check are clean: `ruff check .`, `mypy --config-file pyproject.toml src`
-- [ ] No core invariants are broken (registries, Safe HTTP, config semantics, metadata shape)
-- [ ] Relevant docs/examples updated (`README.md`, `LLMS.md`, configs if needed)
-- [ ] Diff is small, focused, and clearly explainable in a commit/PR message
