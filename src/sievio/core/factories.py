@@ -14,34 +14,34 @@ Callers should continue to import from `sievio.core.factories`.
 
 from __future__ import annotations
 
+from .factories_context import make_http_client, make_repo_context_from_git
+from .factories_qc import make_qc_scorer, make_safety_scorer
 from .factories_sinks import (
+    DefaultJsonlPromptSinkFactory,
     OutputPaths,
+    ParquetDatasetSinkFactory,
     SinkFactoryResult,
     build_default_sinks,
     make_output_paths_for_github,
     make_output_paths_for_pdf,
-    DefaultJsonlPromptSinkFactory,
-    ParquetDatasetSinkFactory,
 )
 from .factories_sources import (
-    Sniff,
     BytesHandler,
-    UnsupportedBinary,
-    make_bytes_handlers,
-    make_local_dir_source,
-    make_github_zip_source,
-    make_web_pdf_source,
-    make_csv_text_source,
-    make_jsonl_text_source,
-    LocalDirSourceFactory,
-    GitHubZipSourceFactory,
-    WebPdfListSourceFactory,
-    WebPagePdfSourceFactory,
-    SQLiteSourceFactory,
     CsvTextSourceFactory,
+    GitHubZipSourceFactory,
+    LocalDirSourceFactory,
+    Sniff,
+    SQLiteSourceFactory,
+    UnsupportedBinary,
+    WebPagePdfSourceFactory,
+    WebPdfListSourceFactory,
+    make_bytes_handlers,
+    make_csv_text_source,
+    make_github_zip_source,
+    make_jsonl_text_source,
+    make_local_dir_source,
+    make_web_pdf_source,
 )
-from .factories_qc import make_qc_scorer, make_safety_scorer
-from .factories_context import make_http_client, make_repo_context_from_git
 
 __all__ = [
     "BytesHandler",

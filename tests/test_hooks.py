@@ -1,16 +1,17 @@
 import types
-from typing import Any, Iterable, Mapping
+from collections.abc import Iterable, Mapping
+from typing import Any
 
 import pytest
 
+from sievio.core.config import QCConfig, SievioConfig
 from sievio.core.dataset_card import DatasetCardHook
+from sievio.core.hooks import RunSummaryHook
 from sievio.core.interfaces import RunArtifacts, RunContext
 from sievio.core.pipeline import PipelineStats
-from sievio.core.config import SievioConfig, QCConfig
-from sievio.core.qc_controller import InlineQCHook, QCSummaryTracker
+from sievio.core.qc_controller import InlineQCHook
 from sievio.core.qc_post import PostQCHook
 from sievio.core.records import RunSummaryMeta
-from sievio.core.hooks import RunSummaryHook
 
 
 class DummySink:

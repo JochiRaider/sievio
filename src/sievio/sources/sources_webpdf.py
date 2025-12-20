@@ -4,18 +4,22 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Sequence, Dict, List, Set, Tuple
-from html.parser import HTMLParser
-from urllib.parse import urlparse, unquote, urljoin
-import urllib.parse, urllib.request, urllib.error
-import posixpath, re, io
+import io
+import posixpath
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from html.parser import HTMLParser
+from urllib.parse import unquote, urljoin, urlparse
 
-from ..core.interfaces import Source, FileItem
 from ..core import safe_http
-from ..core.config import PdfSourceConfig
-from ..core.log import get_logger
 from ..core.concurrency import Executor, ExecutorConfig
+from ..core.config import PdfSourceConfig
+from ..core.interfaces import FileItem, Source
+from ..core.log import get_logger
 
 __all__ = ["WebPdfListSource", "WebPagePdfSource"]
 
@@ -75,7 +79,7 @@ _CDISP_RE = re.compile(
     """
 )
 
-def _filename_from_content_disposition(hval: Optional[str]) -> Optional[str]:
+def _filename_from_content_disposition(hval: str | None) -> str | None:
     """Parses a Content-Disposition header for filename fields.
 
     Args:
@@ -140,13 +144,13 @@ class WebPdfListSource(Source):
         self,
         urls: Sequence[str],
         *,
-        timeout: Optional[int] = None,
-        max_pdf_bytes: Optional[int] = None,
-        require_pdf: Optional[bool] = None,
-        add_prefix: Optional[str] = None,
-        retries: Optional[int] = None,
-        config: Optional[PdfSourceConfig] = None,
-        client: Optional[safe_http.SafeHttpClient] = None,
+        timeout: int | None = None,
+        max_pdf_bytes: int | None = None,
+        require_pdf: bool | None = None,
+        add_prefix: str | None = None,
+        retries: int | None = None,
+        config: PdfSourceConfig | None = None,
+        client: safe_http.SafeHttpClient | None = None,
     ) -> None:
         """Initializes the list source with fetch configuration.
 
@@ -191,7 +195,7 @@ class WebPdfListSource(Source):
             method="GET",
         )
 
-    def _download(self, url: str) -> tuple[bytes, Dict[str, str], int]:
+    def _download(self, url: str) -> tuple[bytes, dict[str, str], int]:
         """Streams a URL into bytes with a size cap.
 
         Args:
@@ -272,7 +276,7 @@ class WebPdfListSource(Source):
     def _normalize_download_result(
         self,
         result,
-    ) -> tuple[bytes, Dict[str, str], int]:
+    ) -> tuple[bytes, dict[str, str], int]:
         """Normalizes download output to a uniform tuple shape."""
         if isinstance(result, tuple):
             if len(result) == 3:
@@ -290,10 +294,10 @@ class WebPdfListSource(Source):
         self,
         url: str,
         data: bytes,
-        headers: Dict[str, str],
-        used_names: Set[str],
+        headers: dict[str, str],
+        used_names: set[str],
         file_bytes: int,
-    ) -> Optional[FileItem]:
+    ) -> FileItem | None:
         """Builds a FileItem from downloaded PDF content."""
         cd_name = _filename_from_content_disposition(headers.get("Content-Disposition"))
         name = _sanitize_name(cd_name or _name_from_url(url))
@@ -330,7 +334,7 @@ class WebPdfListSource(Source):
 
     def iter_files(self) -> Iterable[FileItem]:
         """Yields downloaded PDFs as FileItem objects."""
-        used_names: Set[str] = set()
+        used_names: set[str] = set()
         total_urls = len(self.urls)
         success_count = 0
         skipped_count = 0
@@ -360,14 +364,14 @@ class WebPdfListSource(Source):
             )
             return
 
-        results: Dict[int, FileItem] = {}
+        results: dict[int, FileItem] = {}
 
-        def _worker(task: _PdfDownloadTask) -> Tuple[_PdfDownloadTask, List[tuple[str, bytes, Dict[str, str], int]]]:
+        def _worker(task: _PdfDownloadTask) -> tuple[_PdfDownloadTask, list[tuple[str, bytes, dict[str, str], int]]]:
             result = self._download(task.url)
             data, headers, file_size = self._normalize_download_result(result)
             return task, [(task.url, data, headers, file_size)]
 
-        def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, Dict[str, str], int]]) -> None:
+        def _writer(task: _PdfDownloadTask, payloads: Iterable[tuple[str, bytes, dict[str, str], int]]) -> None:
             nonlocal success_count, skipped_count
             for url, data, headers, file_size in payloads:
                 item = self._build_file_item(url, data, headers, used_names, file_size)
@@ -438,10 +442,10 @@ class _PdfLinkScraper(HTMLParser):
     """Tiny link scraper to collect PDF hrefs and <base href> (if present)."""
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
-        self.links: List[str] = []
-        self.base_href: Optional[str] = None
+        self.links: list[str] = []
+        self.base_href: str | None = None
 
-    def handle_starttag(self, tag: str, attrs: List[tuple[str, Optional[str]]]) -> None:
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
         at = dict(attrs)
         if tag.lower() == "base" and "href" in at and at["href"]:
             self.base_href = at["href"]
@@ -460,16 +464,16 @@ class WebPagePdfSource(Source):
         page_url: str,
         *,
         same_domain: bool = True,
-        max_links: Optional[int] = None,
-        match_regex: Optional[str] = None,
-        include_ambiguous: Optional[bool] = None,
-        timeout: Optional[int] = None,
-        max_pdf_bytes: Optional[int] = None,
-        require_pdf: Optional[bool] = None,
-        add_prefix: Optional[str] = None,
-        retries: Optional[int] = None,
-        config: Optional[PdfSourceConfig] = None,
-        client: Optional[safe_http.SafeHttpClient] = None,
+        max_links: int | None = None,
+        match_regex: str | None = None,
+        include_ambiguous: bool | None = None,
+        timeout: int | None = None,
+        max_pdf_bytes: int | None = None,
+        require_pdf: bool | None = None,
+        add_prefix: str | None = None,
+        retries: int | None = None,
+        config: PdfSourceConfig | None = None,
+        client: safe_http.SafeHttpClient | None = None,
     ) -> None:
         """Initializes the page scraper with discovery and download settings.
 
@@ -541,7 +545,7 @@ class WebPagePdfSource(Source):
             )
             return raw.decode("utf-8", errors="replace")
 
-    def _discover_pdf_links(self, html: str) -> List[str]:
+    def _discover_pdf_links(self, html: str) -> list[str]:
         """Extracts candidate PDF links from HTML content.
 
         Args:
@@ -558,8 +562,8 @@ class WebPagePdfSource(Source):
         base = urljoin(self.page_url, base)  # normalize
         base_host = urlparse(self.page_url).netloc
 
-        found: List[str] = []
-        seen: Set[str] = set()
+        found: list[str] = []
+        seen: set[str] = set()
         for href in scraper.links:
             abs_url = urljoin(base, href)
             parsed = urlparse(abs_url)

@@ -13,21 +13,22 @@ from __future__ import annotations
 import csv
 import hashlib
 import os
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Mapping
+from typing import Any
 
+from ..config import DEFAULT_QC_SCORER_ID, QCConfig, QCHeuristics, QCMode, SievioConfig
+from ..dedup_store import GlobalDedupStore
 from ..log import get_logger
-from ..config import QCConfig, QCHeuristics, DEFAULT_QC_SCORER_ID, SievioConfig, QCMode
 from ..qc_controller import QCSummaryTracker
 from ..qc_post import collect_qc_rows_from_jsonl, run_qc_over_jsonl
-from ..dedup_store import GlobalDedupStore
 from ..qc_utils import (
     TEXTY_LC,
     MinHashLSH,
     PerplexityModel,
+    SimHashWindowIndex,
     approx_tokens,
     ascii_ratio,
-    SimHashWindowIndex,
     code_complexity,
     gopher_quality,
     minhash_signature_for_text,
@@ -59,7 +60,7 @@ class JSONLScoreStats:
     scored_ok: int = 0
     parse_errors: int = 0
     score_errors: int = 0
-    error_examples: List[Dict[str, Any]] = field(default_factory=list)
+    error_examples: list[dict[str, Any]] = field(default_factory=list)
 
     def record_error(self, line_no: int, kind: str, exc: Exception, line: str) -> None:
         """Record an error and optionally stash a snippet for inspection.
@@ -86,7 +87,7 @@ class JSONLScoreStats:
             }
         )
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Return a JSON-serializable view of the current counters."""
         return {
             "total_lines": self.total_lines,
@@ -114,7 +115,7 @@ class JSONLQualityScorer:
     def __init__(
         self,
         *,
-        lm_model_id: Optional[str] = None,
+        lm_model_id: str | None = None,
         device: str = "cuda",
         dtype: str = "bfloat16",
         simhash_hamm_thresh: int = _DEFAULT_SIMHASH_HAMM,
@@ -128,7 +129,7 @@ class JSONLQualityScorer:
         enable_gopher: bool = True,
         gopher_weight: float = 0.10,
         heuristics: object | None = None,
-        global_dedup_path: Optional[str] = None,
+        global_dedup_path: str | None = None,
         global_dedup_read_only: bool = False,
         exact_dedup: bool = True,
     ):
@@ -164,20 +165,20 @@ class JSONLQualityScorer:
         # Heuristic overrides: constructor args override heuristics; heuristics override baked-in defaults.
         if heuristics is not None:
             if getattr(heuristics, "simhash_window", None) is not None and simhash_window == _DEFAULT_SIMHASH_WINDOW:
-                simhash_window = int(getattr(heuristics, "simhash_window"))
+                simhash_window = int(heuristics.simhash_window)
             if getattr(heuristics, "simhash_hamm_thresh", None) is not None and simhash_hamm_thresh == _DEFAULT_SIMHASH_HAMM:
-                simhash_hamm_thresh = int(getattr(heuristics, "simhash_hamm_thresh"))
+                simhash_hamm_thresh = int(heuristics.simhash_hamm_thresh)
             if getattr(heuristics, "enable_minhash", None) is not None and enable_minhash == True:
-                enable_minhash = bool(getattr(heuristics, "enable_minhash"))
+                enable_minhash = bool(heuristics.enable_minhash)
             if getattr(heuristics, "minhash_perms", None) is not None and minhash_perms == _DEFAULT_MINHASH_PERMS:
-                minhash_perms = int(getattr(heuristics, "minhash_perms"))
+                minhash_perms = int(heuristics.minhash_perms)
             if getattr(heuristics, "minhash_bands", None) is not None and minhash_bands == _DEFAULT_MINHASH_BANDS:
-                minhash_bands = int(getattr(heuristics, "minhash_bands"))
+                minhash_bands = int(heuristics.minhash_bands)
             if getattr(heuristics, "minhash_shingle_k", None) is not None and minhash_shingle_k == _DEFAULT_MINHASH_K:
-                minhash_shingle_k = int(getattr(heuristics, "minhash_shingle_k"))
+                minhash_shingle_k = int(heuristics.minhash_shingle_k)
             if getattr(heuristics, "minhash_jaccard_thresh", None) is not None and minhash_jaccard_thresh == _DEFAULT_MINHASH_JACCARD:
-                minhash_jaccard_thresh = float(getattr(heuristics, "minhash_jaccard_thresh"))
-        self.lm: Optional[PerplexityModel] = None
+                minhash_jaccard_thresh = float(heuristics.minhash_jaccard_thresh)
+        self.lm: PerplexityModel | None = None
         if lm_model_id:
             try:
                 self.lm = PerplexityModel(
@@ -243,7 +244,7 @@ class JSONLQualityScorer:
         """Reset scoring statistics for the next run."""
         self.last_stats = JSONLScoreStats()
 
-    def clone_for_parallel(self) -> "JSONLQualityScorer":
+    def clone_for_parallel(self) -> JSONLQualityScorer:
         """Return a fresh scorer with identical configuration and separate state.
 
         Returns:
@@ -251,7 +252,7 @@ class JSONLQualityScorer:
         """
         return JSONLQualityScorer(**self._init_kwargs)
 
-    def score_record(self, rec: Dict[str, Any]) -> Dict[str, Any]:
+    def score_record(self, rec: dict[str, Any]) -> dict[str, Any]:
         """Compute QC metrics for a single record and return the enriched dict.
 
         SimHash computes a 64-bit hash and compares against a recent window using
@@ -410,7 +411,7 @@ class JSONLQualityScorer:
         *,
         fail_on_error: bool = False,
         **kwargs: Any,
-    ) -> list[Dict[str, Any]]:
+    ) -> list[dict[str, Any]]:
         """Score a JSONL file by delegating to the shared QC driver."""
         qc_cfg: QCConfig = kwargs.pop("qc_cfg", None) or QCConfig(
             enabled=True,
@@ -450,7 +451,7 @@ class JSONLQualityScorer:
         return rows
 
 
-def write_csv(rows: Iterable[Dict[str, Any]], out_csv: str) -> str:
+def write_csv(rows: Iterable[dict[str, Any]], out_csv: str) -> str:
     """Write QC rows to CSV using a fixed column order.
 
     Args:
@@ -503,7 +504,7 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_csv: str) -> str:
         w = csv.DictWriter(f, fieldnames=cols)
         w.writeheader()
         for r in rows:
-            row_out: Dict[str, Any] = {}
+            row_out: dict[str, Any] = {}
             for k in cols:
                 val = r.get(k)
                 row_out[k] = "" if val is None else val
@@ -513,8 +514,8 @@ def write_csv(rows: Iterable[Dict[str, Any]], out_csv: str) -> str:
 
 def score_jsonl_to_csv(
     jsonl_path: str,
-    out_csv: Optional[str] = None,
-    lm_model_id: Optional[str] = None,
+    out_csv: str | None = None,
+    lm_model_id: str | None = None,
     device: str = "cuda",
     dtype: str = "bfloat16",
     simhash_hamm_thresh: int = 4,
@@ -595,7 +596,7 @@ class DefaultQualityScorerFactory:
 
     id = DEFAULT_QC_SCORER_ID
 
-    def build(self, options: Mapping[str, Any]) -> "JSONLQualityScorer":
+    def build(self, options: Mapping[str, Any]) -> JSONLQualityScorer:
         """Instantiate a JSONLQualityScorer using QCHeuristics options.
 
         Args:
@@ -636,7 +637,7 @@ except Exception:
     pass
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Deprecated console entry point; use the library API instead."""
     raise SystemExit(
         "sievio.core.extras.qc.main is deprecated; use the library API (JSONLQualityScorer/score_jsonl_to_csv) instead."

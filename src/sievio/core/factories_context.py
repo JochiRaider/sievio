@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from .interfaces import RepoContext
 from .safe_http import SafeHttpClient
@@ -24,7 +24,7 @@ __all__ = [
 ]
 
 
-def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
+def make_http_client(http_cfg: HttpConfig) -> SafeHttpClient:
     """
     Build (or reuse) the SafeHttpClient described by ``http_cfg``.
 
@@ -42,7 +42,7 @@ def make_http_client(http_cfg: "HttpConfig") -> "SafeHttpClient":
     return http_cfg.build_client()
 
 
-def make_repo_context_from_git(repo_root: Path | str) -> Optional[RepoContext]:
+def make_repo_context_from_git(repo_root: Path | str) -> RepoContext | None:
     """
     Infer a RepoContext from ``.git/config`` when the remote points at GitHub.
 
@@ -59,9 +59,9 @@ def make_repo_context_from_git(repo_root: Path | str) -> Optional[RepoContext]:
     except Exception:
         return None
 
-    current_remote: Optional[str] = None
-    origin_url: Optional[str] = None
-    fallback_url: Optional[str] = None
+    current_remote: str | None = None
+    origin_url: str | None = None
+    fallback_url: str | None = None
     remote_header = re.compile(r'\s*\[remote\s+"([^"]+)"\]')
     url_line = re.compile(r"^\s*url\s*=\s*([^\r\n]+)$")
 

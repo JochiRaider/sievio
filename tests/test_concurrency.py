@@ -3,7 +3,6 @@ import time
 
 import pytest
 
-from sievio.core.config import SievioConfig
 from sievio.core.concurrency import (
     Executor,
     ExecutorConfig,
@@ -11,6 +10,7 @@ from sievio.core.concurrency import (
     infer_executor_kind,
     process_items_parallel,
 )
+from sievio.core.config import SievioConfig
 
 
 def _process_one_echo(item):

@@ -19,25 +19,27 @@ Environment: set GITHUB_TOKEN or GH_TOKEN to avoid GitHub API rate limits.
 
 from __future__ import annotations
 
+import pathlib
+
 # Allow running from a source checkout without installing the package.
 import sys
-import pathlib
 from dataclasses import replace
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
+from collections.abc import Mapping, Sequence
 from pathlib import Path
-from typing import Any, Mapping, Optional, Sequence
+from typing import Any
 
 from sievio import SievioConfig, convert, load_config_from_path
-from sievio.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
 from sievio.cli.runner import default_paths_for_github, make_github_profile
 from sievio.core.builder import PipelineOverrides
 from sievio.core.chunk import ChunkPolicy
+from sievio.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
+from sievio.core.convert import DefaultExtractor
 from sievio.core.interfaces import RepoContext
 from sievio.core.log import configure_logging
 from sievio.core.registries import quality_scorer_registry
-from sievio.core.convert import DefaultExtractor
 from sievio.sources.githubio import parse_github_url
 
 # Optional extractor for KQL blocks inside Markdown
@@ -65,7 +67,7 @@ URL = "https://github.com/JochiRaider/URL_Research_Tool"
 # URL = "https://github.com/Bert-JanP/Hunting-Queries-Detection-Rules"
 # URL = "https://github.com/chinapandaman/PyPDFForm"
 # URL = "https://github.com/SystemsApproach/book"
-REF: Optional[str] = None  # e.g. "main", "v1.0.0", or a commit SHA (applied when URL has no ref)
+REF: str | None = None  # e.g. "main", "v1.0.0", or a commit SHA (applied when URL has no ref)
 
 # Workspace root and output directory for artifacts (portable path under the repo root):
 REPO_ROOT = Path(__file__).resolve().parents[1]
@@ -101,7 +103,7 @@ DISABLE_DEDUP = True
 # ──────────────────────────────────────────────────────────────────────────────
 
 
-def _apply_ref(url: str, ref: Optional[str]) -> str:
+def _apply_ref(url: str, ref: str | None) -> str:
     """
     Add a ref to a GitHub URL when one is not already present.
 
@@ -122,7 +124,7 @@ def _plan_output_paths(
     out_dir: Path,
     *,
     with_prompt: bool,
-) -> tuple[Path, Optional[Path], RepoContext]:
+) -> tuple[Path, Path | None, RepoContext]:
     jsonl_str, prompt_str, ctx = default_paths_for_github(
         url,
         out_dir=out_dir,

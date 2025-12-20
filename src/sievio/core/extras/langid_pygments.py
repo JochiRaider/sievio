@@ -4,7 +4,7 @@
 
 from __future__ import annotations
 
-from typing import Optional, Sequence
+from collections.abc import Sequence
 
 from ..language_id import CodeLanguagePrediction, LanguageConfig
 
@@ -21,7 +21,7 @@ class PygmentsCodeLanguageDetector:
         self._guess_for_filename = guess_lexer_for_filename
         self._cfg = cfg or LanguageConfig()
 
-    def detect_code(self, text: str, *, filename: str | None = None) -> Optional[CodeLanguagePrediction]:
+    def detect_code(self, text: str, *, filename: str | None = None) -> CodeLanguagePrediction | None:
         lexer = None
         try:
             if filename:

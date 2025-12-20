@@ -5,15 +5,16 @@
 
 from __future__ import annotations
 
+import gzip
+import json
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Dict, Any, Iterable, Iterator, Mapping, Optional, Sequence, TextIO
-import json
-import gzip
+from typing import Any, TextIO
 
-from ..core.interfaces import Source, FileItem, RepoContext
+from ..core.interfaces import FileItem, RepoContext, Source
 from ..core.log import get_logger
-from ..core.records import check_record_schema, STANDARD_META_FIELDS
+from ..core.records import STANDARD_META_FIELDS, check_record_schema
 
 log = get_logger(__name__)
 
@@ -31,9 +32,9 @@ class JSONLReadPolicy:
     """Limits and decoding controls for JSONL ingestion."""
 
     max_invalid_json_warnings: int = _MAX_INVALID_JSON_WARNINGS
-    max_line_chars: Optional[int] = _DEFAULT_MAX_LINE_CHARS
-    max_text_chars: Optional[int] = _DEFAULT_MAX_TEXT_CHARS
-    max_file_chars: Optional[int] = None
+    max_line_chars: int | None = _DEFAULT_MAX_LINE_CHARS
+    max_text_chars: int | None = _DEFAULT_MAX_TEXT_CHARS
+    max_file_chars: int | None = None
     decode_errors: str = "strict"
     max_oversized_line_warnings: int = 3
 
@@ -61,7 +62,7 @@ class JSONLTextSource(Source):
     """
 
     paths: Sequence[Path]
-    context: Optional[RepoContext] = None
+    context: RepoContext | None = None
     text_key: str = "text"
     check_schema: bool = True
     read_policy: JSONLReadPolicy = field(default_factory=JSONLReadPolicy)
@@ -202,8 +203,8 @@ def _iter_lines_with_limits(
 def _drain_oversized_line(
     fp: TextIO,
     *,
-    read_limit: Optional[int],
-    max_file_chars: Optional[int],
+    read_limit: int | None,
+    max_file_chars: int | None,
     total_chars: int,
     path: Path,
     stats: _LineReadStats,
@@ -224,7 +225,7 @@ def _drain_oversized_line(
             return total_chars, False
 
 
-def _extract_text(record: Dict[str, Any], key: str) -> Optional[str]:
+def _extract_text(record: dict[str, Any], key: str) -> str | None:
     """Extracts a string value from the given record by key."""
 
     val = record.get(key)
@@ -233,7 +234,7 @@ def _extract_text(record: Dict[str, Any], key: str) -> Optional[str]:
     return None
 
 
-def _derive_path(record: Dict[str, Any], fallback_name: str, lineno: int) -> str:
+def _derive_path(record: dict[str, Any], fallback_name: str, lineno: int) -> str:
     """Derives a path-like label for a record, falling back to line number."""
 
     meta = record.get("meta")
@@ -281,7 +282,7 @@ def _should_check_schema(record: Mapping[str, Any]) -> bool:
 def _open_jsonl(path: Path, *, errors: str):
     """Opens an uncompressed JSONL file for reading."""
 
-    return open(path, "r", encoding="utf-8", errors=errors)
+    return open(path, encoding="utf-8", errors=errors)
 
 
 def _open_jsonl_gz(path: Path, *, errors: str):

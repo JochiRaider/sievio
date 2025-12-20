@@ -9,6 +9,7 @@ for serializing and loading configurations from JSON and TOML.
 from __future__ import annotations
 
 import json
+
 try:  # pragma: no cover - optional dependency
     import tomllib  # Python 3.11+
 except ModuleNotFoundError:  # pragma: no cover
@@ -16,20 +17,29 @@ except ModuleNotFoundError:  # pragma: no cover
         import tomli as tomllib  # type: ignore[assignment]
     except Exception:  # pragma: no cover
         tomllib = None  # type: ignore[assignment]
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Sequence as ABCSequence
-from dataclasses import dataclass, field, replace, is_dataclass, fields
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Mapping, Optional, Sequence, Tuple, Type, TypeVar, Union, get_args, get_origin, get_type_hints, List, Literal
+from typing import (
+    Any,
+    Literal,
+    TypeVar,
+    Union,
+    get_args,
+    get_origin,
+    get_type_hints,
+)
 
 from .chunk import ChunkPolicy
+from .interfaces import Extractor, FileExtractor, Record, RepoContext, Sink, Source
 from .language_id import LanguageConfig
-from .interfaces import Extractor, FileExtractor, RepoContext, Source, Sink, Record, QualityScorer
-from .log import configure_logging, PACKAGE_LOGGER_NAME
+from .log import PACKAGE_LOGGER_NAME, configure_logging
 from .safe_http import SafeHttpClient
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
-BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy]], Optional[Iterable[Record]]]
+BytesHandler = Callable[[bytes, str, RepoContext | None, ChunkPolicy | None], Iterable[Record] | None]
 # ---------------------------------------------------------------------------
 # QC mode helpers
 # ---------------------------------------------------------------------------
@@ -56,7 +66,7 @@ class QCMode:
     WITH_OFF = ALL | {OFF}
 
     @classmethod
-    def normalize(cls, value: Optional[str]) -> str:
+    def normalize(cls, value: str | None) -> str:
         mode = (value or cls.INLINE).strip().lower()
         if mode not in cls.WITH_OFF:
             raise ValueError(f"Invalid QC mode: {value!r}. Expected one of {sorted(cls.WITH_OFF)}")
@@ -100,13 +110,13 @@ class LocalDirSourceConfig:
         read_prefix_for_large_files_only (bool): When True, apply
             ``read_prefix_bytes`` only to files larger than that limit.
     """    
-    include_exts: Optional[set[str]] = None
-    exclude_exts: Optional[set[str]] = None
+    include_exts: set[str] | None = None
+    exclude_exts: set[str] | None = None
     skip_hidden: bool = True
     follow_symlinks: bool = False
     respect_gitignore: bool = True
-    max_file_bytes: Optional[int] = 200 * 1024 * 1024
-    read_prefix_bytes: Optional[int] = None
+    max_file_bytes: int | None = 200 * 1024 * 1024
+    read_prefix_bytes: int | None = None
     read_prefix_for_large_files_only: bool = True
 
 
@@ -127,12 +137,12 @@ class GitHubSourceConfig:
         exclude_exts (set[str] | None): Optional blacklist of file
             extensions to exclude.
     """    
-    per_file_cap: Optional[int] = 200 * 1024 * 1024
+    per_file_cap: int | None = 200 * 1024 * 1024
     max_total_uncompressed: int = 2 * 1024 * 1024 * 1024
     max_members: int = 200_000
     max_compression_ratio: float = 100.0
-    include_exts: Optional[set[str]] = None
-    exclude_exts: Optional[set[str]] = None
+    include_exts: set[str] | None = None
+    exclude_exts: set[str] | None = None
 
 
 @dataclass(slots=True)
@@ -151,9 +161,9 @@ class PdfSourceConfig:
     include_ambiguous: bool = False
     retries: int = 1
     user_agent: str = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
-    client: Optional[SafeHttpClient] = None
+    client: SafeHttpClient | None = None
     download_max_workers: int = 4  # 0 or negative → auto based on URL count
-    download_submit_window: Optional[int] = None
+    download_submit_window: int | None = None
     download_executor_kind: str = "thread"
 
 
@@ -169,7 +179,7 @@ class CsvSourceConfig:
         encoding (str): Text encoding used to decode CSV bytes.
     """    
     default_text_column: str = "text"
-    default_delimiter: Optional[str] = None
+    default_delimiter: str | None = None
     encoding: str = "utf-8"
 
 
@@ -185,9 +195,9 @@ class SQLiteSourceConfig:
             downloaded for remote databases.
         retries (int): Number of times to retry failed downloads.
     """    
-    default_text_columns: Tuple[str, ...] = ("text",)
+    default_text_columns: tuple[str, ...] = ("text",)
     batch_size: int = 1000
-    download_max_bytes: Optional[int] = None
+    download_max_bytes: int | None = None
     retries: int = 2
 
 
@@ -209,7 +219,7 @@ class SourceConfig:
         defaults (dict[str, dict[str, Any]]): Per-kind default options
             keyed by SourceSpec.kind or plugin-defined ids.
     """    
-    specs: List["SourceSpec"] = field(default_factory=list)
+    specs: list[SourceSpec] = field(default_factory=list)
     sources: Sequence[Source] = field(default_factory=tuple)
     local: LocalDirSourceConfig = field(default_factory=LocalDirSourceConfig)
     github: GitHubSourceConfig = field(default_factory=GitHubSourceConfig)
@@ -217,7 +227,7 @@ class SourceConfig:
     csv: CsvSourceConfig = field(default_factory=CsvSourceConfig)
     sqlite: SQLiteSourceConfig = field(default_factory=SQLiteSourceConfig)
     # Generic per-kind defaults, keyed by SourceSpec.kind or a plugin-defined id.
-    defaults: Dict[str, Dict[str, Any]] = field(default_factory=dict)
+    defaults: dict[str, dict[str, Any]] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -237,10 +247,10 @@ class DecodeConfig:
         max_bytes_per_file (int | None): Soft cap on bytes passed to the
             decoder per file.
     """
-    normalize: Optional[str] = "NFC"
+    normalize: str | None = "NFC"
     strip_controls: bool = True
     fix_mojibake: bool = True
-    max_bytes_per_file: Optional[int] = None  # Bytes passed to the decoder per file (soft cap).
+    max_bytes_per_file: int | None = None  # Bytes passed to the decoder per file (soft cap).
 
 
 @dataclass(slots=True)
@@ -256,7 +266,7 @@ class ChunkConfig:
             metadata is attached to records.
     """    
     policy: ChunkPolicy = field(default_factory=ChunkPolicy)
-    tokenizer_name: Optional[str] = None
+    tokenizer_name: str | None = None
     attach_language_metadata: bool = True
 
 
@@ -297,13 +307,13 @@ class PipelineConfig:
     """
 
     extractors: Sequence[Extractor] = field(default_factory=tuple)
-    file_extractor: Optional[FileExtractor] = None
-    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] = field(default_factory=tuple)
+    file_extractor: FileExtractor | None = None
+    bytes_handlers: Sequence[tuple[Sniff, BytesHandler]] = field(default_factory=tuple)
     max_workers: int = 0
-    submit_window: Optional[int] = None
+    submit_window: int | None = None
     fail_fast: bool = False
     executor_kind: str = "auto"
-    max_error_rate: Optional[float] = None
+    max_error_rate: float | None = None
 
 
 @dataclass(slots=True, frozen=True)
@@ -354,16 +364,16 @@ class SinkConfig:
         defaults (dict[str, dict[str, Any]]): Per-kind default options
             keyed by SinkSpec.kind.
     """    
-    specs: List["SinkSpec"] = field(default_factory=list)
+    specs: list[SinkSpec] = field(default_factory=list)
     sinks: Sequence[Sink] = field(default_factory=tuple)
-    context: Optional[RepoContext] = None
+    context: RepoContext | None = None
     output_dir: Path = Path(".")
-    primary_jsonl_name: Optional[str] = None
+    primary_jsonl_name: str | None = None
     prompt: PromptConfig = field(default_factory=PromptConfig)
     compress_jsonl: bool = False
     jsonl_basename: str = "data"
     # Generic per-kind defaults for sinks, keyed by SinkSpec.kind.
-    defaults: Dict[str, Dict[str, Any]] = field(default_factory=dict)  # Merge with spec.options via build_config_from_defaults_and_options.
+    defaults: dict[str, dict[str, Any]] = field(default_factory=dict)  # Merge with spec.options via build_config_from_defaults_and_options.
 
 
 @dataclass(slots=True)
@@ -384,10 +394,10 @@ class DatasetCardConfig:
     """    
     enabled: bool = True
     split_name: str = "train"
-    license: Optional[Union[str, Sequence[str]]] = None
-    task_categories: Optional[Union[str, Sequence[str]]] = None
-    task_ids: Optional[Union[str, Sequence[str]]] = None
-    tags: Optional[Union[str, Sequence[str]]] = None
+    license: str | Sequence[str] | None = None
+    task_categories: str | Sequence[str] | None = None
+    task_ids: str | Sequence[str] | None = None
+    tags: str | Sequence[str] | None = None
 
 
 @dataclass(slots=True)
@@ -395,7 +405,7 @@ class SourceSpec:
     """Declarative source entry; factories map kind -> concrete sources."""
 
     kind: str
-    options: Dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -409,7 +419,7 @@ class SinkSpec:
     """
 
     kind: str
-    options: Dict[str, Any] = field(default_factory=dict)
+    options: dict[str, Any] = field(default_factory=dict)
 
 
 # ---------------------------------------------------------------------------
@@ -430,8 +440,8 @@ class HttpConfig:
     """
     timeout: float = 60.0
     max_redirects: int = 5
-    allowed_redirect_suffixes: Tuple[str, ...] = ("github.com",)
-    client: Optional[SafeHttpClient] = None
+    allowed_redirect_suffixes: tuple[str, ...] = ("github.com",)
+    client: SafeHttpClient | None = None
     as_global: bool = True
 
     def build_client(self) -> SafeHttpClient:
@@ -548,7 +558,7 @@ class SafetyConfig:
         self.mode = mode
         return mode
 
-    def validate(self, qc_cfg: "QCConfig") -> None:
+    def validate(self, qc_cfg: QCConfig) -> None:
         """Validate interplay with QC settings.
 
         SafetyConfig.mode is independent of QCConfig.mode. This method does not
@@ -605,19 +615,19 @@ class QCConfig:
     write_signals_sidecar: bool = False
     signals_suffix: str | None = None
     signals_format: Literal["csv", "parquet"] = "csv"
-    scorer: Optional[Any] = None  # optional extra
-    scorer_id: Optional[str] = None  # None → registry default (first registered scorer)
-    scorer_options: Dict[str, Any] = field(default_factory=dict)
-    heuristics: Optional[QCHeuristics] = None  # Convenience mirror of scorer_options["heuristics"] when normalized.
+    scorer: Any | None = None  # optional extra
+    scorer_id: str | None = None  # None → registry default (first registered scorer)
+    scorer_options: dict[str, Any] = field(default_factory=dict)
+    heuristics: QCHeuristics | None = None  # Convenience mirror of scorer_options["heuristics"] when normalized.
     fail_on_error: bool = False
-    min_score: Optional[float] = 60.0
+    min_score: float | None = 60.0
     drop_near_dups: bool = False
     exact_dedup: bool = True
     mode: str = QCMode.INLINE
     parallel_post: bool = False
-    post_executor_kind: Optional[str] = None
-    post_max_workers: Optional[int] = None
-    post_submit_window: Optional[int] = None
+    post_executor_kind: str | None = None
+    post_max_workers: int | None = None
+    post_submit_window: int | None = None
     safety: SafetyConfig = field(default_factory=SafetyConfig)
 
     def normalize_mode(self) -> str:
@@ -664,7 +674,7 @@ class LoggingConfig:
     """
     level: int | str = "INFO"
     propagate: bool = False
-    fmt: Optional[str] = "%(asctime)s %(levelname)s %(name)s: %(message)s"
+    fmt: str | None = "%(asctime)s %(levelname)s %(name)s: %(message)s"
     logger_name: str = PACKAGE_LOGGER_NAME
 
     def apply(self) -> None:
@@ -691,18 +701,18 @@ class RunMetadata:
     This captures paths to primary outputs plus arbitrary user-defined
     key/value pairs under ``extra``.
     """    
-    primary_jsonl: Optional[str] = None
-    prompt_path: Optional[str] = None
-    repo_url: Optional[str] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
+    primary_jsonl: str | None = None
+    prompt_path: str | None = None
+    repo_url: str | None = None
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Convert the metadata to a JSON-serializable dictionary.
 
         Only non-None core fields are included; ``extra`` is
         shallow-copied.
         """        
-        data: Dict[str, Any] = {}
+        data: dict[str, Any] = {}
         if self.primary_jsonl is not None:
             data["primary_jsonl"] = self.primary_jsonl
         if self.prompt_path is not None:
@@ -714,7 +724,7 @@ class RunMetadata:
         return data
 
     @classmethod
-    def from_dict(cls, data: Optional[Mapping[str, Any]]) -> "RunMetadata":
+    def from_dict(cls, data: Mapping[str, Any] | None) -> RunMetadata:
         """Create a RunMetadata instance from a mapping.
 
         Args:
@@ -730,7 +740,7 @@ class RunMetadata:
         known = {k: data.get(k) for k in ("primary_jsonl", "prompt_path", "repo_url")}
         return cls(extra=extra, **{k: v for k, v in known.items() if v is not None})
 
-    def merged(self, mapping: Mapping[str, Any]) -> "RunMetadata":
+    def merged(self, mapping: Mapping[str, Any]) -> RunMetadata:
         """Return a new metadata object merged with values from mapping.
 
         Core attributes on this instance are only filled in when
@@ -896,7 +906,7 @@ class SievioConfig:
     # -------------------------
     # Serialization helpers
     # -------------------------
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """
         Return a JSON-serializable representation of this configuration.
 
@@ -921,7 +931,7 @@ class SievioConfig:
         return str(target)
 
     @classmethod
-    def from_dict(cls: Type[T], data: Mapping[str, Any]) -> T:
+    def from_dict(cls: type[T], data: Mapping[str, Any]) -> T:
         """Instantiate a SievioConfig from a mapping.
 
         Args:
@@ -934,7 +944,7 @@ class SievioConfig:
         return _dataclass_from_dict(cls, data)
 
     @classmethod
-    def from_json(cls: Type[T], path: Path | str) -> T:
+    def from_json(cls: type[T], path: Path | str) -> T:
         """Load a configuration from a JSON file.
 
         Args:
@@ -947,7 +957,7 @@ class SievioConfig:
         return cls.from_dict(payload)
 
     @classmethod
-    def from_toml(cls: Type[T], path: Path | str) -> T:
+    def from_toml(cls: type[T], path: Path | str) -> T:
         """
         Load a SievioConfig from a TOML file.
 
@@ -987,7 +997,7 @@ def load_config_from_path(path: str | Path) -> SievioConfig:
     raise ValueError(f"Unsupported config extension {p.suffix!r}; expected .toml or .json.")
 
 
-_SKIP_FIELDS: Dict[Type[Any], set[str]] = {
+_SKIP_FIELDS: dict[type[Any], set[str]] = {
     SourceConfig: {"sources"},
     SinkConfig: {"sinks"},
     PipelineConfig: {"extractors", "bytes_handlers", "file_extractor"},
@@ -999,7 +1009,7 @@ C = TypeVar("C")
 
 
 def validate_options_for_dataclass(
-    cfg_type: Type[C],
+    cfg_type: type[C],
     *,
     options: Mapping[str, Any] | None,
     ignore_keys: Iterable[str] = (),
@@ -1029,7 +1039,7 @@ def validate_options_for_dataclass(
 
 
 def build_config_from_defaults_and_options(
-    cfg_type: Type[C],
+    cfg_type: type[C],
     *,
     defaults: Mapping[str, Any] | None,
     options: Mapping[str, Any] | None,
@@ -1067,9 +1077,9 @@ def build_config_from_defaults_and_options(
     return cfg_type(**merged)  # type: ignore[arg-type]
 
 
-def _dataclass_to_dict(obj: Any) -> Dict[str, Any]:
+def _dataclass_to_dict(obj: Any) -> dict[str, Any]:
     """Serialize dataclasses to JSON-friendly dicts, skipping None and non-serializable fields."""
-    result: Dict[str, Any] = {}
+    result: dict[str, Any] = {}
     obj_type = type(obj)
     skip = _SKIP_FIELDS.get(obj_type, set())
     for f in fields(obj):
@@ -1101,7 +1111,7 @@ def _serialize_value(value: Any) -> Any:
     if isinstance(value, (list, tuple)):
         return [_serialize_value(v) for v in value]
     if isinstance(value, dict):
-        out: Dict[str, Any] = {}
+        out: dict[str, Any] = {}
         for k, v in value.items():
             serialized = _serialize_value(v)
             if serialized is not None:
@@ -1112,7 +1122,7 @@ def _serialize_value(value: Any) -> Any:
     return value if isinstance(value, (dict, list)) else None
 
 
-def _dataclass_from_dict(cls: Type[T], data: Mapping[str, Any] | None) -> T:
+def _dataclass_from_dict(cls: type[T], data: Mapping[str, Any] | None) -> T:
     """Instantiate a dataclass of type `cls` from a mapping.
 
     Args:
@@ -1127,7 +1137,7 @@ def _dataclass_from_dict(cls: Type[T], data: Mapping[str, Any] | None) -> T:
         return cls()  # type: ignore[call-arg]
     type_hints = get_type_hints(cls)
 
-    kwargs: Dict[str, Any] = {}
+    kwargs: dict[str, Any] = {}
     for f in fields(cls):
         if f.name not in data:
             continue
@@ -1168,7 +1178,7 @@ def _coerce_value(expected_type: Any, value: Any) -> Any:
     return value
 
 
-def _strip_optional(typ: Any) -> Tuple[Any, bool]:
+def _strip_optional(typ: Any) -> tuple[Any, bool]:
     """Strip Optional from a type annotation.
 
 

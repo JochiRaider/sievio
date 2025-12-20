@@ -5,13 +5,14 @@ from __future__ import annotations
 
 import json
 from collections import Counter
+from collections.abc import Mapping, MutableMapping, Sequence
 from dataclasses import asdict, dataclass, field, is_dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Iterable, Mapping, MutableMapping, Sequence
+from typing import Any
 
 from .config import SievioConfig
-from .interfaces import RunLifecycleHook, RunContext, RunSummaryView, RunArtifacts
+from .interfaces import RunArtifacts, RunContext, RunLifecycleHook, RunSummaryView
 from .language_id import CODE_EXTS, DOC_EXTS
 from .log import get_logger
 from .qc_utils import open_jsonl_maybe_gz
@@ -175,7 +176,7 @@ class CardFragment:
         return data
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any]) -> "CardFragment":
+    def from_dict(cls, data: Mapping[str, Any]) -> CardFragment:
         """Reconstruct a fragment from a serialized dictionary."""
         schema_version = int(data.get("schema_version") or 0)
         if schema_version != CARD_FRAGMENT_SCHEMA_VERSION:
@@ -347,7 +348,7 @@ def _coerce_numeric(value: Any) -> float | None:
         return None
 
 
-def _aggregate_signal_stats(fragments: Sequence["CardFragment"]) -> dict[str, dict[str, Any]] | None:
+def _aggregate_signal_stats(fragments: Sequence[CardFragment]) -> dict[str, dict[str, Any]] | None:
     """Aggregate scalar quality signals for the dataset card.
 
     Source: qc_summary['screeners']['quality']['signal_stats'] (quality only). Safety/other screeners are
@@ -455,7 +456,7 @@ def _format_signal_stats_for_card(signal_stats: Mapping[str, Any] | None) -> str
     return "\n".join(rendered) if rendered else "[More Information Needed]"
 
 
-def _aggregate_screening_summaries(fragments: Sequence["CardFragment"]) -> dict[str, Any] | None:
+def _aggregate_screening_summaries(fragments: Sequence[CardFragment]) -> dict[str, Any] | None:
     """Merge per-fragment screener stats (quality, safety, future) for the card."""
     screeners_merged: dict[str, dict[str, Any]] = {}
     top_safety_flags: Counter[str] = Counter()
@@ -668,7 +669,7 @@ def build_card_fragment_for_run(
     )
 
     extra: dict[str, Any] = {
-        "run_created_at": datetime.now(timezone.utc).isoformat(),
+        "run_created_at": datetime.now(UTC).isoformat(),
         "pipeline_version": _package_version(),
     }
     if stats_dict:

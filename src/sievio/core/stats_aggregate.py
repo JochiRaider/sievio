@@ -10,14 +10,16 @@ while clearing non-additive QC fields.
 
 from __future__ import annotations
 
-from typing import Any, Dict, Mapping, Sequence
+from collections.abc import Mapping, Sequence
+from typing import Any
 
 
-def _init_qc_template(sample_qc: Dict[str, Any]) -> Dict[str, Any]:
+def _init_qc_template(sample_qc: dict[str, Any]) -> dict[str, Any]:
     """
     Build an aggregation template using config fields from sample_qc and zeroed counts.
     """
-    tmpl: Dict[str, Any] = {
+    tmpl: dict[str, Any] = {
+        "schema_version": sample_qc.get("schema_version"),
         "enabled": sample_qc.get("enabled"),
         "mode": sample_qc.get("mode"),
         "min_score": sample_qc.get("min_score"),
@@ -34,7 +36,7 @@ def _init_qc_template(sample_qc: Dict[str, Any]) -> Dict[str, Any]:
     return tmpl
 
 
-def _init_screener_template(sample: Mapping[str, Any], *, default_id: str) -> Dict[str, Any]:
+def _init_screener_template(sample: Mapping[str, Any], *, default_id: str) -> dict[str, Any]:
     """Build a zeroed-out screener payload preserving config fields."""
     return {
         "id": sample.get("id") or default_id,
@@ -51,7 +53,7 @@ def _init_screener_template(sample: Mapping[str, Any], *, default_id: str) -> Di
     }
 
 
-def _accumulate_qc_counts(out_qc: Dict[str, Any], qc: Dict[str, Any]) -> None:
+def _accumulate_qc_counts(out_qc: dict[str, Any], qc: dict[str, Any]) -> None:
     """
     Add numeric QC counters and merge safety flag counts into out_qc.
     """
@@ -81,11 +83,11 @@ def _accumulate_qc_counts(out_qc: Dict[str, Any], qc: Dict[str, Any]) -> None:
         bucket["signal_stats"] = {}  # non-additive; cleared during aggregation
 
 
-def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+def merge_pipeline_stats(stats_dicts: Sequence[dict[str, Any]]) -> dict[str, Any]:
     """
     Merge a sequence of PipelineStats.as_dict()-style dictionaries.
     """
-    merged: Dict[str, Any] = {
+    merged: dict[str, Any] = {
         "files": 0,
         "attempted_files": 0,
         "bytes": 0,
@@ -96,7 +98,7 @@ def merge_pipeline_stats(stats_dicts: Sequence[Dict[str, Any]]) -> Dict[str, Any
         "by_ext": {},
         "qc": {},
     }
-    qc_agg: Dict[str, Any] | None = None
+    qc_agg: dict[str, Any] | None = None
 
     for data in stats_dicts:
         merged["files"] += int(data.get("files", 0))

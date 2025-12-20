@@ -7,13 +7,14 @@ from __future__ import annotations
 import json
 import os
 import xml.etree.ElementTree as ET
+from collections.abc import Iterable
 from io import BytesIO
-from typing import Dict, Iterable, Optional, Any
+from typing import Any
 
 from Evtx.Evtx import Evtx  # python-evtx
 
 from ..core.chunk import ChunkPolicy
-from ..core.interfaces import RepoContext, Record
+from ..core.interfaces import Record, RepoContext
 from ..core.records import build_record
 
 __all__ = ["sniff_evtx", "handle_evtx"]
@@ -67,7 +68,7 @@ def _pick(elem: ET.Element | None, tag: str, attr: str | None = None) -> str | N
     return (found.text or "").strip() or None
 
 
-def _put_coalescing(m: Dict[str, Any], k: str, v: str) -> None:
+def _put_coalescing(m: dict[str, Any], k: str, v: str) -> None:
     """Accumulate duplicate Data Name= keys as lists, preserving order."""
     if k in m:
         if isinstance(m[k], list):
@@ -78,7 +79,7 @@ def _put_coalescing(m: Dict[str, Any], k: str, v: str) -> None:
         m[k] = v
 
 
-def _parse_event_xml(xml_text: str) -> Dict[str, Any]:
+def _parse_event_xml(xml_text: str) -> dict[str, Any]:
     """Parse Windows Event XML into a compact dict.
 
     Pulls core fields from System, maps EventData entries, and preserves
@@ -105,7 +106,7 @@ def _parse_event_xml(xml_text: str) -> Dict[str, Any]:
         if prov is not None:
             provider = prov.attrib.get("Name") or prov.attrib.get("Guid")
 
-    out: Dict[str, Any] = {
+    out: dict[str, Any] = {
         "provider": provider,
         "event_id": _pick(system, "EventID"),
         "level": _pick(system, "Level"),
@@ -115,7 +116,7 @@ def _parse_event_xml(xml_text: str) -> Dict[str, Any]:
         "timestamp": _pick(system, "TimeCreated", "SystemTime"),
     }
 
-    data_map: Dict[str, Any] = {}
+    data_map: dict[str, Any] = {}
     unnamed: list[str] = []
     if eventdata is not None:
         for d in list(eventdata):
@@ -217,10 +218,10 @@ def _env_wants_recovery() -> bool:
 def handle_evtx(
     data: bytes,
     rel: str,
-    ctx: Optional[RepoContext],
-    policy: Optional[ChunkPolicy],
+    ctx: RepoContext | None,
+    policy: ChunkPolicy | None,
     *,
-    allow_recovery: Optional[bool] = None,
+    allow_recovery: bool | None = None,
 ) -> Iterable[Record]:
     """Stream one normalized JSON record per EVTX event.
 
@@ -250,7 +251,7 @@ def handle_evtx(
     """
     context_meta = (ctx.as_meta_seed() or None) if ctx else None
 
-    def _with_context(extra: Dict[str, Any]) -> Dict[str, Any]:
+    def _with_context(extra: dict[str, Any]) -> dict[str, Any]:
         if context_meta:
             merged = dict(context_meta)
             merged.update(extra)

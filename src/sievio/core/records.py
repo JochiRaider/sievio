@@ -4,17 +4,23 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field, fields
-from pathlib import Path
-from urllib.parse import urlparse
-from typing import Any, Dict, Mapping, MutableMapping, Optional, Tuple, TYPE_CHECKING, TypedDict, NotRequired, cast
 import hashlib
 import logging
+from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, field, fields
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    NotRequired,
+    TypedDict,
+    cast,
+)
+from urllib.parse import urlparse
 
 from .chunk import count_tokens
 from .language_id import (
-    LanguageConfig,
     DEFAULT_LANGCFG,
+    LanguageConfig,
     guess_lang_from_path,
 )
 from .log import get_logger
@@ -161,7 +167,7 @@ class QualitySignals(TypedDict, total=False):
     dup_family_id: NotRequired[str]
 
 
-def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], QualitySignals]:
+def filter_qc_meta(qc_result: Mapping[str, Any]) -> tuple[dict[str, Any], QualitySignals]:
     """Partition a QC scorer result into canonical and extra signals.
 
     Canonical QC fields are allowed at the top level of ``record["meta"]``
@@ -176,8 +182,8 @@ def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Qualit
         Tuple[Dict[str, Any], QualitySignals]: Canonical QC fields and the
         remaining QC signals.
     """
-    canonical: Dict[str, Any] = {}
-    qc_signals: Dict[str, Any] = {}
+    canonical: dict[str, Any] = {}
+    qc_signals: dict[str, Any] = {}
 
     for key, value in qc_result.items():
         if key == "score":
@@ -208,11 +214,11 @@ def filter_qc_meta(qc_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Qualit
     return canonical, cast(QualitySignals, qc_signals)
 
 
-def filter_safety_meta(safety_result: Mapping[str, Any]) -> Tuple[Dict[str, Any], Dict[str, Any]]:
+def filter_safety_meta(safety_result: Mapping[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
     """Partition a safety scorer result into canonical meta fields and signals."""
 
-    canonical: Dict[str, Any] = {}
-    safety_signals: Dict[str, Any] = {}
+    canonical: dict[str, Any] = {}
+    safety_signals: dict[str, Any] = {}
 
     for key, value in safety_result.items():
         if key in SAFETY_META_FIELDS:
@@ -266,7 +272,7 @@ def check_record_schema(record: Mapping[str, Any], logger: Any | None = None) ->
         )
 
 
-def _meta_to_dict(obj: Any) -> Dict[str, Any]:
+def _meta_to_dict(obj: Any) -> dict[str, Any]:
     """Flatten dataclass fields and extras into a dictionary.
 
     Skips ``None`` values and prefers core fields over entries duplicated in
@@ -278,7 +284,7 @@ def _meta_to_dict(obj: Any) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Dictionary representation without ``None`` values.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
     if obj is None:
         return out
     for f in fields(obj):
@@ -330,43 +336,43 @@ class RecordMeta:
     """
 
     kind: str = "code"
-    source: Optional[str] = None
-    repo: Optional[str] = None
-    path: Optional[str] = None
-    url: Optional[str] = None
-    source_domain: Optional[str] = None
-    license: Optional[str] = None
-    lang: Optional[str] = None
-    lang_score: Optional[float] = None
-    perplexity: Optional[float] = None
-    ppl_bucket: Optional[str] = None
+    source: str | None = None
+    repo: str | None = None
+    path: str | None = None
+    url: str | None = None
+    source_domain: str | None = None
+    license: str | None = None
+    lang: str | None = None
+    lang_score: float | None = None
+    perplexity: float | None = None
+    ppl_bucket: str | None = None
     chunk_id: int = 1
     n_chunks: int = 1
     encoding: str = "utf-8"
     had_replacement: bool = False
-    sha256: Optional[str] = None
-    approx_tokens: Optional[int] = None
-    tokens: Optional[int] = None
-    bytes: Optional[int] = None
-    file_bytes: Optional[int] = None
-    truncated_bytes: Optional[int] = None
-    nlines: Optional[int] = None
-    file_nlines: Optional[int] = None
+    sha256: str | None = None
+    approx_tokens: int | None = None
+    tokens: int | None = None
+    bytes: int | None = None
+    file_bytes: int | None = None
+    truncated_bytes: int | None = None
+    nlines: int | None = None
+    file_nlines: int | None = None
     schema_version: str = RECORD_META_SCHEMA_VERSION
-    extra: Dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize metadata to a dictionary, omitting ``None`` values."""
         return _meta_to_dict(self)
 
     @classmethod
     def from_seed(
         cls,
-        seed: Optional[Mapping[str, Any]] = None,
+        seed: Mapping[str, Any] | None = None,
         *,
-        kind: Optional[str] = None,
+        kind: str | None = None,
         **overrides: Any,
-    ) -> "RecordMeta":
+    ) -> RecordMeta:
         """Construct a RecordMeta from a seed mapping and optional overrides.
 
         Args:
@@ -383,7 +389,7 @@ class RecordMeta:
             data["kind"] = kind
         data.update(overrides)
         field_names = {f.name for f in fields(cls)}
-        extra: Dict[str, Any] = {}
+        extra: dict[str, Any] = {}
         for key in list(data.keys()):
             if key not in field_names:
                 value = data.pop(key)
@@ -407,13 +413,13 @@ class RunSummaryMeta:
 
     kind: str = "run_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
-    config: Dict[str, Any] = field(default_factory=dict)
-    stats: Dict[str, Any] = field(default_factory=dict)
-    qc_summary: Optional[Dict[str, Any]] = None
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    stats: dict[str, Any] = field(default_factory=dict)
+    qc_summary: dict[str, Any] | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize run summary metadata to a dictionary."""
         return _meta_to_dict(self)
 
@@ -424,10 +430,10 @@ class QCSummaryMeta:
 
     kind: str = "qc_summary"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
-    summary: Dict[str, Any] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    summary: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize QC summary metadata to a dictionary."""
         return _meta_to_dict(self)
 
@@ -438,16 +444,16 @@ class RunHeaderMeta:
 
     kind: str = "run_header"
     schema_version: str = SUMMARY_META_SCHEMA_VERSION
-    config: Dict[str, Any] = field(default_factory=dict)
-    metadata: Dict[str, Any] = field(default_factory=dict)
-    extra: Dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    extra: dict[str, Any] = field(default_factory=dict)
 
-    def to_dict(self) -> Dict[str, Any]:
+    def to_dict(self) -> dict[str, Any]:
         """Serialize run header metadata to a dictionary."""
         return _meta_to_dict(self)
 
 
-def ensure_meta_dict(record: MutableMapping[str, Any]) -> Dict[str, Any]:
+def ensure_meta_dict(record: MutableMapping[str, Any]) -> dict[str, Any]:
     """Return record['meta'] as a dict, creating an empty one if needed."""
     meta = record.get("meta")
     if not isinstance(meta, dict):
@@ -456,7 +462,7 @@ def ensure_meta_dict(record: MutableMapping[str, Any]) -> Dict[str, Any]:
     return meta
 
 
-def merge_meta_defaults(record: MutableMapping[str, Any], defaults: Mapping[str, Any]) -> Dict[str, Any]:
+def merge_meta_defaults(record: MutableMapping[str, Any], defaults: Mapping[str, Any]) -> dict[str, Any]:
     """Fill in default meta values without overriding existing entries."""
     meta = ensure_meta_dict(record)
     for key, value in defaults.items():
@@ -483,24 +489,24 @@ def build_record(
     *,
     text: str,
     rel_path: str,
-    repo_full_name: Optional[str] = None,  # e.g., "owner/repo"
-    repo_url: Optional[str] = None,        # e.g., "https://github.com/owner/repo"
-    license_id: Optional[str] = None,      # SPDX id like 'Apache-2.0'
-    url: Optional[str] = None,              # canonical file URL when available
-    source_domain: Optional[str] = None,    # hostname derived from URL/source
-    lang: Optional[str] = None,            # language label (Title Case preferred)
+    repo_full_name: str | None = None,  # e.g., "owner/repo"
+    repo_url: str | None = None,        # e.g., "https://github.com/owner/repo"
+    license_id: str | None = None,      # SPDX id like 'Apache-2.0'
+    url: str | None = None,              # canonical file URL when available
+    source_domain: str | None = None,    # hostname derived from URL/source
+    lang: str | None = None,            # language label (Title Case preferred)
     encoding: str = "utf-8",
     had_replacement: bool = False,
-    chunk_id: Optional[int] = None,
-    n_chunks: Optional[int] = None,
-    extra_meta: Optional[Dict[str, object]] = None,
+    chunk_id: int | None = None,
+    n_chunks: int | None = None,
+    extra_meta: dict[str, object] | None = None,
     langcfg: LanguageConfig | None = None,
-    tokens: Optional[int] = None,
-    meta: Optional[RecordMeta | Mapping[str, Any]] = None,
-    file_bytes: Optional[int] = None,
-    truncated_bytes: Optional[int] = None,
-    file_nlines: Optional[int] = None,
-) -> Dict[str, object]:
+    tokens: int | None = None,
+    meta: RecordMeta | Mapping[str, Any] | None = None,
+    file_bytes: int | None = None,
+    truncated_bytes: int | None = None,
+    file_nlines: int | None = None,
+) -> dict[str, object]:
     """Create a canonical JSONL record matching the requested schema.
 
     Args:
@@ -569,7 +575,7 @@ def build_record(
             extra_meta = {}
         extra_meta["decoding_fallback_used"] = True
 
-    seed: Optional[Mapping[str, Any]]
+    seed: Mapping[str, Any] | None
     if isinstance(meta, RecordMeta):
         seed = meta.to_dict()
     else:
@@ -619,7 +625,7 @@ if TYPE_CHECKING:  # pragma: no cover
     from .config import SievioConfig
 
 
-def build_run_header_record(config: "SievioConfig") -> Dict[str, Any]:
+def build_run_header_record(config: SievioConfig) -> dict[str, Any]:
     """Build a run_header record describing configuration at run start."""
 
     meta = RunHeaderMeta(

@@ -4,22 +4,136 @@
 from __future__ import annotations
 
 import os
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Mapping, Optional
+from typing import Any
 
 from .config import QCConfig, QCMode, SafetyConfig
-from .interfaces import InlineScreener, QualityScorer, Record, RunLifecycleHook, RunContext, RunArtifacts, SafetyScorer
+from .interfaces import (
+    InlineScreener,
+    QualityScorer,
+    Record,
+    RunArtifacts,
+    RunContext,
+    RunLifecycleHook,
+    SafetyScorer,
+)
 from .log import get_logger
+from .qc_utils import top_dup_families, update_dup_family_counts
 from .records import (
-    ensure_meta_dict,
-    merge_meta_defaults,
     best_effort_record_path,
+    ensure_meta_dict,
     filter_qc_meta,
     filter_safety_meta,
+    merge_meta_defaults,
 )
-from .qc_utils import update_dup_family_counts, top_dup_families
 
 log = get_logger(__name__)
+_SUMMARY_SCHEMA_VERSION = 1
+
+
+@dataclass(frozen=True, slots=True)
+class ScreenDecision:
+    """Decision output from a screening policy."""
+
+    candidates: tuple[str, ...] = ()
+    # Reasons that would trigger a drop if gates are applied.
+    would_drop: tuple[str, ...] = ()
+
+
+@dataclass(slots=True)
+class QualityDecisionPolicy:
+    """Policy for translating QC results into gating-agnostic decisions."""
+
+    def decide(self, qc_result: Mapping[str, Any], *, cfg: QCConfig) -> ScreenDecision:
+        low_score = False
+        if cfg.min_score is not None:
+            score_val = qc_result.get("score")
+            if score_val is not None:
+                try:
+                    low_score = float(score_val) < float(cfg.min_score)
+                except (TypeError, ValueError):
+                    low_score = False
+        near_dup = bool(qc_result.get("near_dup"))
+
+        candidates: list[str] = []
+        if low_score:
+            candidates.append("low_score")
+        if near_dup:
+            candidates.append("near_dup")
+
+        would_drop: list[str] = []
+        if low_score:
+            would_drop.append("low_score")
+        if cfg.drop_near_dups and near_dup:
+            would_drop.append("near_dup")
+
+        return ScreenDecision(candidates=tuple(candidates), would_drop=tuple(would_drop))
+
+
+@dataclass(slots=True)
+class SafetyDecisionPolicy:
+    """Policy for translating safety results into gating-agnostic decisions."""
+
+    def decide(self, result: Mapping[str, Any], *, cfg: SafetyConfig | None) -> ScreenDecision:
+        decision = (result.get("safety_decision") or "").lower()
+        candidates: tuple[str, ...] = ()
+        would_drop: tuple[str, ...] = ()
+        if decision == "drop":
+            candidates = ("drop",)
+            would_drop = ("drop",)
+        return ScreenDecision(candidates=candidates, would_drop=would_drop)
+
+
+def _coerce_bool(value: Any, *, default: bool = False, strict: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return default
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        val = value.strip().lower()
+        if val in {"true", "1", "yes"}:
+            return True
+        if val in {"false", "0", "no"}:
+            return False
+    if strict:
+        raise TypeError(f"Expected bool-like value, got {type(value).__name__}")
+    return default
+
+
+def _coerce_int(value: Any, *, default: int = 0, strict: bool = False) -> int:
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        if strict:
+            raise
+        return default
+
+
+def _coerce_float(value: Any, *, default: float | None = None, strict: bool = False) -> float | None:
+    if value is None:
+        return default
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        if strict:
+            raise
+        return default
+
+
+def _coerce_str(value: Any, *, default: str = "", strict: bool = False) -> str:
+    if value is None:
+        return default
+    try:
+        return str(value)
+    except Exception:
+        if strict:
+            raise
+        return default
 
 
 @dataclass(slots=True)
@@ -37,7 +151,34 @@ class ScalarSignalStats:
         self.min = v if self.min is None or v < self.min else self.min
         self.max = v if self.max is None or v > self.max else self.max
 
-    def as_dict(self) -> Dict[str, Any]:
+    def merge_from(self, other: ScalarSignalStats) -> None:
+        if other.count <= 0:
+            return
+        if self.count == 0:
+            self.count = other.count
+            self.sum = other.sum
+            self.sum_sq = other.sum_sq
+            self.min = other.min
+            self.max = other.max
+            return
+        self.count += other.count
+        self.sum += other.sum
+        self.sum_sq += other.sum_sq
+        if other.min is not None:
+            self.min = other.min if self.min is None or other.min < self.min else self.min
+        if other.max is not None:
+            self.max = other.max if self.max is None or other.max > self.max else self.max
+
+    def clone(self) -> ScalarSignalStats:
+        stats = ScalarSignalStats()
+        stats.count = self.count
+        stats.sum = self.sum
+        stats.sum_sq = self.sum_sq
+        stats.min = self.min
+        stats.max = self.max
+        return stats
+
+    def as_dict(self) -> dict[str, Any]:
         if self.count == 0:
             return {"count": 0}
         mean = self.sum / self.count
@@ -53,7 +194,10 @@ class ScalarSignalStats:
 
 @dataclass(slots=True)
 class ScreenerStats:
-    """Per-screener summary used by QCSummaryTracker."""
+    """Per-screener summary used by QCSummaryTracker.
+
+    drops counts track would-drop reasons (independent of whether gates were applied).
+    """
 
     id: str
     enabled: bool = False
@@ -62,12 +206,12 @@ class ScreenerStats:
     kept: int = 0
     dropped: int = 0
     errors: int = 0
-    signal_stats: Dict[str, ScalarSignalStats] = field(default_factory=dict)
-    flags: Dict[str, int] = field(default_factory=dict)
-    candidates: Dict[str, int] = field(default_factory=dict)
-    drops: Dict[str, int] = field(default_factory=dict)
+    signal_stats: dict[str, ScalarSignalStats] = field(default_factory=dict)
+    flags: dict[str, int] = field(default_factory=dict)
+    candidates: dict[str, int] = field(default_factory=dict)
+    drops: dict[str, int] = field(default_factory=dict)
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "enabled": bool(self.enabled),
@@ -83,61 +227,85 @@ class ScreenerStats:
         }
 
     @classmethod
-    def from_dict(cls, data: Mapping[str, Any], *, default_id: str | None = None) -> "ScreenerStats":
-        sid = str(data.get("id") or default_id or "")
+    def from_dict(
+        cls,
+        data: Mapping[str, Any],
+        *,
+        default_id: str | None = None,
+        strict: bool = False,
+    ) -> ScreenerStats:
+        sid = _coerce_str(data.get("id") or default_id or "", strict=strict)
         stats = cls(id=sid)
-        stats.enabled = bool(data.get("enabled"))
+        stats.enabled = _coerce_bool(data.get("enabled"), strict=strict)
         mode = data.get("mode")
         if isinstance(mode, str) and mode:
             stats.mode = mode
-        stats.scored = int(data.get("scored") or 0)
-        stats.kept = int(data.get("kept") or 0)
-        stats.dropped = int(data.get("dropped") or 0)
-        stats.errors = int(data.get("errors") or 0)
+        stats.scored = _coerce_int(data.get("scored"), strict=strict)
+        stats.kept = _coerce_int(data.get("kept"), strict=strict)
+        stats.dropped = _coerce_int(data.get("dropped"), strict=strict)
+        stats.errors = _coerce_int(data.get("errors"), strict=strict)
         signals = data.get("signal_stats")
         if isinstance(signals, Mapping):
-            parsed: Dict[str, ScalarSignalStats] = {}
+            parsed: dict[str, ScalarSignalStats] = {}
             for name, payload in signals.items():
                 if not isinstance(payload, Mapping):
                     continue
-                parsed[str(name)] = _parse_scalar_signal_stats(payload)
+                parsed[str(name)] = _parse_scalar_signal_stats(payload, strict=strict)
             stats.signal_stats = parsed
         flags = data.get("flags")
         if isinstance(flags, Mapping):
-            stats.flags = {str(k): int(v) for k, v in flags.items() if v is not None}
+            stats.flags = {str(k): _coerce_int(v, strict=strict) for k, v in flags.items() if v is not None}
         candidates = data.get("candidates")
         if isinstance(candidates, Mapping):
-            stats.candidates = {str(k): int(v) for k, v in candidates.items() if v is not None}
+            stats.candidates = {str(k): _coerce_int(v, strict=strict) for k, v in candidates.items() if v is not None}
         drops = data.get("drops")
         if isinstance(drops, Mapping):
-            stats.drops = {str(k): int(v) for k, v in drops.items() if v is not None}
+            stats.drops = {str(k): _coerce_int(v, strict=strict) for k, v in drops.items() if v is not None}
         return stats
 
+    def clone(self) -> ScreenerStats:
+        stats = ScreenerStats(id=self.id)
+        stats.enabled = self.enabled
+        stats.mode = self.mode
+        stats.scored = self.scored
+        stats.kept = self.kept
+        stats.dropped = self.dropped
+        stats.errors = self.errors
+        stats.signal_stats = {k: v.clone() for k, v in self.signal_stats.items()}
+        stats.flags = dict(self.flags)
+        stats.candidates = dict(self.candidates)
+        stats.drops = dict(self.drops)
+        return stats
 
-def _parse_scalar_signal_stats(payload: Mapping[str, Any]) -> ScalarSignalStats:
+    def merge_from(self, other: ScreenerStats) -> None:
+        self.enabled = self.enabled or other.enabled
+        if other.mode:
+            self.mode = other.mode
+        self.scored += other.scored
+        self.kept += other.kept
+        self.dropped += other.dropped
+        self.errors += other.errors
+        for name, stats in other.signal_stats.items():
+            existing = self.signal_stats.get(name)
+            if existing is None:
+                self.signal_stats[name] = stats.clone()
+            else:
+                existing.merge_from(stats)
+        for bucket, incoming in (("flags", other.flags), ("candidates", other.candidates), ("drops", other.drops)):
+            target = getattr(self, bucket)
+            for key, value in incoming.items():
+                target[key] = target.get(key, 0) + int(value)
+
+
+def _parse_scalar_signal_stats(payload: Mapping[str, Any], *, strict: bool = False) -> ScalarSignalStats:
     stats = ScalarSignalStats()
-    try:
-        stats.count = int(payload.get("count") or 0)
-    except Exception:
-        stats.count = 0
-    try:
-        stats.min = float(payload["min"]) if payload.get("min") is not None else None
-    except Exception:
-        stats.min = None
-    try:
-        stats.max = float(payload["max"]) if payload.get("max") is not None else None
-    except Exception:
-        stats.max = None
+    stats.count = _coerce_int(payload.get("count"), strict=strict)
+    stats.min = _coerce_float(payload.get("min"), strict=strict)
+    stats.max = _coerce_float(payload.get("max"), strict=strict)
     mean_val = payload.get("mean")
     stdev_val = payload.get("stdev")
-    try:
-        mean = float(mean_val) if mean_val is not None else None
-    except Exception:
-        mean = None
-    try:
-        stdev = float(stdev_val) if stdev_val is not None else None
-    except Exception:
-        stdev = None
+    mean = _coerce_float(mean_val, strict=strict)
+    stdev = _coerce_float(stdev_val, strict=strict)
     if stats.count and mean is not None:
         stats.sum = mean * stats.count
         variance = (stdev * stdev) if stdev is not None else 0.0
@@ -152,26 +320,29 @@ class QCSummaryTracker:
     near_dup is treated as a combined flag (Simhash OR MinHash). With
     drop_near_dups=True, any record flagged near-duplicate by either mechanism
     will be dropped. Duplicate families are keyed by dup_family_id with
-    counts/examples for post-QC reporting.
+    counts/examples for post-QC reporting. Decisions are computed by screeners
+    (gating-agnostic policies + explicit gate application), leaving this tracker
+    to aggregate results; for concurrency, use one tracker per worker and merge
+    after processing (not thread-safe for concurrent mutation).
     """
     enabled: bool = False
     mode: str = QCMode.INLINE
-    min_score: Optional[float] = None
+    min_score: float | None = None
     drop_near_dups: bool = False
-    dup_families: Dict[str, Dict[str, Any]] = field(default_factory=dict)
-    top_dup_snapshot: List[Dict[str, Any]] = field(default_factory=list)
-    screeners: Dict[str, ScreenerStats] = field(default_factory=dict)
+    dup_families: dict[str, dict[str, Any]] = field(default_factory=dict)
+    top_dup_snapshot: list[dict[str, Any]] = field(default_factory=list)
+    screeners: dict[str, ScreenerStats] = field(default_factory=dict)
 
     def __init__(
         self,
         *,
         enabled: bool = False,
         mode: str = QCMode.INLINE,
-        min_score: Optional[float] = None,
+        min_score: float | None = None,
         drop_near_dups: bool = False,
         screeners: Mapping[str, ScreenerStats | Mapping[str, Any]] | None = None,
-        dup_families: Mapping[str, Dict[str, Any]] | None = None,
-        top_dup_snapshot: List[Dict[str, Any]] | None = None,
+        dup_families: Mapping[str, dict[str, Any]] | None = None,
+        top_dup_snapshot: list[dict[str, Any]] | None = None,
     ) -> None:
         self.enabled = bool(enabled)
         self.mode = mode
@@ -192,7 +363,7 @@ class QCSummaryTracker:
         *,
         enabled: bool = False,
         mode: str = QCMode.INLINE,
-        min_score: Optional[float] = None,
+        min_score: float | None = None,
         drop_near_dups: bool = False,
     ) -> None:
         """Reconfigure tracker fields and clear per-run state in place."""
@@ -207,18 +378,15 @@ class QCSummaryTracker:
     # ------------------------------------------------------------------
     # Observation + serialization
     # ------------------------------------------------------------------
-    def observe(self, qc_result: Dict[str, Any], *, apply_gates: bool = True, screener_id: str = "quality") -> bool:
-        """Update counters based on a QC row and return whether to keep it.
-
-        Args:
-            qc_result (dict[str, Any]): QC metrics for a single record.
-            apply_gates (bool): Whether to apply scoring and near-duplicate
-                drop rules.
-            screener_id (str): Screener identifier to route stats.
-
-        Returns:
-            bool: True when the record should be kept.
-        """
+    def observe_quality(
+        self,
+        qc_result: Mapping[str, Any],
+        decision: ScreenDecision,
+        *,
+        did_drop: bool,
+        screener_id: str = "quality",
+    ) -> None:
+        """Update counters based on a QC row and explicit gate outcome."""
         screener = self.get_screener(screener_id, mode=self.mode if screener_id == "quality" else None)
         screener.enabled = True
         screener.scored += 1
@@ -229,29 +397,16 @@ class QCSummaryTracker:
             if self.top_dup_snapshot:
                 self.top_dup_snapshot.clear()
 
-        low_score = self._is_low_score(qc_result) if screener_id == "quality" else False
-        # near_dup aggregates simhash + MinHash signals from the scorer
-        near_dup = bool(qc_result.get("near_dup"))
+        for reason in decision.candidates:
+            self._increment_candidate(screener, reason)
+        for reason in decision.would_drop:
+            self._increment_drop(screener, reason)
 
-        if low_score:
-            self._increment_candidate(screener, "low_score")
-        if near_dup:
-            self._increment_candidate(screener, "near_dup")
-
-        keep = True
-        if apply_gates and low_score:
-            self._increment_drop(screener, "low_score")
-            keep = False
-        elif apply_gates and self.drop_near_dups and near_dup:
-            self._increment_drop(screener, "near_dup")
-            keep = False
-
-        if keep:
-            screener.kept += 1
-        elif apply_gates:
+        if did_drop:
             screener.dropped += 1
+        else:
+            screener.kept += 1
         self._observe_signals(qc_result, screener_id=screener_id)
-        return keep
 
     def record_error(self) -> None:
         """Increment error count for a failed QC attempt."""
@@ -267,9 +422,10 @@ class QCSummaryTracker:
         stats.enabled = True
         stats.errors += 1
 
-    def as_dict(self) -> Dict[str, Any]:
+    def as_dict(self) -> dict[str, Any]:
         """Return a summary dictionary suitable for serialization."""
         return {
+            "schema_version": _SUMMARY_SCHEMA_VERSION,
             "enabled": bool(self.enabled),
             "mode": self.mode,
             "min_score": self.min_score,
@@ -278,26 +434,20 @@ class QCSummaryTracker:
             "screeners": {sid: stats.as_dict() for sid, stats in self.screeners.items()},
         }
 
-    def merge_from_summary_dict(self, summary: Mapping[str, Any], *, replace_screeners: set[str]) -> None:
+    def merge_from_summary_dict(
+        self,
+        summary: Mapping[str, Any],
+        *,
+        replace_screeners: set[str],
+        strict: bool = False,
+    ) -> None:
         """Merge screener stats from another summary, replacing selected ids."""
         if not summary or not replace_screeners:
             return
-        other = QCSummaryTracker.from_summary_dict(summary)
-        # Carry over top-level flags so callers get accurate enabled/mode metadata.
-        self.enabled = self.enabled or other.enabled
-        self.mode = other.mode or self.mode
-        self.min_score = other.min_score if other.min_score is not None else self.min_score
-        self.drop_near_dups = self.drop_near_dups or other.drop_near_dups
-        for screener_id in replace_screeners:
-            incoming = other.screeners.get(screener_id)
-            if incoming is None:
-                continue
-            self.screeners[screener_id] = incoming
-            if screener_id == "quality":
-                self.dup_families = dict(other.dup_families)
-                self.top_dup_snapshot = list(other.top_dup_snapshot)
+        other = QCSummaryTracker.from_summary_dict(summary, strict=strict)
+        self.merge(other, replace_screeners=replace_screeners)
 
-    def _is_low_score(self, qc_result: Dict[str, Any]) -> bool:
+    def _is_low_score(self, qc_result: dict[str, Any]) -> bool:
         """Return True when qc_result score falls below the configured min."""
         if self.min_score is None:
             return False
@@ -309,14 +459,14 @@ class QCSummaryTracker:
         except Exception:
             return False
 
-    def top_dup_families(self) -> List[Dict[str, Any]]:
+    def top_dup_families(self) -> list[dict[str, Any]]:
         """Return the largest duplicate families with cached snapshot reuse."""
         if self.top_dup_snapshot:
             return [dict(entry) for entry in self.top_dup_snapshot]
         return top_dup_families(self.dup_families)
 
     @classmethod
-    def from_summary_dict(cls, data: Mapping[str, Any]) -> "QCSummaryTracker":
+    def from_summary_dict(cls, data: Mapping[str, Any], *, strict: bool = False) -> QCSummaryTracker:
         """Rehydrate a tracker from a serialized summary dictionary.
 
         Args:
@@ -325,11 +475,17 @@ class QCSummaryTracker:
         Returns:
             QCSummaryTracker: Tracker populated with summary values.
         """
+        schema_version = data.get("schema_version")
+        if schema_version is not None:
+            parsed_version = _coerce_int(schema_version, strict=strict)
+            if strict and parsed_version > _SUMMARY_SCHEMA_VERSION:
+                raise ValueError(f"Unsupported QC summary schema version {parsed_version}.")
+
         tracker = cls(
-            enabled=bool(data.get("enabled")),
+            enabled=_coerce_bool(data.get("enabled"), strict=strict),
             mode=data.get("mode") or QCMode.INLINE,
-            min_score=data.get("min_score"),
-            drop_near_dups=bool(data.get("drop_near_dups", False)),
+            min_score=_coerce_float(data.get("min_score"), default=None, strict=strict),
+            drop_near_dups=_coerce_bool(data.get("drop_near_dups", False), strict=strict),
             top_dup_snapshot=[dict(entry) for entry in data.get("top_dup_families") or [] if isinstance(entry, dict)],
         )
         screeners_payload = data.get("screeners")
@@ -337,10 +493,10 @@ class QCSummaryTracker:
             for sid, payload in screeners_payload.items():
                 if not isinstance(payload, Mapping):
                     continue
-                tracker.screeners[str(sid)] = ScreenerStats.from_dict(payload, default_id=str(sid))
+                tracker.screeners[str(sid)] = ScreenerStats.from_dict(payload, default_id=str(sid), strict=strict)
         return tracker
 
-    def _observe_signals(self, qc_result: Dict[str, Any], *, screener_id: str = "quality") -> None:
+    def _observe_signals(self, qc_result: Mapping[str, Any], *, screener_id: str = "quality") -> None:
         """Update scalar stats for numeric/boolean QC signals."""
         if screener_id != "quality":
             return
@@ -365,21 +521,17 @@ class QCSummaryTracker:
 
     def observe_safety(
         self,
-        result: dict[str, Any],
+        result: Mapping[str, Any],
+        decision: ScreenDecision,
         *,
-        apply_gates: bool,
+        did_drop: bool,
         screener_id: str = "safety",
         mode: str = QCMode.INLINE,
-    ) -> bool:
-        """Update safety counters and return whether to keep the record.
-
-        Gating is controlled by ``apply_gates``; configuration such as
-        annotate_only is handled by the controller.
-        """
-
+    ) -> None:
+        """Update safety counters with an explicit decision and drop result."""
         stats = self.get_screener(screener_id, mode=mode)
         if stats is None:
-            return True
+            return
         stats.enabled = True
         stats.scored += 1
 
@@ -389,12 +541,15 @@ class QCSummaryTracker:
                 if value:
                     stats.flags[name] = stats.flags.get(name, 0) + 1
 
-        decision = (result.get("safety_decision") or "").lower()
-        drop = decision == "drop" and apply_gates
-        if drop:
+        for reason in decision.candidates:
+            self._increment_candidate(stats, reason)
+        for reason in decision.would_drop:
+            self._increment_drop(stats, reason)
+
+        if did_drop:
             stats.dropped += 1
-            return False
-        return True
+        else:
+            stats.kept += 1
 
     def record_safety_error(self, *, screener_id: str = "safety", mode: str = QCMode.INLINE) -> None:
         """Increment error count for a failed safety scoring attempt."""
@@ -430,6 +585,65 @@ class QCSummaryTracker:
 
     def _increment_drop(self, screener: ScreenerStats, key: str) -> None:
         screener.drops[key] = screener.drops.get(key, 0) + 1
+
+    def merge(self, other: QCSummaryTracker, *, replace_screeners: set[str] | None = None) -> None:
+        """Merge another tracker into this instance."""
+        if other is self:
+            return
+        self.enabled = self.enabled or other.enabled
+        if other.mode:
+            self.mode = other.mode
+        if other.min_score is not None:
+            self.min_score = other.min_score
+        self.drop_near_dups = self.drop_near_dups or other.drop_near_dups
+        replace_screeners = replace_screeners or set()
+        for screener_id, incoming in other.screeners.items():
+            if screener_id in replace_screeners:
+                self.screeners[screener_id] = incoming.clone()
+                if screener_id == "quality":
+                    self.dup_families = dict(other.dup_families)
+                    self.top_dup_snapshot = list(other.top_dup_snapshot)
+                continue
+            existing = self.screeners.get(screener_id)
+            if existing is None:
+                self.screeners[screener_id] = incoming.clone()
+            else:
+                existing.merge_from(incoming)
+
+        if "quality" not in replace_screeners and other.dup_families:
+            self._merge_dup_families(other.dup_families)
+
+    def _merge_dup_families(self, other: Mapping[str, Mapping[str, Any]]) -> None:
+        changed = False
+        for family_id, payload in other.items():
+            if not family_id:
+                continue
+            entry = self.dup_families.setdefault(family_id, {"count": 0, "examples": []})
+            entry["count"] = _coerce_int(entry.get("count")) + _coerce_int(payload.get("count"))
+            examples = entry.get("examples")
+            if not isinstance(examples, list):
+                examples = []
+                entry["examples"] = examples
+            incoming_examples = payload.get("examples") or []
+            if isinstance(incoming_examples, list):
+                for example in incoming_examples:
+                    if len(examples) >= 3:
+                        break
+                    if example not in examples:
+                        examples.append(example)
+            changed = True
+        if changed and self.top_dup_snapshot:
+            self.top_dup_snapshot.clear()
+
+    @property
+    def safety_scored(self) -> int:
+        stats = self._safety_stats(create=False)
+        return stats.scored if stats else 0
+
+    @property
+    def safety_dropped(self) -> int:
+        stats = self._safety_stats(create=False)
+        return stats.dropped if stats else 0
 
 
 class InlineScreeningController:
@@ -518,10 +732,12 @@ class InlineScreeningController:
         self._sync_screeners()
 
     def process_record(self, record: Record) -> Record | None:
-        """Run all screeners; drop if any screener drops."""
+        """Run all screeners; drop if any screener drops.
+
+        Per-screener kept reflects local pass; downstream drops do not roll back.
+        """
         current = record
         self._sync_screeners()
-        kept_screeners: list[str] = []
         for screener in self.screeners:
             self._apply_gate_override(screener)
             try:
@@ -529,7 +745,10 @@ class InlineScreeningController:
             except Exception:
                 self.logger.warning("screener %s failed", getattr(screener, "id", screener), exc_info=True)
                 screener_id = getattr(screener, "id", "")
-                enforce = bool(getattr(screener, "enforce_drops", True))
+                enforce = getattr(screener, "enforce_drops", True)
+                if enforce is None:
+                    enforce = True
+                enforce = bool(enforce)
                 if screener_id == "quality":
                     self.summary.record_error()
                 elif screener_id == "safety":
@@ -537,15 +756,12 @@ class InlineScreeningController:
                 else:
                     self.summary.record_screener_error(screener_id or "unknown")
                 if enforce:
-                    self._rollback_kept(kept_screeners)
                     return None
                 # advisory screeners should not drop; continue with current record
                 continue
             if result is None:
-                self._rollback_kept(kept_screeners)
                 return None
             current = result
-            kept_screeners.append(getattr(screener, "id", ""))
         return current
 
     # ------------------------------------------------------------------
@@ -561,25 +777,16 @@ class InlineScreeningController:
         if enforce is None:
             return
         try:
-            setattr(screener, "enforce_drops", enforce)
+            screener.enforce_drops = enforce
         except Exception:
             return
 
     def _sync_screeners(self) -> None:
         for screener in self.screeners:
             try:
-                setattr(screener, "summary", self.summary)
+                screener.summary = self.summary
             except Exception:
                 continue
-
-    def _rollback_kept(self, screener_ids: list[str]) -> None:
-        if not screener_ids:
-            return
-        for sid in screener_ids:
-            stats = self.summary.screeners.get(sid)
-            if stats and stats.kept > 0:
-                stats.kept -= 1
-
 
 @dataclass(slots=True)
 class QualityInlineScreener:
@@ -587,6 +794,7 @@ class QualityInlineScreener:
     cfg: QCConfig = field(default_factory=QCConfig)
     scorer: QualityScorer | None = None
     summary: QCSummaryTracker = field(default_factory=QCSummaryTracker)
+    decision_policy: QualityDecisionPolicy = field(default_factory=QualityDecisionPolicy)
     logger: Any | None = None
     enforce_drops: bool = True  # inline vs advisory
 
@@ -610,8 +818,10 @@ class QualityInlineScreener:
                 )
             return None if self.enforce_drops else self._mark_qc_error(record)
 
-        keep = self.summary.observe(qc_result, apply_gates=self.enforce_drops, screener_id=self.id)
-        if not keep and self.enforce_drops:
+        decision = self.decision_policy.decide(qc_result, cfg=self.cfg)
+        did_drop = self.enforce_drops and bool(decision.would_drop)
+        self.summary.observe_quality(qc_result, decision, did_drop=did_drop, screener_id=self.id)
+        if did_drop:
             return None
 
         try:
@@ -625,7 +835,7 @@ class QualityInlineScreener:
                 self.logger.warning("QC post-processing failed for %s: %s", path, exc)
             return None if self.enforce_drops else self._mark_qc_error(record)
 
-    def _merge_qc_meta(self, record: Record, qc_result: Dict[str, Any]) -> Record:
+    def _merge_qc_meta(self, record: Record, qc_result: dict[str, Any]) -> Record:
         """Attach QC-derived metadata to the record meta dictionary."""
 
         if not isinstance(record, dict):
@@ -665,6 +875,7 @@ class SafetyInlineScreener:
     cfg: SafetyConfig = field(default_factory=SafetyConfig)
     scorer: SafetyScorer | None = None
     summary: QCSummaryTracker = field(default_factory=QCSummaryTracker)
+    decision_policy: SafetyDecisionPolicy = field(default_factory=SafetyDecisionPolicy)
     logger: Any | None = None
     enforce_drops: bool = True  # whether safety is gating or annotate-only
 
@@ -685,8 +896,10 @@ class SafetyInlineScreener:
                 self.logger.warning("Safety scoring failed for %s: %s", path, exc)
             return record
 
-        keep = self.summary.observe_safety(result, apply_gates=apply_gates, screener_id=self.id)
-        if not keep and apply_gates:
+        decision = self.decision_policy.decide(result, cfg=self.cfg)
+        did_drop = apply_gates and bool(decision.would_drop)
+        self.summary.observe_safety(result, decision, did_drop=did_drop, screener_id=self.id, mode=self.cfg.mode)
+        if did_drop:
             return None
 
         meta = ensure_meta_dict(record)
@@ -919,7 +1132,7 @@ class InlineQCHook(RunLifecycleHook):
             reset_fn(stats)
         self._qc_cfg = getattr(self._controller, "cfg", self._qc_cfg)
         try:
-            self._safety_cfg = getattr(self._controller, "safety_cfg")
+            self._safety_cfg = self._controller.safety_cfg
         except Exception:
             pass
 
@@ -950,7 +1163,7 @@ class InlineQCHook(RunLifecycleHook):
         return record
 
 
-def _derive_csv_path(jsonl_path: Optional[str], suffix: Optional[str]) -> Optional[str]:
+def _derive_csv_path(jsonl_path: str | None, suffix: str | None) -> str | None:
     """Derive a QC CSV path from a primary JSONL path and suffix."""
 
     if not jsonl_path:
@@ -965,14 +1178,14 @@ def _derive_csv_path(jsonl_path: Optional[str], suffix: Optional[str]) -> Option
 
 
 def summarize_qc_rows(
-    rows: Iterable[Dict[str, Any]],
+    rows: Iterable[dict[str, Any]],
     *,
     mode: str,
-    min_score: Optional[float],
+    min_score: float | None,
     drop_near_dups: bool,
     apply_gates: bool = False,
     enabled: bool = True,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Build a summary dictionary from QC rows for post-processing mode.
 
     Args:
@@ -992,6 +1205,10 @@ def summarize_qc_rows(
         min_score=min_score,
         drop_near_dups=drop_near_dups,
     )
+    policy = QualityDecisionPolicy()
+    cfg = QCConfig(min_score=min_score, drop_near_dups=bool(drop_near_dups))
     for row in rows:
-        tracker.observe(row, apply_gates=apply_gates)
+        decision = policy.decide(row, cfg=cfg)
+        did_drop = apply_gates and bool(decision.would_drop)
+        tracker.observe_quality(row, decision, did_drop=did_drop)
     return tracker.as_dict()

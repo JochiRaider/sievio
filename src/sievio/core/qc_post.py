@@ -4,19 +4,31 @@
 
 from __future__ import annotations
 
-import os
-from dataclasses import dataclass, replace, asdict
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
 import json
+import os
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from dataclasses import asdict, dataclass, replace
+from typing import Any
 
-from .config import SievioConfig, QCConfig, QCMode, SafetyConfig
-from .concurrency import Executor, ExecutorConfig, resolve_qc_executor_config, infer_executor_kind
+from .concurrency import Executor, ExecutorConfig, infer_executor_kind, resolve_qc_executor_config
+from .config import QCConfig, QCMode, SafetyConfig, SievioConfig
 from .factories_qc import make_qc_scorer, make_safety_scorer
-from .interfaces import RunLifecycleHook, RunContext, RunArtifacts, SafetyScorer
+from .interfaces import RunArtifacts, RunContext, RunLifecycleHook, SafetyScorer
 from .log import get_logger
-from .qc_controller import QCSummaryTracker, summarize_qc_rows, _derive_csv_path
-from .records import filter_qc_meta, filter_safety_meta, check_record_schema, best_effort_record_path
+from .qc_controller import (
+    QCSummaryTracker,
+    QualityDecisionPolicy,
+    SafetyDecisionPolicy,
+    _derive_csv_path,
+    summarize_qc_rows,
+)
 from .qc_utils import open_jsonl_maybe_gz
+from .records import (
+    best_effort_record_path,
+    check_record_schema,
+    filter_qc_meta,
+    filter_safety_meta,
+)
 
 log = get_logger(__name__)
 
@@ -111,7 +123,7 @@ def run_qc_over_jsonl(
     write_signals_sidecar: bool | None = None,
     signals_suffix: str | None = None,
     signals_format: str | None = None,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]] | None]:
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     """
     Score a JSONL file with the provided scorer and return a summary plus rows.
 
@@ -128,22 +140,24 @@ def run_qc_over_jsonl(
         min_score=qc_cfg.min_score,
         drop_near_dups=bool(qc_cfg.drop_near_dups),
     )
+    policy = QualityDecisionPolicy()
     should_write_csv = qc_cfg.write_csv if write_csv is None else bool(write_csv)
     should_write_signals = qc_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
     signals_format_val = (signals_format or qc_cfg.signals_format or "csv").lower()
     if signals_format_val not in {"csv", "parquet"}:
         raise ValueError("signals_format must be 'csv' or 'parquet'.")
-    rows_for_csv: Optional[List[Dict[str, Any]]] = [] if (should_write_csv or should_write_signals) else None
+    rows_for_csv: list[dict[str, Any]] | None = [] if (should_write_csv or should_write_signals) else None
 
-    def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
+    def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
         for row in rows:
-            tracker.observe(row, apply_gates=False)
+            decision = policy.decide(row, cfg=qc_cfg)
+            tracker.observe_quality(row, decision, did_drop=False)
             if rows_for_csv is not None:
                 rows_for_csv.append(row)
 
     jsonl_path_str = str(jsonl_path)
-    rows_result: List[Dict[str, Any]] | None = None
-    summary: Dict[str, Any]
+    rows_result: list[dict[str, Any]] | None = None
+    summary: dict[str, Any]
 
     if rows_for_csv is None:
         if qc_cfg.parallel_post:
@@ -174,7 +188,7 @@ def run_qc_over_jsonl(
         summary = tracker.as_dict()
     else:
         shards = list(_iter_jsonl_shards(jsonl_path_str))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         if shards:
             if qc_cfg.parallel_post:
                 parallel_rows = _score_jsonl_parallel_collecting(shards, qc_cfg, config, runtime, executor_hint=executor_hint)
@@ -237,7 +251,7 @@ def _run_post_qc(
     scorer: Any | None,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run post-hoc QC over the primary JSONL file."""
 
     qc_cfg = config.qc
@@ -272,7 +286,7 @@ def run_safety_over_jsonl(
     write_signals_sidecar: bool | None = None,
     signals_suffix: str | None = None,
     signals_format: str | None = None,
-) -> Tuple[Dict[str, Any], List[Dict[str, Any]] | None]:
+) -> tuple[dict[str, Any], list[dict[str, Any]] | None]:
     """
     Score a JSONL file with the provided safety scorer and return a summary plus rows.
 
@@ -286,22 +300,25 @@ def run_safety_over_jsonl(
         )
 
     tracker = QCSummaryTracker(enabled=bool(safety_cfg.enabled), mode=safety_cfg.mode)
+    policy = SafetyDecisionPolicy()
     apply_gates = not getattr(safety_cfg, "annotate_only", False)
     should_write_csv = safety_cfg.write_csv if write_csv is None else bool(write_csv)
     should_write_signals = safety_cfg.write_signals_sidecar if write_signals_sidecar is None else bool(write_signals_sidecar)
     signals_format_val = (signals_format or safety_cfg.signals_format or "csv").lower()
     if signals_format_val not in {"csv", "parquet"}:
         raise ValueError("signals_format must be 'csv' or 'parquet'.")
-    rows_for_output: Optional[List[Dict[str, Any]]] = [] if (should_write_csv or should_write_signals) else None
+    rows_for_output: list[dict[str, Any]] | None = [] if (should_write_csv or should_write_signals) else None
 
-    def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
+    def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
         for row in rows:
-            tracker.observe_safety(row, apply_gates=apply_gates, screener_id="safety", mode=QCMode.POST)
+            decision = policy.decide(row, cfg=safety_cfg)
+            did_drop = apply_gates and bool(decision.would_drop)
+            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
             if rows_for_output is not None:
                 rows_for_output.append(row)
 
     jsonl_path_str = str(jsonl_path)
-    rows_result: List[Dict[str, Any]] | None = None
+    rows_result: list[dict[str, Any]] | None = None
 
     if rows_for_output is None:
         if safety_cfg.parallel_post:
@@ -331,7 +348,7 @@ def run_safety_over_jsonl(
             )
     else:
         shards = list(_iter_jsonl_shards(jsonl_path_str))
-        rows: List[Dict[str, Any]] = []
+        rows: list[dict[str, Any]] = []
         if shards:
             if safety_cfg.parallel_post:
                 parallel_rows = _score_jsonl_safety_parallel_collecting(
@@ -358,7 +375,9 @@ def run_safety_over_jsonl(
                     tracker=tracker,
                 )
         for row in rows:
-            tracker.observe_safety(row, apply_gates=apply_gates, screener_id="safety", mode=QCMode.POST)
+            decision = policy.decide(row, cfg=safety_cfg)
+            did_drop = apply_gates and bool(decision.would_drop)
+            tracker.observe_safety(row, decision, did_drop=did_drop, screener_id="safety", mode=QCMode.POST)
 
         rows_result = rows
         out_csv = _derive_csv_path(jsonl_path, csv_suffix if csv_suffix is not None else safety_cfg.csv_suffix)
@@ -387,7 +406,7 @@ def _run_post_safety(
     scorer: SafetyScorer | None,
     runtime: Any | None = None,
     executor_hint: Any | None = None,
-) -> Dict[str, Any]:
+) -> dict[str, Any]:
     """Run post-hoc safety screening over the primary JSONL file."""
 
     safety_cfg = getattr(config.qc, "safety", None)
@@ -420,16 +439,19 @@ def iter_qc_rows_from_jsonl(
     runtime: Any | None = None,
     executor_hint: Any | None = None,
     tracker: QCSummaryTracker | None = None,
-) -> Iterable[Dict[str, Any]]:
+) -> Iterable[dict[str, Any]]:
     """Iterate QC rows from a JSONL file, updating an optional tracker."""
 
-    def _generator() -> Iterator[Dict[str, Any]]:
-        buffer: List[Dict[str, Any]] = []
+    def _generator() -> Iterator[dict[str, Any]]:
+        buffer: list[dict[str, Any]] = []
 
-        def _consume_rows(rows: Iterable[Dict[str, Any]]) -> None:
+        policy = QualityDecisionPolicy()
+
+        def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
             for row in rows:
                 if tracker is not None:
-                    tracker.observe(row, apply_gates=False)
+                    decision = policy.decide(row, cfg=qc_cfg)
+                    tracker.observe_quality(row, decision, did_drop=False)
                 buffer.append(row)
 
         jsonl_path_str = str(jsonl_path)
@@ -473,9 +495,9 @@ def collect_qc_rows_from_jsonl(
     runtime: Any | None = None,
     executor_hint: Any | None = None,
     tracker: QCSummaryTracker | None = None,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Collect QC rows from a JSONL file into a list."""
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for row in iter_qc_rows_from_jsonl(
         jsonl_path,
         qc_cfg=qc_cfg,
@@ -489,10 +511,11 @@ def collect_qc_rows_from_jsonl(
     return rows
 
 
-def emit_qc_csv(rows: Sequence[Dict[str, Any]], jsonl_path: str, out_csv: str) -> None:
+def emit_qc_csv(rows: Sequence[dict[str, Any]], jsonl_path: str, out_csv: str) -> None:
     """Write QC rows to CSV using available helpers."""
     try:  # pragma: no cover - optional QC extras
-        from .extras.qc import write_csv as _write_csv, score_jsonl_to_csv as _score_jsonl_to_csv
+        from .extras.qc import score_jsonl_to_csv as _score_jsonl_to_csv
+        from .extras.qc import write_csv as _write_csv
     except Exception:  # pragma: no cover - optional QC extras
         _write_csv = None
         _score_jsonl_to_csv = None
@@ -505,10 +528,10 @@ def emit_qc_csv(rows: Sequence[Dict[str, Any]], jsonl_path: str, out_csv: str) -
         raise RuntimeError("QC CSV helpers unavailable; reinstall optional dependencies.")
 
 
-def _collect_signal_rows(rows: Sequence[Dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+def _collect_signal_rows(rows: Sequence[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
     """Return fieldnames and per-row signal dicts with doc_id."""
     signal_keys: set[str] = set()
-    raw_signals: list[tuple[Any, Dict[str, Any]]] = []
+    raw_signals: list[tuple[Any, dict[str, Any]]] = []
     for row in rows:
         _, signals = filter_qc_meta(row)
         raw_signals.append((row.get("doc_id"), signals))
@@ -525,7 +548,7 @@ def _collect_signal_rows(rows: Sequence[Dict[str, Any]]) -> tuple[list[str], lis
 
 
 def emit_qc_signals_csv(
-    rows: Sequence[Dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     jsonl_path: str,
     out_csv: str,
 ) -> None:
@@ -545,7 +568,7 @@ def emit_qc_signals_csv(
 
 
 def emit_qc_signals_parquet(
-    rows: Sequence[Dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     jsonl_path: str,
     out_parquet: str,
 ) -> None:
@@ -564,13 +587,13 @@ def emit_qc_signals_parquet(
 
 
 def _score_jsonl_sequential(
-    shards: List["_JsonlShard"],
+    shards: list[_JsonlShard],
     scorer,
     *,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+    tracker: QCSummaryTracker | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for shard in shards:
         rows.extend(
             _score_lines(
@@ -588,10 +611,10 @@ def _score_jsonl_sequential(
 def _score_jsonl_sequential_streaming(
     jsonl_path: str,
     scorer,
-    consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
+    consume_rows: Callable[[Iterable[dict[str, Any]]], None],
     *,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
+    tracker: QCSummaryTracker | None = None,
 ) -> None:
     for shard in _iter_jsonl_shards(jsonl_path):
         rows = _score_lines(
@@ -607,11 +630,11 @@ def _score_jsonl_sequential_streaming(
 
 
 def _run_parallel_qc(
-    shards: Iterable["_JsonlShard"],
+    shards: Iterable[_JsonlShard],
     qc_cfg: QCConfig,
     config: SievioConfig,
     runtime: Any | None,
-    handle_rows: Callable[[int, List[Dict[str, Any]]], None],
+    handle_rows: Callable[[int, list[dict[str, Any]]], None],
     *,
     executor_hint: Any | None = None,
 ) -> bool:
@@ -648,7 +671,7 @@ def _run_parallel_qc(
         initargs=initargs,
     )
 
-    def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+    def _worker(shard: _JsonlShard) -> tuple[int, list[dict[str, Any]]]:
         if exec_cfg.kind == "process":
             return _qc_parallel_worker(shard)
         scorer = _scorer_factory()
@@ -662,7 +685,7 @@ def _run_parallel_qc(
             tracker=None,
         )
 
-    def _on_result(result: Tuple[int, List[Dict[str, Any]]]) -> None:
+    def _on_result(result: tuple[int, list[dict[str, Any]]]) -> None:
         shard_idx, shard_rows = result
         rows_list = list(shard_rows)
         if rows_list:
@@ -687,38 +710,38 @@ def _run_parallel_qc(
 
 
 def _score_jsonl_parallel_collecting(
-    shards: List["_JsonlShard"],
+    shards: list[_JsonlShard],
     qc_cfg: QCConfig,
     config: SievioConfig,
     runtime: Any | None,
     *,
     executor_hint: Any | None = None,
-) -> Optional[List[Dict[str, Any]]]:
-    shard_results: Dict[int, List[Dict[str, Any]]] = {}
+) -> list[dict[str, Any]] | None:
+    shard_results: dict[int, list[dict[str, Any]]] = {}
 
-    def _handle_rows(idx: int, rows: List[Dict[str, Any]]) -> None:
+    def _handle_rows(idx: int, rows: list[dict[str, Any]]) -> None:
         shard_results[idx] = rows
 
     ok = _run_parallel_qc(shards, qc_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
     if not ok:
         return None
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for idx in sorted(shard_results):
         rows.extend(shard_results[idx])
     return rows
 
 
 def _score_jsonl_parallel_streaming(
-    shards: Iterable["_JsonlShard"],
+    shards: Iterable[_JsonlShard],
     qc_cfg: QCConfig,
     config: SievioConfig,
     runtime: Any | None,
-    consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
+    consume_rows: Callable[[Iterable[dict[str, Any]]], None],
     *,
     executor_hint: Any | None = None,
 ) -> bool:
-    def _handle_rows(_: int, rows: List[Dict[str, Any]]) -> None:
+    def _handle_rows(_: int, rows: list[dict[str, Any]]) -> None:
         consume_rows(rows)
 
     return _run_parallel_qc(shards, qc_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
@@ -727,14 +750,14 @@ def _score_jsonl_parallel_streaming(
 @dataclass(slots=True)
 class _JsonlShard:
     index: int
-    lines: List[str]
+    lines: list[str]
     path: str
 
 
-_QC_WORKER_SCORER: Optional[Any] = None
+_QC_WORKER_SCORER: Any | None = None
 
 
-def _qc_worker_initializer(qc_cfg_payload: Dict[str, Any]) -> None:
+def _qc_worker_initializer(qc_cfg_payload: dict[str, Any]) -> None:
     global _QC_WORKER_SCORER
     qc_cfg = QCConfig(**qc_cfg_payload)
     scorer = make_qc_scorer(qc_cfg, new_instance=True)
@@ -743,7 +766,7 @@ def _qc_worker_initializer(qc_cfg_payload: Dict[str, Any]) -> None:
     _QC_WORKER_SCORER = scorer
 
 
-def _qc_parallel_worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+def _qc_parallel_worker(shard: _JsonlShard) -> tuple[int, list[dict[str, Any]]]:
     if _QC_WORKER_SCORER is None:
         raise RuntimeError("QC worker scorer not initialized")
     label = f"shard-{shard.index}:{shard.path}"
@@ -758,7 +781,7 @@ def _qc_parallel_worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
 
 
 def _iter_jsonl_shards(path: str, shard_size: int = 500) -> Iterator[_JsonlShard]:
-    chunk: List[str] = []
+    chunk: list[str] = []
     idx = 0
     with open_jsonl_maybe_gz(path) as fp:
         for line in fp:
@@ -774,15 +797,15 @@ def _iter_jsonl_shards(path: str, shard_size: int = 500) -> Iterator[_JsonlShard
 
 
 def _score_lines(
-    lines: List[str],
+    lines: list[str],
     scorer,
     *,
     source_path: str,
-    shard_label: Optional[str] = None,
+    shard_label: str | None = None,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+    tracker: QCSummaryTracker | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     label = shard_label or source_path
     checked_schema = False
     for idx, line in enumerate(lines, start=1):
@@ -828,16 +851,16 @@ def _score_lines(
 
 
 def _score_safety_lines(
-    lines: List[str],
+    lines: list[str],
     scorer: SafetyScorer,
     *,
     source_path: str,
-    shard_label: Optional[str] = None,
+    shard_label: str | None = None,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
+    tracker: QCSummaryTracker | None = None,
     screener_mode: str = QCMode.POST,
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     label = shard_label or source_path
     checked_schema = False
     for idx, line in enumerate(lines, start=1):
@@ -880,7 +903,7 @@ def _score_safety_lines(
             continue
         if not isinstance(raw_result, Mapping):
             continue
-        result: Dict[str, Any] = dict(raw_result)
+        result: dict[str, Any] = dict(raw_result)
         path_hint = best_effort_record_path(record)
         if path_hint and "record_path" not in result:
             result["record_path"] = path_hint
@@ -888,7 +911,7 @@ def _score_safety_lines(
     return rows
 
 
-def _log_post_qc_summary(summary: Dict[str, Any]) -> None:
+def _log_post_qc_summary(summary: dict[str, Any]) -> None:
     screeners = summary.get("screeners") if isinstance(summary, Mapping) else None
     quality = screeners.get("quality") if isinstance(screeners, Mapping) else {}
     quality_payload = quality if isinstance(quality, Mapping) else {}
@@ -916,13 +939,13 @@ def _log_post_qc_summary(summary: Dict[str, Any]) -> None:
 
 
 def _score_jsonl_safety_collecting(
-    shards: List["_JsonlShard"],
+    shards: list[_JsonlShard],
     scorer: SafetyScorer,
     *,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
-) -> List[Dict[str, Any]]:
-    rows: List[Dict[str, Any]] = []
+    tracker: QCSummaryTracker | None = None,
+) -> list[dict[str, Any]]:
+    rows: list[dict[str, Any]] = []
     for shard in shards:
         rows.extend(
             _score_safety_lines(
@@ -940,10 +963,10 @@ def _score_jsonl_safety_collecting(
 def _score_jsonl_safety_streaming(
     jsonl_path: str,
     scorer: SafetyScorer,
-    consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
+    consume_rows: Callable[[Iterable[dict[str, Any]]], None],
     *,
     fail_on_error: bool = False,
-    tracker: Optional[QCSummaryTracker] = None,
+    tracker: QCSummaryTracker | None = None,
 ) -> None:
     for shard in _iter_jsonl_shards(jsonl_path):
         rows = _score_safety_lines(
@@ -987,11 +1010,11 @@ def _resolve_safety_executor_config(cfg: SievioConfig, safety_cfg: SafetyConfig,
 
 
 def _run_parallel_safety(
-    shards: Iterable["_JsonlShard"],
+    shards: Iterable[_JsonlShard],
     safety_cfg: SafetyConfig,
     config: SievioConfig,
     runtime: Any | None,
-    handle_rows: Callable[[int, List[Dict[str, Any]]], None],
+    handle_rows: Callable[[int, list[dict[str, Any]]], None],
     *,
     executor_hint: Any | None = None,
 ) -> bool:
@@ -1028,7 +1051,7 @@ def _run_parallel_safety(
         initargs=initargs,
     )
 
-    def _worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+    def _worker(shard: _JsonlShard) -> tuple[int, list[dict[str, Any]]]:
         if exec_cfg.kind == "process":
             return _safety_parallel_worker(shard)
         scorer_obj = _scorer_factory()
@@ -1042,7 +1065,7 @@ def _run_parallel_safety(
             tracker=None,
         )
 
-    def _on_result(result: Tuple[int, List[Dict[str, Any]]]) -> None:
+    def _on_result(result: tuple[int, list[dict[str, Any]]]) -> None:
         shard_idx, shard_rows = result
         rows_list = list(shard_rows)
         if rows_list:
@@ -1067,47 +1090,47 @@ def _run_parallel_safety(
 
 
 def _score_jsonl_safety_parallel_collecting(
-    shards: List["_JsonlShard"],
+    shards: list[_JsonlShard],
     safety_cfg: SafetyConfig,
     config: SievioConfig,
     runtime: Any | None,
     *,
     executor_hint: Any | None = None,
-) -> Optional[List[Dict[str, Any]]]:
-    shard_results: Dict[int, List[Dict[str, Any]]] = {}
+) -> list[dict[str, Any]] | None:
+    shard_results: dict[int, list[dict[str, Any]]] = {}
 
-    def _handle_rows(idx: int, rows: List[Dict[str, Any]]) -> None:
+    def _handle_rows(idx: int, rows: list[dict[str, Any]]) -> None:
         shard_results[idx] = rows
 
     ok = _run_parallel_safety(shards, safety_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
     if not ok:
         return None
 
-    rows: List[Dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
     for idx in sorted(shard_results):
         rows.extend(shard_results[idx])
     return rows
 
 
 def _score_jsonl_safety_parallel_streaming(
-    shards: Iterable["_JsonlShard"],
+    shards: Iterable[_JsonlShard],
     safety_cfg: SafetyConfig,
     config: SievioConfig,
     runtime: Any | None,
-    consume_rows: Callable[[Iterable[Dict[str, Any]]], None],
+    consume_rows: Callable[[Iterable[dict[str, Any]]], None],
     *,
     executor_hint: Any | None = None,
 ) -> bool:
-    def _handle_rows(_: int, rows: List[Dict[str, Any]]) -> None:
+    def _handle_rows(_: int, rows: list[dict[str, Any]]) -> None:
         consume_rows(rows)
 
     return _run_parallel_safety(shards, safety_cfg, config, runtime, _handle_rows, executor_hint=executor_hint)
 
 
-_SAFETY_WORKER_SCORER: Optional[SafetyScorer] = None
+_SAFETY_WORKER_SCORER: SafetyScorer | None = None
 
 
-def _safety_worker_initializer(safety_cfg_payload: Dict[str, Any]) -> None:
+def _safety_worker_initializer(safety_cfg_payload: dict[str, Any]) -> None:
     global _SAFETY_WORKER_SCORER
     cfg = SafetyConfig(**safety_cfg_payload)
     scorer = make_safety_scorer(cfg, new_instance=True)
@@ -1116,7 +1139,7 @@ def _safety_worker_initializer(safety_cfg_payload: Dict[str, Any]) -> None:
     _SAFETY_WORKER_SCORER = scorer
 
 
-def _safety_parallel_worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any]]]:
+def _safety_parallel_worker(shard: _JsonlShard) -> tuple[int, list[dict[str, Any]]]:
     if _SAFETY_WORKER_SCORER is None:
         raise RuntimeError("Safety worker scorer not initialized")
     label = f"shard-{shard.index}:{shard.path}"
@@ -1130,7 +1153,7 @@ def _safety_parallel_worker(shard: _JsonlShard) -> Tuple[int, List[Dict[str, Any
     )
 
 
-def emit_safety_csv(rows: Sequence[Dict[str, Any]], jsonl_path: str, out_csv: str) -> None:
+def emit_safety_csv(rows: Sequence[dict[str, Any]], jsonl_path: str, out_csv: str) -> None:
     """Write safety rows to CSV."""
     import csv
 
@@ -1169,9 +1192,9 @@ def emit_safety_csv(rows: Sequence[Dict[str, Any]], jsonl_path: str, out_csv: st
             )
 
 
-def _collect_safety_signal_rows(rows: Sequence[Dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
+def _collect_safety_signal_rows(rows: Sequence[dict[str, Any]]) -> tuple[list[str], list[dict[str, Any]]]:
     signal_keys: set[str] = set()
-    raw_signals: list[tuple[Any, Dict[str, Any]]] = []
+    raw_signals: list[tuple[Any, dict[str, Any]]] = []
     for row in rows:
         _, signals = filter_safety_meta(row)
         signals_payload = {k: v for k, v in signals.items() if k != "safety_flags"}
@@ -1189,7 +1212,7 @@ def _collect_safety_signal_rows(rows: Sequence[Dict[str, Any]]) -> tuple[list[st
 
 
 def emit_safety_signals_csv(
-    rows: Sequence[Dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     jsonl_path: str,
     out_csv: str,
 ) -> None:
@@ -1209,7 +1232,7 @@ def emit_safety_signals_csv(
 
 
 def emit_safety_signals_parquet(
-    rows: Sequence[Dict[str, Any]],
+    rows: Sequence[dict[str, Any]],
     jsonl_path: str,
     out_parquet: str,
 ) -> None:
@@ -1227,7 +1250,7 @@ def emit_safety_signals_parquet(
     pq.write_table(table, out_parquet)
 
 
-def _log_post_safety_summary(summary: Dict[str, Any]) -> None:
+def _log_post_safety_summary(summary: dict[str, Any]) -> None:
     screeners = summary.get("screeners") if isinstance(summary, Mapping) else None
     safety = screeners.get("safety") if isinstance(screeners, Mapping) else {}
     safety_payload = safety if isinstance(safety, Mapping) else {}

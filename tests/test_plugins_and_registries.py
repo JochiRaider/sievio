@@ -1,19 +1,20 @@
 import importlib
-import logging
 from types import SimpleNamespace
 
 import pytest
 
 from sievio.core.builder import build_pipeline_plan
+from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
 from sievio.core.factories import SinkFactoryResult
+from sievio.core.interfaces import SinkFactoryContext, SourceFactoryContext
 from sievio.core.plugins import load_entrypoint_plugins
 from sievio.core.registries import (
     BytesHandlerRegistry,
     QualityScorerRegistry,
+    RegistryBundle,
     SafetyScorerRegistry,
     SinkRegistry,
     SourceRegistry,
-    RegistryBundle,
     bytes_handler_registry,
     default_registries,
     default_sink_registry,
@@ -21,8 +22,6 @@ from sievio.core.registries import (
     quality_scorer_registry,
     safety_scorer_registry,
 )
-from sievio.core.config import SievioConfig, SourceSpec, SinkSpec
-from sievio.core.interfaces import SourceFactoryContext, SinkFactoryContext
 
 
 class FakeEntryPoint:

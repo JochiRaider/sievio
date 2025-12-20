@@ -4,17 +4,17 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from importlib import metadata
-from typing import Callable, Optional
 
+from .log import get_logger
 from .registries import (
-    SourceRegistry,
-    SinkRegistry,
     BytesHandlerRegistry,
     QualityScorerRegistry,
     SafetyScorerRegistry,
+    SinkRegistry,
+    SourceRegistry,
 )
-from .log import get_logger
 
 log = get_logger(__name__)
 

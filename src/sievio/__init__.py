@@ -64,84 +64,28 @@ except Exception:  # PackageNotFoundError or any runtime env oddities
 # ---------------------------------------------------------------------------
 # Primary public API (stable)
 # ---------------------------------------------------------------------------
-from .core.config import SievioConfig, QCHeuristics, load_config_from_path
-from .core.records import (
-    build_record,
-    RecordMeta,
-    RunSummaryMeta,
-    QCSummaryMeta,
-    ensure_meta_dict,
-    best_effort_record_path,
-    is_summary_record,
-)
 from .cli.runner import (
     convert,
-    convert_local_dir,
     convert_github,
-    make_local_repo_config,
+    convert_local_dir,
     make_github_repo_config,
+    make_local_repo_config,
+    run_engine,
 )
-from .core.builder import PipelineOverrides
-from .sources.fs import LocalDirSource
-from .sources.githubio import GitHubZipSource
-from .sources.sources_webpdf import WebPdfListSource, WebPagePdfSource
-from .sinks.sinks import JSONLSink, PromptTextSink, NoopSink
-from .core.naming import (
-    build_output_basename_github,
-    build_output_basename_pdf,
-)
-from .core.licenses import detect_license_in_tree, detect_license_in_zip
-
 
 # ---------------------------------------------------------------------------
 # Advanced / expert API (subject to change)
 # ---------------------------------------------------------------------------
-from .core.builder import PipelinePlan, PipelineRuntime
-from .core.log import get_logger, configure_logging, temp_level
-from .sources.fs import (
-    DEFAULT_SKIP_DIRS,
-    DEFAULT_SKIP_FILES,
-    GitignoreRule,
-    GitignoreMatcher,
-    iter_repo_files,
-    collect_repo_files,
-)
-from .core.decode import read_text, decode_bytes
+from .core.builder import PipelineOverrides, PipelinePlan, PipelineRuntime
 from .core.chunk import (
     Block,
     ChunkPolicy,
-    count_tokens,
-    split_doc_blocks,
     chunk_text,
+    count_tokens,
     register_doc_splitter,
+    split_doc_blocks,
 )
-from .core.extras.md_kql import (
-    KQLBlock,
-    extract_kql_blocks_from_markdown,
-    is_probable_kql,
-    guess_kql_tables,
-    derive_category_from_rel,
-)
-from .sources.githubio import (
-    RepoSpec,
-    parse_github_url,
-    github_api_get,
-    get_repo_info,
-    get_repo_license_spdx,
-    download_zipball_to_temp,
-    iter_zip_members,
-)
-from .core.language_id import (
-    LanguageConfig,
-    CODE_EXTS,
-    DOC_EXTS,
-    EXT_LANG,
-    guess_lang_from_path,
-    is_code_file,
-)
-from .core.records import (
-    sha256_text,
-)
+from .core.config import QCHeuristics, SievioConfig, load_config_from_path
 from .core.convert import (
     DefaultExtractor,
     iter_records_from_bytes,
@@ -152,11 +96,71 @@ from .core.convert import (
     make_records_for_file,
     make_records_from_bytes,
 )
-from .core.interfaces import FileExtractor, FileItem, RepoContext, Source, Sink, Extractor, RunLifecycleHook, RunContext
-from .core.pipeline import run_pipeline, PipelineStats, PipelineEngine
-from .cli.runner import run_engine
+from .core.decode import decode_bytes, read_text
+from .core.extras.md_kql import (
+    KQLBlock,
+    derive_category_from_rel,
+    extract_kql_blocks_from_markdown,
+    guess_kql_tables,
+    is_probable_kql,
+)
 from .core.factories_sources import make_web_pdf_source
-
+from .core.interfaces import (
+    Extractor,
+    FileExtractor,
+    FileItem,
+    RepoContext,
+    RunContext,
+    RunLifecycleHook,
+    Sink,
+    Source,
+)
+from .core.language_id import (
+    CODE_EXTS,
+    DOC_EXTS,
+    EXT_LANG,
+    LanguageConfig,
+    guess_lang_from_path,
+    is_code_file,
+)
+from .core.licenses import detect_license_in_tree, detect_license_in_zip
+from .core.log import configure_logging, get_logger, temp_level
+from .core.naming import (
+    build_output_basename_github,
+    build_output_basename_pdf,
+)
+from .core.pipeline import PipelineEngine, PipelineStats, run_pipeline
+from .core.records import (
+    QCSummaryMeta,
+    RecordMeta,
+    RunSummaryMeta,
+    best_effort_record_path,
+    build_record,
+    ensure_meta_dict,
+    is_summary_record,
+    sha256_text,
+)
+from .sinks.sinks import JSONLSink, NoopSink, PromptTextSink
+from .sources.fs import (
+    DEFAULT_SKIP_DIRS,
+    DEFAULT_SKIP_FILES,
+    GitignoreMatcher,
+    GitignoreRule,
+    LocalDirSource,
+    collect_repo_files,
+    iter_repo_files,
+)
+from .sources.githubio import (
+    GitHubZipSource,
+    RepoSpec,
+    download_zipball_to_temp,
+    get_repo_info,
+    get_repo_license_spdx,
+    github_api_get,
+    iter_zip_members,
+    parse_github_url,
+)
+from .sources.sources_webpdf import WebPagePdfSource, WebPdfListSource
 
 # Optional extras (not part of PRIMARY_API)
 try:  # pragma: no cover - optional dependency

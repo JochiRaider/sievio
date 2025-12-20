@@ -10,10 +10,10 @@ to keep dependencies minimal.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, Optional, Protocol, Sequence, Tuple, runtime_checkable
-from typing import Literal
+from typing import Any, Literal, Protocol, runtime_checkable
 
 # ScoreKind describes how to interpret the `score` field:
 # - "probability": calibrated probability in [0.0, 1.0] (higher is better).
@@ -31,15 +31,15 @@ class LanguagePrediction:
     score: float
     reliable: bool = False
     score_kind: ScoreKind = "probability"
-    backend: Optional[str] = None
-    details: Dict[str, Any] | None = None
+    backend: str | None = None
+    details: dict[str, Any] | None = None
 
 
 @runtime_checkable
 class LanguageDetector(Protocol):
     """Interface for human-language detectors."""
 
-    def detect(self, text: str) -> Optional[LanguagePrediction]:
+    def detect(self, text: str) -> LanguagePrediction | None:
         ...
 
     def detect_topk(self, text: str, k: int = 3) -> Sequence[LanguagePrediction]:
@@ -59,15 +59,15 @@ class CodeLanguagePrediction:
     score: float
     reliable: bool = False
     score_kind: ScoreKind = "heuristic"
-    backend: Optional[str] = None
-    details: Dict[str, Any] | None = None
+    backend: str | None = None
+    details: dict[str, Any] | None = None
 
 
 @runtime_checkable
 class CodeLanguageDetector(Protocol):
     """Interface for code-language detectors."""
 
-    def detect_code(self, text: str, *, filename: str | None = None) -> Optional[CodeLanguagePrediction]:
+    def detect_code(self, text: str, *, filename: str | None = None) -> CodeLanguagePrediction | None:
         ...
 
     def detect_topk(self, text: str, k: int = 3, *, filename: str | None = None) -> Sequence[CodeLanguagePrediction]:
@@ -145,7 +145,7 @@ CODE_EXTS: set[str] = {
 MD_EXTS: set[str] = {".md", ".mdx", ".markdown"}
 RST_EXTS: set[str] = {".rst"}
 GENERIC_DOC_EXTS: set[str] = {".adoc", ".txt"}
-DOC_FORMAT_BY_EXT: Dict[str, str] = {
+DOC_FORMAT_BY_EXT: dict[str, str] = {
     ".md": "md",
     ".mdx": "md",
     ".markdown": "md",
@@ -157,7 +157,7 @@ DOC_EXTS: set[str] = MD_EXTS | RST_EXTS | GENERIC_DOC_EXTS
 
 # NOTE: Content-type tags here populate meta["lang"] (code or doc types).
 # Language hints per extension (lower-case ext -> language tag)
-EXT_LANG: Dict[str, str] = {
+EXT_LANG: dict[str, str] = {
     ".py": "python",
     ".ipynb": "python",
     ".ps1": "powershell",
@@ -222,7 +222,7 @@ EXT_LANG: Dict[str, str] = {
     ".evtx": "windows-eventlog",
 }
 
-DEFAULT_DISPLAY_NAMES: Dict[str, str] = {
+DEFAULT_DISPLAY_NAMES: dict[str, str] = {
     "python": "Python",
     "powershell": "PowerShell",
     "batch": "Batch",
@@ -270,8 +270,8 @@ class LanguageConfig:
 
     code_exts: set[str] = field(default_factory=lambda: set(CODE_EXTS))
     doc_exts: set[str] = field(default_factory=lambda: set(DOC_EXTS))
-    ext_lang: Dict[str, str] = field(default_factory=lambda: dict(EXT_LANG))
-    display_names: Dict[str, str] = field(default_factory=lambda: dict(DEFAULT_DISPLAY_NAMES))
+    ext_lang: dict[str, str] = field(default_factory=lambda: dict(EXT_LANG))
+    display_names: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_DISPLAY_NAMES))
 
 
 DEFAULT_LANGCFG = LanguageConfig()
@@ -281,7 +281,7 @@ DEFAULT_LANGCFG = LanguageConfig()
 # Basic classifiers / hints
 # -----------------------
 
-def guess_lang_from_path(path: str | Path, cfg: LanguageConfig | None = None) -> Tuple[str, str]:
+def guess_lang_from_path(path: str | Path, cfg: LanguageConfig | None = None) -> tuple[str, str]:
     """Return (kind, lang) for the given path."""
     cfg = cfg or DEFAULT_LANGCFG
     p = Path(path)
@@ -310,7 +310,7 @@ def is_code_file(path: str | Path, cfg: LanguageConfig | None = None) -> bool:
     return Path(path).suffix.lower() in cfg.code_exts
 
 
-def classify_path_kind(rel_path: str, *, cfg: LanguageConfig | None = None) -> Tuple[str, str | None]:
+def classify_path_kind(rel_path: str, *, cfg: LanguageConfig | None = None) -> tuple[str, str | None]:
     """Return (kind, lang_or_format) for a path.
 
     kind:
@@ -338,7 +338,7 @@ def classify_path_kind(rel_path: str, *, cfg: LanguageConfig | None = None) -> T
 class HeuristicLanguageDetector:
     """Cheap ASCII-heavy heuristic language detector."""
 
-    def detect(self, text: str) -> Optional[LanguagePrediction]:
+    def detect(self, text: str) -> LanguagePrediction | None:
         text = text or ""
         sample = text[:2048]
         letters = [ch for ch in sample if ch.isalpha()]
@@ -379,7 +379,7 @@ def make_language_detector(backend: str) -> LanguageDetector | None:
 # Code-language detectors
 # -----------------------
 
-SPECIAL_FILENAMES: Dict[str, str] = {
+SPECIAL_FILENAMES: dict[str, str] = {
     "makefile": "makefile",
     "cmakelists.txt": "cmake",
     "dockerfile": "docker",
@@ -392,7 +392,7 @@ SPECIAL_FILENAMES: Dict[str, str] = {
     "gemfile": "ruby",
 }
 
-SHEBANG_LANG_HINTS: Dict[str, str] = {
+SHEBANG_LANG_HINTS: dict[str, str] = {
     "python": "python",
     "python3": "python",
     "python2": "python",
@@ -410,7 +410,7 @@ SHEBANG_LANG_HINTS: Dict[str, str] = {
 }
 
 
-def _shebang_hint(text: str) -> Optional[str]:
+def _shebang_hint(text: str) -> str | None:
     first_line = (text.splitlines() or [""])[0].strip()
     if not first_line.startswith("#!"):
         return None
@@ -431,14 +431,14 @@ class BaselineCodeLanguageDetector:
     def __init__(self, cfg: LanguageConfig | None = None):
         self.cfg = cfg or DEFAULT_LANGCFG
 
-    def _lang_from_filename(self, filename: str) -> Optional[str]:
+    def _lang_from_filename(self, filename: str) -> str | None:
         name = Path(filename).name.lower()
         if name in SPECIAL_FILENAMES:
             return SPECIAL_FILENAMES[name]
         ext = Path(filename).suffix.lower()
         return self.cfg.ext_lang.get(ext)
 
-    def detect_code(self, text: str, *, filename: str | None = None) -> Optional[CodeLanguagePrediction]:
+    def detect_code(self, text: str, *, filename: str | None = None) -> CodeLanguagePrediction | None:
         lang = None
         backend = "baseline"
         if filename:

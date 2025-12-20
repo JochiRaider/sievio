@@ -1,6 +1,6 @@
 import logging
 
-from sievio.core.records import check_record_schema, RECORD_META_SCHEMA_VERSION
+from sievio.core.records import RECORD_META_SCHEMA_VERSION, check_record_schema
 
 
 def test_check_record_schema_matches_version_no_warning(caplog):

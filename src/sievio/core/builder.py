@@ -9,64 +9,71 @@ hooks. The primary entry point is build_pipeline_plan().
 """
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Sequence, Tuple, Iterable, Any, Callable, Mapping, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
-from .config import SievioConfig, QCMode, SinkConfig, RunMetadata, QCConfig
-from .interfaces import (
-    Source,
-    Sink,
-    RepoContext,
-    FileExtractor,
-    Record,
-    SourceFactoryContext,
-    SinkFactoryContext,
-    QualityScorer,
-    SafetyScorer,
-    RunLifecycleHook,
-    RecordMiddleware,
-    InlineScreener,
-)
-from .safe_http import SafeHttpClient
-from .log import get_logger
-from .factories_sources import make_bytes_handlers
-from .factories_qc import make_qc_scorer, make_safety_scorer
-from .convert import DefaultExtractor
 from .chunk import ChunkPolicy
-from .records import build_run_header_record
-from .hooks import RunSummaryHook, LanguageTaggingMiddleware
-from .dataset_card import DatasetCardHook
-from .registries import (
-    SourceRegistry,
-    SinkRegistry,
-    BytesHandlerRegistry,
-    QualityScorerRegistry,
-    RegistryBundle,
-    default_registries,
-    SafetyScorerRegistry,
-)
-from .qc_controller import InlineQCHook, InlineScreeningController, QualityInlineScreener, SafetyInlineScreener, QCSummaryTracker
-from .qc_post import PostQCHook, PostSafetyHook
 from .concurrency import resolve_pipeline_executor_config
+from .config import QCConfig, QCMode, RunMetadata, SievioConfig, SinkConfig
+from .convert import DefaultExtractor
+from .dataset_card import DatasetCardHook
+from .factories_qc import make_qc_scorer, make_safety_scorer
+from .factories_sources import make_bytes_handlers
+from .hooks import LanguageTaggingMiddleware, RunSummaryHook
+from .interfaces import (
+    FileExtractor,
+    InlineScreener,
+    QualityScorer,
+    Record,
+    RecordMiddleware,
+    RepoContext,
+    RunLifecycleHook,
+    SafetyScorer,
+    Sink,
+    SinkFactoryContext,
+    Source,
+    SourceFactoryContext,
+)
 from .language_id import (
     DEFAULT_LANGCFG,
-    LanguageConfig,
     CodeLanguageDetector,
+    LanguageConfig,
     LanguageDetector,
     make_code_language_detector,
     make_language_detector,
 )
+from .log import get_logger
+from .qc_controller import (
+    InlineQCHook,
+    InlineScreeningController,
+    QCSummaryTracker,
+    QualityInlineScreener,
+    SafetyInlineScreener,
+)
+from .qc_post import PostQCHook, PostSafetyHook
+from .records import build_run_header_record
+from .registries import (
+    BytesHandlerRegistry,
+    QualityScorerRegistry,
+    RegistryBundle,
+    SafetyScorerRegistry,
+    SinkRegistry,
+    SourceRegistry,
+    default_registries,
+)
+from .safe_http import SafeHttpClient
 
 log = get_logger(__name__)
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
-BytesHandler = Callable[[bytes, str, Optional[RepoContext], Optional[ChunkPolicy]], Optional[Iterable[Record]]]
+BytesHandler = Callable[[bytes, str, RepoContext | None, ChunkPolicy | None], Iterable[Record] | None]
 
 if TYPE_CHECKING:  # pragma: no cover
-    from .interfaces import FileMiddleware
+    pass
 
 
 @dataclass(slots=True)
@@ -111,11 +118,11 @@ class PipelineOverrides:
     file_extractor: FileExtractor | None = None
     language_detector: LanguageDetector | None = None
     code_language_detector: CodeLanguageDetector | None = None
-    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]] | None = None
+    bytes_handlers: Sequence[tuple[Sniff, BytesHandler]] | None = None
     # Middleware overrides are runtime-only; they are wired onto
     # PipelineEngine instances via apply_overrides_to_engine.
-    record_middlewares: "Sequence[RecordMiddlewareLike] | None" = None
-    file_middlewares: "Sequence[FileMiddlewareLike] | None" = None
+    record_middlewares: Sequence[RecordMiddlewareLike] | None = None
+    file_middlewares: Sequence[FileMiddlewareLike] | None = None
 
 
 # Public type aliases kept here to avoid importing middleware protocols
@@ -163,11 +170,11 @@ class PipelineRuntime:
             language detector used for tagging records.
     """
 
-    http_client: Optional[SafeHttpClient]
+    http_client: SafeHttpClient | None
     sources: Sequence[Source]
     sinks: Sequence[Sink]
     file_extractor: FileExtractor
-    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]]
+    bytes_handlers: Sequence[tuple[Sniff, BytesHandler]]
     record_middlewares: Sequence[RecordMiddleware] = ()
     lifecycle_hooks: Sequence[RunLifecycleHook] = ()
     executor_config: Any | None = None
@@ -206,7 +213,7 @@ class PipelinePreparationResult:
         file_extractor (FileExtractor): Extractor used to process files
             that are not handled by bytes handlers.
     """
-    bytes_handlers: tuple[Tuple[Sniff, BytesHandler], ...]
+    bytes_handlers: tuple[tuple[Sniff, BytesHandler], ...]
     file_extractor: FileExtractor
 
 
@@ -260,11 +267,11 @@ def build_pipeline_plan(
     mutate: bool = False,
     overrides: PipelineOverrides | None = None,
     registries: RegistryBundle | None = None,
-    source_registry: Optional[SourceRegistry] = None,
-    sink_registry: Optional[SinkRegistry] = None,
-    bytes_registry: Optional[BytesHandlerRegistry] = None,
-    scorer_registry: Optional[QualityScorerRegistry] = None,
-    safety_scorer_registry: Optional[SafetyScorerRegistry] = None,
+    source_registry: SourceRegistry | None = None,
+    sink_registry: SinkRegistry | None = None,
+    bytes_registry: BytesHandlerRegistry | None = None,
+    scorer_registry: QualityScorerRegistry | None = None,
+    safety_scorer_registry: SafetyScorerRegistry | None = None,
     load_plugins: bool = True,
 ) -> PipelinePlan:
     """Build a PipelinePlan from a declarative SievioConfig.
@@ -392,7 +399,7 @@ def build_pipeline_plan(
     return PipelinePlan(spec=cfg, runtime=runtime)
 
 
-def _prepare_http(cfg: SievioConfig, overrides: PipelineOverrides | None = None) -> Optional[SafeHttpClient]:
+def _prepare_http(cfg: SievioConfig, overrides: PipelineOverrides | None = None) -> SafeHttpClient | None:
     """Resolve the SafeHttpClient to use for remote-capable sources.
 
     If an override is provided via PipelineOverrides, it is returned

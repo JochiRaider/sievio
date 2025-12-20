@@ -5,12 +5,13 @@ from types import SimpleNamespace
 
 import pytest
 
+import sievio.core.pipeline as pipeline
 from sievio.core.builder import (
+    PipelineOverrides,
     PipelinePlan,
     PipelineRuntime,
     _assert_runtime_free_spec,
     build_pipeline_plan,
-    PipelineOverrides,
 )
 from sievio.core.concurrency import ExecutorConfig, resolve_pipeline_executor_config
 from sievio.core.config import (
@@ -18,18 +19,16 @@ from sievio.core.config import (
     QCConfig,
     QCHeuristics,
     SievioConfig,
-    RunMetadata,
     SinkSpec,
     SourceSpec,
     load_config_from_path,
 )
+from sievio.core.factories import SinkFactoryResult
 from sievio.core.interfaces import RepoContext
 from sievio.core.pipeline import PipelineEngine, run_pipeline
-from sievio.core.safe_http import SafeHttpClient
-from sievio.core.registries import SourceRegistry, SinkRegistry
-from sievio.core.factories import SinkFactoryResult
 from sievio.core.qc_controller import InlineQCHook
-import sievio.core.pipeline as pipeline
+from sievio.core.registries import SinkRegistry, SourceRegistry
+from sievio.core.safe_http import SafeHttpClient
 
 
 class DummyPdfSource:

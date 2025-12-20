@@ -13,15 +13,14 @@ generate per-shard configs with:
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterator, Sequence
 from copy import deepcopy
 from dataclasses import replace
-from pathlib import Path
-from typing import Callable, Dict, Iterator, List, Sequence, Tuple
 
-from .config import SievioConfig, SourceSpec, SinkSpec
+from .config import SievioConfig, SinkSpec, SourceSpec
 
 
-def _make_scalar_specs(kind: str, items: Sequence[str]) -> List[SourceSpec]:
+def _make_scalar_specs(kind: str, items: Sequence[str]) -> list[SourceSpec]:
     """
     Create one SourceSpec per item.
 
@@ -30,7 +29,7 @@ def _make_scalar_specs(kind: str, items: Sequence[str]) -> List[SourceSpec]:
     - local_dir: options["root_dir"]
     - sqlite: options["db_path"]
     """
-    specs: List[SourceSpec] = []
+    specs: list[SourceSpec] = []
     if kind == "github_zip":
         key = "url"
     elif kind == "local_dir":
@@ -44,7 +43,7 @@ def _make_scalar_specs(kind: str, items: Sequence[str]) -> List[SourceSpec]:
     return specs
 
 
-def _make_batch_spec(kind: str, items: Sequence[str]) -> List[SourceSpec]:
+def _make_batch_spec(kind: str, items: Sequence[str]) -> list[SourceSpec]:
     """
     Create a single SourceSpec whose options contain the full list.
 
@@ -58,9 +57,9 @@ def _make_batch_spec(kind: str, items: Sequence[str]) -> List[SourceSpec]:
     raise ValueError(f"_make_batch_spec does not support kind={kind!r}")
 
 
-ShardingStrategy = Callable[[str, Sequence[str]], List[SourceSpec]]
+ShardingStrategy = Callable[[str, Sequence[str]], list[SourceSpec]]
 
-SHARDING_STRATEGIES: Dict[str, ShardingStrategy] = {
+SHARDING_STRATEGIES: dict[str, ShardingStrategy] = {
     "web_pdf_list": _make_batch_spec,
     "github_zip": _make_scalar_specs,
     "local_dir": _make_scalar_specs,
@@ -105,7 +104,7 @@ def generate_shard_configs(
         cfg = deepcopy(base_config)
         cfg.sources.specs = make_specs(source_kind, chunk)
 
-        new_specs: List[SinkSpec] = []
+        new_specs: list[SinkSpec] = []
         for sink_spec in cfg.sinks.specs:
             if sink_spec.kind == "default_jsonl_prompt":
                 opts = dict(sink_spec.options)

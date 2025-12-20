@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath
-from typing import Callable, IO, Iterable, Iterator, Optional, Sequence, Set
 import os
 import stat
+from collections.abc import Callable, Iterable, Iterator, Sequence
+from dataclasses import dataclass, field
+from pathlib import Path, PurePosixPath
+from typing import IO
 
 from ..core.interfaces import FileItem, RepoContext, Source
 from ..core.naming import normalize_extensions
@@ -78,7 +79,7 @@ class _RootPathPolicy:
                 return True
         return False
 
-    def normalize_file(self, path: Path, *, lexical_rel: Optional[Path] = None) -> tuple[str, Path] | None:
+    def normalize_file(self, path: Path, *, lexical_rel: Path | None = None) -> tuple[str, Path] | None:
         """
         Normalize a candidate file path against the configured root.
 
@@ -255,10 +256,10 @@ class GitignoreMatcher:
     The matcher maintains an ordered list of rules. The last matching rule wins.
     """
 
-    def __init__(self, rules: Optional[Sequence[GitignoreRule]] = None) -> None:
+    def __init__(self, rules: Sequence[GitignoreRule] | None = None) -> None:
         self._rules: list[GitignoreRule] = list(rules or [])
 
-    def with_additional(self, extra: Sequence[GitignoreRule]) -> "GitignoreMatcher":
+    def with_additional(self, extra: Sequence[GitignoreRule]) -> GitignoreMatcher:
         """Return a new matcher that appends extra rules after current ones."""
         return GitignoreMatcher([*self._rules, *extra])
 
@@ -295,7 +296,7 @@ class GitignoreMatcher:
         # previously ignored paths, but cannot re-include if any parent dir
         # is ignored. We partially approximate parent-dir behavior by the
         # caller pruning ignored directories from traversal.
-        ignored: Optional[bool] = None
+        ignored: bool | None = None
         for rule in self._rules:
             if not self._is_within(rule.base, rel):
                 continue
@@ -381,12 +382,12 @@ def _normalize_rel(root: Path, p: Path) -> str:
 def iter_repo_files(
     root: os.PathLike[str] | str,
     *,
-    include_exts: Optional[set[str]] = None,
-    exclude_exts: Optional[set[str]] = None,
+    include_exts: set[str] | None = None,
+    exclude_exts: set[str] | None = None,
     follow_symlinks: bool = False,
     respect_gitignore: bool = True,
     skip_hidden: bool = True,
-    max_file_bytes: Optional[int] = None,
+    max_file_bytes: int | None = None,
 ) -> Iterator[Path]:
     """Yield files under root honoring size, visibility, and ignore rules.
 
@@ -512,7 +513,7 @@ def _is_hidden_rel(rel: Path) -> bool:
 class LocalDirSource(Source):
     """Iterate files from a local repo directory with early filters."""
 
-    def __init__(self, root: str | Path, *, config, context: Optional[RepoContext] = None) -> None:
+    def __init__(self, root: str | Path, *, config, context: RepoContext | None = None) -> None:
         """Configure traversal parameters for a repository root."""
         self.root = Path(root)
         self._cfg = config
@@ -521,7 +522,7 @@ class LocalDirSource(Source):
         self.exclude_exts = normalize_extensions(config.exclude_exts)
         self._policy = _RootPathPolicy(self.root, follow_symlinks=config.follow_symlinks)
 
-    def __enter__(self) -> "LocalDirSource":
+    def __enter__(self) -> LocalDirSource:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -587,7 +588,7 @@ class PatternFileSource(Source):
         patterns: Sequence[str],
         *,
         config,
-        context: Optional[RepoContext] = None,
+        context: RepoContext | None = None,
     ) -> None:
         """Configure glob patterns and filters for a repository root."""
         if not patterns:
@@ -605,7 +606,7 @@ class PatternFileSource(Source):
         cfg = self._cfg
         skip_hidden = getattr(cfg, "skip_hidden", True)
         max_file_bytes = getattr(cfg, "max_file_bytes", None)
-        seen: Set[str] = set()
+        seen: set[str] = set()
         for pattern in self.patterns:
             for path in self._policy.root_resolved.glob(pattern):
                 if not path.is_file() and not path.is_symlink():

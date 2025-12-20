@@ -4,14 +4,17 @@
 """PDF helpers for sniffing, parsing, and emitting Sievio records."""
 
 from __future__ import annotations
-from io import BytesIO
-from typing import Optional, List, Dict, Any, Iterable
+
+from collections.abc import Iterable
 from datetime import datetime
+from io import BytesIO
+from typing import Any
+
 from pypdf import PdfReader
 
 from ..core.chunk import ChunkPolicy, chunk_text
+from ..core.interfaces import Record, RepoContext
 from ..core.records import build_record
-from ..core.interfaces import RepoContext, Record
 
 # Re-export for DI registration
 __all__ = ["extract_pdf_records", "sniff_pdf", "handle_pdf"]
@@ -31,9 +34,9 @@ def sniff_pdf(data: bytes, rel: str) -> bool:
 def handle_pdf(
     data: bytes,
     rel: str,
-    ctx: Optional[RepoContext],
-    policy: Optional[ChunkPolicy],
-) -> Optional[Iterable[Record]]:
+    ctx: RepoContext | None,
+    policy: ChunkPolicy | None,
+) -> Iterable[Record] | None:
     """BytesHandler adapter that processes PDF payloads.
 
     Args:
@@ -93,7 +96,7 @@ def _first_lang_value(xmp_lang_alt: Any) -> str | None:
         return xmp_lang_alt.get("x-default") or next(iter(xmp_lang_alt.values()), None)
     return str(xmp_lang_alt) if xmp_lang_alt else None
 
-def _collect_pdf_metadata(reader: PdfReader) -> Dict[str, Any]:
+def _collect_pdf_metadata(reader: PdfReader) -> dict[str, Any]:
     """Collects classic Info fields and a subset of XMP metadata.
 
     Args:
@@ -102,7 +105,7 @@ def _collect_pdf_metadata(reader: PdfReader) -> Dict[str, Any]:
     Returns:
         Dict[str, Any]: Metadata dictionary with empty values removed.
     """
-    out: Dict[str, Any] = {}
+    out: dict[str, Any] = {}
 
     # Classic PDF metadata (DocumentInformation)
     info = getattr(reader, "metadata", None)
@@ -121,7 +124,7 @@ def _collect_pdf_metadata(reader: PdfReader) -> Dict[str, Any]:
     # XMP subset (if present)
     xmp = getattr(reader, "xmp_metadata", None)
     if xmp:
-        xmp_out: Dict[str, Any] = {}
+        xmp_out: dict[str, Any] = {}
         title = _first_lang_value(getattr(xmp, "dc_title", None))
         if title:
             xmp_out["dc_title"] = title
@@ -150,13 +153,13 @@ def extract_pdf_records(
     data: bytes,
     *,
     rel_path: str,
-    policy: Optional[ChunkPolicy] = None,
-    repo_full_name: Optional[str] = None,
-    repo_url: Optional[str] = None,
-    license_id: Optional[str] = None,
-    password: Optional[str] = None,
+    policy: ChunkPolicy | None = None,
+    repo_full_name: str | None = None,
+    repo_url: str | None = None,
+    license_id: str | None = None,
+    password: str | None = None,
     mode: str = "page",  # "page" => 1 record per page; "chunk" => join+chunk
-) -> List[Dict[str, object]]:
+) -> list[dict[str, object]]:
     """Converts PDF bytes into Sievio JSONL records with metadata.
 
     This routine is CPU-bound (pypdf parsing, text extraction, and
@@ -188,7 +191,7 @@ def extract_pdf_records(
     url_hint = ctx_seed.get("url") if ctx_seed else None
     domain_hint = ctx_seed.get("source_domain") if ctx_seed else None
 
-    def _with_context_extra(extra: Dict[str, Any]) -> Dict[str, Any]:
+    def _with_context_extra(extra: dict[str, Any]) -> dict[str, Any]:
         if ctx_seed:
             merged = dict(ctx_seed)
             merged.update(extra)
@@ -210,7 +213,7 @@ def extract_pdf_records(
         pdf_meta = {}
 
     # Extract text per page
-    pages_text: List[str] = []
+    pages_text: list[str] = []
     for p in reader.pages:
         try:
             txt = p.extract_text() or ""
@@ -219,7 +222,7 @@ def extract_pdf_records(
         pages_text.append(txt)
     file_nlines = sum((t.count("\n") + 1 if t else 0) for t in pages_text) if pages_text else 0
 
-    records: List[Dict[str, object]] = []
+    records: list[dict[str, object]] = []
     if mode == "page":
         n = len(pages_text)
         for i, text in enumerate(pages_text, start=1):

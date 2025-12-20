@@ -13,8 +13,8 @@ import argparse
 import hashlib
 import json
 import sys
+from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Iterable, Iterator, Tuple
 
 # Allow running from a source checkout without installing the package.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
@@ -23,7 +23,7 @@ from sievio.core.dedup_store import GlobalDedupStore
 from sievio.core.qc_utils import minhash_signature_for_text, open_jsonl_maybe_gz
 
 
-def _iter_signatures(paths: Iterable[str], *, k: int, n_perm: int) -> Iterator[Tuple[str, tuple[int, ...], str]]:
+def _iter_signatures(paths: Iterable[str], *, k: int, n_perm: int) -> Iterator[tuple[str, tuple[int, ...], str]]:
     for path in paths:
         with open_jsonl_maybe_gz(path) as fp:
             for line in fp:

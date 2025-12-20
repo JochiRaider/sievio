@@ -4,10 +4,10 @@
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Optional
+import re
+import unicodedata as _ud
 from dataclasses import dataclass
-import re, unicodedata as _ud
+from pathlib import Path
 
 from .log import get_logger
 
@@ -40,7 +40,7 @@ _BOMS: tuple[tuple[bytes, str], ...] = (
 )
 
 
-def _detect_bom(data: bytes) -> Optional[str]:
+def _detect_bom(data: bytes) -> str | None:
     """Return encoding implied by a BOM if present."""
     for sig, enc in _BOMS:
         if data.startswith(sig):
@@ -48,7 +48,7 @@ def _detect_bom(data: bytes) -> Optional[str]:
     return None
 
 
-def _guess_utf16_endian_from_nuls(sample: bytes) -> Optional[str]:
+def _guess_utf16_endian_from_nuls(sample: bytes) -> str | None:
     """Infer UTF-16 endianness from NUL distribution in a byte sample.
 
     Heuristic: in ASCII-heavy UTF-16 text, one byte of each 2-byte unit is
@@ -150,7 +150,7 @@ def _maybe_repair_cp1252_utf8(text_cp1252: str) -> str:
 def decode_bytes(
     data: bytes,
     *,
-    normalize: Optional[str] = "NFC",
+    normalize: str | None = "NFC",
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> DecodedText:
@@ -216,7 +216,7 @@ def decode_bytes(
     text = _postprocess(text1252, normalize=normalize, strip_controls=strip_controls)
     return DecodedText(text, enc_used, "\ufffd" in text)
 
-def _postprocess(s: str, *, normalize: Optional[str], strip_controls: bool) -> str:
+def _postprocess(s: str, *, normalize: str | None, strip_controls: bool) -> str:
     """Normalize newlines, strip controls, and apply Unicode normalization."""
     s = _normalize_newlines(s)
     if strip_controls:
@@ -229,8 +229,8 @@ def _postprocess(s: str, *, normalize: Optional[str], strip_controls: bool) -> s
 def read_text(
     path: str | bytes | Path,
     *,
-    max_bytes: Optional[int] = None,
-    normalize: Optional[str] = "NFC",
+    max_bytes: int | None = None,
+    normalize: str | None = "NFC",
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> str:

@@ -12,8 +12,9 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Callable, Dict, Mapping, Optional, Sequence, Union
+from typing import Union
 
 from .log import get_logger
 
@@ -93,13 +94,13 @@ class SafeHttpResponse:
     def info(self) -> http.client.HTTPMessage:
         return self._response.headers
 
-    def getheader(self, name: str, default: Optional[str] = None) -> Optional[str]:
+    def getheader(self, name: str, default: str | None = None) -> str | None:
         return self._response.getheader(name, default)
 
-    def read(self, amt: Optional[int] = None) -> bytes:  
+    def read(self, amt: int | None = None) -> bytes:  
         return self._response.read(amt)
 
-    def readline(self, limit: Optional[int] = None) -> bytes:  
+    def readline(self, limit: int | None = None) -> bytes:  
         if limit is None:
             return self._response.readline()
         return self._response.readline(limit)
@@ -113,7 +114,7 @@ class SafeHttpResponse:
         finally:
             self._connection.close()
 
-    def __enter__(self) -> "SafeHttpResponse":
+    def __enter__(self) -> SafeHttpResponse:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -125,11 +126,11 @@ class SafeHttpPolicy:
     """Policy hooks for SafeHttpClient decisions."""
 
     allow_ip: Callable[[ipaddress._BaseAddress], bool]
-    allow_redirect: Callable[[Optional[str], Optional[str]], bool]
+    allow_redirect: Callable[[str | None, str | None], bool]
     allow_redirect_scheme: Callable[[str, str], bool]
     redirect_headers: Callable[
-        [Optional[Mapping[str, str]], Optional[str], Optional[str]],
-        Optional[Mapping[str, str]],
+        [Mapping[str, str] | None, str | None, str | None],
+        Mapping[str, str] | None,
     ]
 
 
@@ -146,10 +147,10 @@ def _default_allow_ip(addr: ipaddress._BaseAddress) -> bool:
 
 
 def _default_redirect_headers(
-    headers: Optional[Mapping[str, str]],
-    old_host: Optional[str],
-    new_host: Optional[str],
-) -> Optional[Mapping[str, str]]:
+    headers: Mapping[str, str] | None,
+    old_host: str | None,
+    new_host: str | None,
+) -> Mapping[str, str] | None:
     """Drop sensitive headers when the redirect target host changes."""
     if headers is None:
         return None
@@ -166,14 +167,14 @@ def _default_allow_redirect_scheme(old_scheme: str, new_scheme: str) -> bool:
     return True
 
 
-def _build_default_allow_redirect(trusted_suffixes: set[str]) -> Callable[[Optional[str], Optional[str]], bool]:
+def _build_default_allow_redirect(trusted_suffixes: set[str]) -> Callable[[str | None, str | None], bool]:
     """Build the default redirect admission function."""
 
-    def _host_matches_suffix(host: Optional[str], suffix: str) -> bool:
+    def _host_matches_suffix(host: str | None, suffix: str) -> bool:
         normalized = SafeHttpClient._normalize_host(host)
         return bool(normalized and (normalized == suffix or normalized.endswith("." + suffix)))
 
-    def allow_redirect(origin: Optional[str], target: Optional[str]) -> bool:
+    def allow_redirect(origin: str | None, target: str | None) -> bool:
         origin_n = SafeHttpClient._normalize_host(origin)
         target_n = SafeHttpClient._normalize_host(target)
         if not origin_n or not target_n:
@@ -226,8 +227,8 @@ class SafeHttpClient:
         *,
         timeout: float = 30.0,
         max_redirects: int = 5,
-        allowed_redirect_suffixes: Optional[Sequence[str]] = None,
-        policy: Optional["SafeHttpPolicy"] = None,
+        allowed_redirect_suffixes: Sequence[str] | None = None,
+        policy: SafeHttpPolicy | None = None,
     ):
         self._default_timeout = timeout
         self._max_redirects = max_redirects
@@ -244,7 +245,7 @@ class SafeHttpClient:
             self._policy = DEFAULT_POLICY
 
     # helpers
-    def _resolve_ips(self, hostname: str, *, url: Optional[str] = None) -> list[str]:
+    def _resolve_ips(self, hostname: str, *, url: str | None = None) -> list[str]:
         """Resolve a hostname and filter out private or disallowed addresses."""
         try:
             infos = socket.getaddrinfo(hostname, None, type=socket.SOCK_STREAM)
@@ -266,14 +267,14 @@ class SafeHttpClient:
         return ips
 
     @staticmethod
-    def _normalize_host(host: Optional[str]) -> Optional[str]:
+    def _normalize_host(host: str | None) -> str | None:
         """Normalize a host for comparisons."""
         if not host:
             return None
         normalized = host.rstrip(".").lower()
         return normalized or None
 
-    def _hosts_related(self, origin: Optional[str], target: Optional[str]) -> bool:
+    def _hosts_related(self, origin: str | None, target: str | None) -> bool:
         """Determine if two hosts are related enough to allow redirects."""
         return self._policy.allow_redirect(origin, target)
 
@@ -300,11 +301,11 @@ class SafeHttpClient:
         return _SafeHTTPConnection(host, resolved_ip=ip, port=port, **common_kwargs)
 
     def _normalize_headers(
-        self, headers: Optional[Mapping[str, str]], host: str, port: int, scheme: str
-    ) -> Dict[str, str]:
+        self, headers: Mapping[str, str] | None, host: str, port: int, scheme: str
+    ) -> dict[str, str]:
         """Normalize headers, ensuring Host is set and not overridden."""
         host_value = host if self._is_default_port(scheme, port) else f"{host}:{port}"
-        out: Dict[str, str] = {"Host": host_value}
+        out: dict[str, str] = {"Host": host_value}
         if headers:
             for k, v in headers.items():
                 if k.lower() == "host":
@@ -330,9 +331,9 @@ class SafeHttpClient:
         self,
         request: RequestLike,
         *,
-        data: Optional[bytes] = None,
-        timeout: Optional[float] = None,
-        redirect_log: Optional[list[tuple[str, str, int]]] = None,
+        data: bytes | None = None,
+        timeout: float | None = None,
+        redirect_log: list[tuple[str, str, int]] | None = None,
     ) -> SafeHttpResponse:
         """Open an HTTP request with redirect and IP safety checks.
 
@@ -375,13 +376,13 @@ class SafeHttpClient:
         self,
         request: RequestLike,
         *,
-        data: Optional[bytes] = None,
-        timeout: Optional[float] = None,
+        data: bytes | None = None,
+        timeout: float | None = None,
         retries: int = 0,
         backoff_base: float = 1.0,
         backoff_factor: float = 2.0,
         only_get_like: bool = True,
-        redirect_log: Optional[list[tuple[str, str, int]]] = None,
+        redirect_log: list[tuple[str, str, int]] | None = None,
     ) -> SafeHttpResponse:
         """Retry wrapper around ``open`` with exponential backoff.
 
@@ -415,12 +416,12 @@ class SafeHttpClient:
         if only_get_like and method not in {"GET", "HEAD", "OPTIONS", "TRACE"}:
             return self.open(req_obj, data=data, timeout=timeout)
 
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         attempts = max(0, int(retries)) + 1
         for attempt in range(attempts):
             try:
                 return self.open(req_obj, data=data, timeout=timeout, redirect_log=redirect_log)
-            except (urllib.error.URLError, TimeoutError, socket.timeout, OSError) as exc:
+            except (urllib.error.URLError, TimeoutError, OSError) as exc:
                 last_error = exc
                 if attempt >= attempts - 1:
                     raise
@@ -437,13 +438,13 @@ class SafeHttpClient:
         *,
         url: str,
         method: str,
-        headers: Optional[Mapping[str, str]],
-        body: Optional[bytes],
+        headers: Mapping[str, str] | None,
+        body: bytes | None,
         timeout: float,
         redirects_remaining: int,
-        origin_host: Optional[str],
+        origin_host: str | None,
         redirects_followed: int,
-        redirect_log: Optional[list[tuple[str, str, int]]] = None,
+        redirect_log: list[tuple[str, str, int]] | None = None,
     ) -> SafeHttpResponse:
         """Internal request executor with redirect handling and safety checks."""
         parsed = urllib.parse.urlsplit(url)
@@ -454,7 +455,7 @@ class SafeHttpClient:
         if not host:
             raise urllib.error.URLError("URL missing host")
         port = parsed.port or (443 if scheme == "https" else 80)
-        last_error: Optional[Exception] = None
+        last_error: Exception | None = None
         for ip in self._resolve_ips(host, url=url):
             conn = self._build_connection(scheme=scheme, host=host, ip=ip, port=port, timeout=timeout)
             path = self._build_path(parsed)
@@ -520,7 +521,7 @@ class SafeHttpClient:
 
 
 # safe_http.py – allow config overrides when instantiating the shared client
-SAFE_HTTP_CLIENT: Optional[SafeHttpClient] = None
+SAFE_HTTP_CLIENT: SafeHttpClient | None = None
 
 
 def get_global_http_client() -> SafeHttpClient:
@@ -531,7 +532,7 @@ def get_global_http_client() -> SafeHttpClient:
     return SAFE_HTTP_CLIENT
 
 
-def set_global_http_client(client: Optional[SafeHttpClient]) -> None:
+def set_global_http_client(client: SafeHttpClient | None) -> None:
     """Override or clear the module-level SAFE_HTTP_CLIENT helper."""
     global SAFE_HTTP_CLIENT
     SAFE_HTTP_CLIENT = client

@@ -17,8 +17,9 @@ import random
 import re
 import zlib
 from collections import defaultdict, deque
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Any, Dict, Iterable, List, Optional, TextIO, TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, TextIO
 
 if TYPE_CHECKING:  # pragma: no cover
     from .config import QCHeuristics
@@ -111,7 +112,7 @@ def open_jsonl_maybe_gz(path: str | os.PathLike[str]) -> TextIO:
     p = Path(path)
     if p.suffix.lower() == ".gz":
         return gzip.open(p, "rt", encoding="utf-8")
-    return open(p, "r", encoding="utf-8")
+    return open(p, encoding="utf-8")
 
 
 def open_jsonl_output_maybe_gz(path: str | os.PathLike[str], mode: str = "a") -> TextIO:
@@ -131,7 +132,7 @@ def open_jsonl_output_maybe_gz(path: str | os.PathLike[str], mode: str = "a") ->
     return open(p, mode, encoding="utf-8")
 
 
-def target_band(lang: str, *, heuristics: "QCHeuristics | None" = None) -> tuple[int, int]:
+def target_band(lang: str, *, heuristics: QCHeuristics | None = None) -> tuple[int, int]:
     """Return target token windows for a language category.
 
     Args:
@@ -182,7 +183,7 @@ def repetition_rate(
     s: str,
     k: int | None = None,
     *,
-    heuristics: "QCHeuristics | None" = None,
+    heuristics: QCHeuristics | None = None,
 ) -> float:
     """Measure the share of text covered by repeated k-grams.
 
@@ -200,7 +201,7 @@ def repetition_rate(
         k = 16
     if len(s) < 2 * k:
         return 0.0
-    seen: Dict[str, int] = {}
+    seen: dict[str, int] = {}
     reps = 0
     for i in range(0, len(s) - k + 1):
         gram = s[i : i + k]
@@ -210,7 +211,7 @@ def repetition_rate(
     return reps / max(1, len(s) - k)
 
 
-def code_complexity(s: str, *, heuristics: "QCHeuristics | None" = None) -> float:
+def code_complexity(s: str, *, heuristics: QCHeuristics | None = None) -> float:
     """Score code-likeness using punctuation density and line lengths.
 
     Args:
@@ -276,7 +277,6 @@ _STOP = {
     "them",
     "then",
     "here",
-    "into",
     "onto",
     "upon",
     "using",
@@ -371,7 +371,7 @@ class SimHashWindowIndex:
         for idx, key in enumerate(self._band_keys(h)):
             self.tables[idx][key].append((h, doc_id))
 
-    def query(self, h: int) -> tuple[Optional[int], Optional[str]]:
+    def query(self, h: int) -> tuple[int | None, str | None]:
         candidates: set[tuple[int, str]] = set()
         for idx, key in enumerate(self._band_keys(h)):
             bucket = self.tables[idx].get(key)
@@ -400,7 +400,7 @@ class SimHashWindowIndex:
 # ---------- MinHash + LSH ----------
 _PRIME32 = 4294967311
 _RNG = random.Random(0x5EED5EED)
-_MINHASH_COEF: List[tuple[int, int]] = [
+_MINHASH_COEF: list[tuple[int, int]] = [
     (_RNG.randrange(1, _PRIME32 - 1), _RNG.randrange(0, _PRIME32 - 1)) for _ in range(128)
 ]
 
@@ -475,8 +475,8 @@ class MinHashLSH:
         self.bands = bands
         self.rows = n_perm // bands
         self.jaccard_threshold = float(jaccard_threshold)
-        self.buckets: Dict[tuple[int, int], set[str]] = {}
-        self.sigs: Dict[str, tuple[int, ...]] = {}
+        self.buckets: dict[tuple[int, int], set[str]] = {}
+        self.sigs: dict[str, tuple[int, ...]] = {}
 
     @staticmethod
     def _fnv1a_fold(vals: Iterable[int]) -> int:
@@ -509,7 +509,7 @@ class MinHashLSH:
                     seen.add(doc_id)
                     yield doc_id
 
-    def add_and_check(self, doc_id: str, sig: tuple[int, ...]) -> tuple[bool, float, Optional[str]]:
+    def add_and_check(self, doc_id: str, sig: tuple[int, ...]) -> tuple[bool, float, str | None]:
         """Insert a signature and estimate duplication against existing items.
 
         Args:
@@ -683,7 +683,7 @@ def _ellipsis_ratio(text: str) -> float:
     )
 
 
-def gopher_quality(text: str) -> tuple[float, Dict[str, bool]]:
+def gopher_quality(text: str) -> tuple[float, dict[str, bool]]:
     """Score text against coarse Gopher-style quality heuristics.
 
     Args:
@@ -786,9 +786,9 @@ class PerplexityModel:
 
 # ---------- Duplicate family summaries ----------
 def update_dup_family_counts(
-    storage: Dict[str, Dict[str, Any]],
-    family_id: Optional[str],
-    path: Optional[str],
+    storage: dict[str, dict[str, Any]],
+    family_id: str | None,
+    path: str | None,
     *,
     max_examples: int = 3,
 ) -> None:
@@ -809,11 +809,11 @@ def update_dup_family_counts(
 
 
 def top_dup_families(
-    storage: Dict[str, Dict[str, Any]],
+    storage: dict[str, dict[str, Any]],
     *,
     k: int = 5,
     min_count: int = 2,
-) -> List[Dict[str, Any]]:
+) -> list[dict[str, Any]]:
     """Return the top duplicate families sorted by count.
 
     Args:
@@ -825,7 +825,7 @@ def top_dup_families(
     Returns:
         List[Dict[str, Any]]: Summary rows with id, count, and examples.
     """
-    results: List[Dict[str, Any]] = []
+    results: list[dict[str, Any]] = []
     for family_id, data in storage.items():
         count = int(data.get("count", 0))
         if count < min_count:

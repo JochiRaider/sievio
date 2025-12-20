@@ -8,12 +8,12 @@ import hashlib
 import sqlite3
 import urllib.error
 import urllib.request
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Tuple, Any
 
 from ..core import safe_http
-from ..core.interfaces import Source, FileItem, RepoContext
+from ..core.interfaces import FileItem, RepoContext, Source
 from ..core.log import get_logger
 
 __all__ = ["SQLiteSource"]
@@ -45,19 +45,19 @@ class SQLiteSource(Source):
     """
 
     db_path: Path
-    context: Optional[RepoContext] = None
-    table: Optional[str] = None
-    sql: Optional[str] = None
+    context: RepoContext | None = None
+    table: str | None = None
+    sql: str | None = None
     text_columns: Sequence[str] = ("text",)
-    id_column: Optional[str] = None
-    where: Optional[str] = None
+    id_column: str | None = None
+    where: str | None = None
     batch_size: int = 1000
-    db_url: Optional[str] = None
-    download_timeout: Optional[float] = None
-    download_max_bytes: Optional[int] = None
+    db_url: str | None = None
+    download_timeout: float | None = None
+    download_max_bytes: int | None = None
     retries: int = 2
-    client: Optional[safe_http.SafeHttpClient] = None
-    checksum: Optional[str] = None
+    client: safe_http.SafeHttpClient | None = None
+    checksum: str | None = None
 
     def __post_init__(self) -> None:
         """Normalizes configuration after initialization."""
@@ -132,14 +132,14 @@ class SQLiteSource(Source):
             return self.db_path
         raise FileNotFoundError(self.db_path)
 
-    def _quote_identifier(self, name: Optional[str]) -> Optional[str]:
+    def _quote_identifier(self, name: str | None) -> str | None:
         """Quotes SQLite identifiers to avoid conflicts with reserved keywords."""
         if not name:
             return name
         escaped = name.replace('"', '""')
         return f'"{escaped}"'
 
-    def _build_query(self) -> Tuple[str, Optional[str]]:
+    def _build_query(self) -> tuple[str, str | None]:
         """Constructs the SQL query and a label for result paths.
 
         Note: The WHERE clause is used verbatim and must come from trusted input.
@@ -164,7 +164,7 @@ class SQLiteSource(Source):
 
     def _row_to_text_and_path(
         self, row: sqlite3.Row, idx: int, table_or_label: str
-    ) -> Optional[Tuple[bytes, str]]:
+    ) -> tuple[bytes, str] | None:
         """Converts a database row into encoded text and a relative path."""
         parts: list[str] = []
         for col in self.text_columns:

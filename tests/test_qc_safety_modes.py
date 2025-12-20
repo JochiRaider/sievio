@@ -1,16 +1,17 @@
 import json
 import types
 
-import pytest
-
 from sievio.core.builder import _prepare_qc
-from sievio.core.config import QCConfig, QCMode, SievioConfig, SafetyConfig
+from sievio.core.config import QCConfig, QCMode, SafetyConfig, SievioConfig
 from sievio.core.interfaces import RunContext
 from sievio.core.pipeline import PipelineStats
 from sievio.core.qc_controller import (
     InlineQCController,
     InlineQCHook,
+    QCSummaryTracker,
+    QualityDecisionPolicy,
     QualityInlineScreener,
+    SafetyDecisionPolicy,
     SafetyInlineScreener,
 )
 from sievio.core.qc_post import PostQCHook, PostSafetyHook, run_safety_over_jsonl
@@ -147,6 +148,28 @@ def test_qc_inline_safety_advisory_annotates_only():
     assert safety_meta["safety_flags"]["note"] is True
 
 
+def test_inline_safety_annotate_only_records_would_drop():
+    safety_cfg = SafetyConfig(enabled=True, mode=QCMode.INLINE, annotate_only=True)
+    summary = QCSummaryTracker()
+    screener = SafetyInlineScreener(
+        cfg=safety_cfg,
+        scorer=ConstantSafetyScorer({"safety_decision": "drop", "safety_flags": {"blocked": True}}),
+        summary=summary,
+        logger=None,
+        enforce_drops=True,
+    )
+    record = {"text": "unsafe", "meta": {"path": "drop.txt"}}
+
+    kept = screener.process_record(record)
+
+    assert kept is record
+    stats = summary.get_screener("safety", create=False)
+    assert stats is not None
+    assert stats.kept == 1
+    assert stats.dropped == 0
+    assert stats.drops.get("drop") == 1
+
+
 def test_safety_post_mode_allowed():
     cfg = SievioConfig()
     cfg.qc.enabled = False
@@ -265,7 +288,10 @@ def test_post_qc_merge_preserves_safety(tmp_path):
     cfg.sinks.primary_jsonl_name = str(jsonl_path)
 
     stats = PipelineStats()
-    stats.qc.observe_safety({"safety_decision": "drop", "safety_flags": {"flagged": True}}, apply_gates=True)
+    safety_policy = SafetyDecisionPolicy()
+    safety_row = {"safety_decision": "drop", "safety_flags": {"flagged": True}}
+    decision = safety_policy.decide(safety_row, cfg=None)
+    stats.qc.observe_safety(safety_row, decision, did_drop=True)
 
     hook = PostQCHook(cfg.qc, qc_scorer)
     ctx = RunContext(cfg=cfg, stats=stats, runtime=_make_runtime(post_qc_scorer=qc_scorer))
@@ -290,7 +316,11 @@ def test_post_safety_hook_preserves_quality(tmp_path):
     cfg.sinks.primary_jsonl_name = str(jsonl_path)
 
     stats = PipelineStats()
-    stats.qc.observe({"score": 90.0, "near_dup": False}, apply_gates=False)
+    qc_policy = QualityDecisionPolicy()
+    qc_cfg = QCConfig(min_score=None, drop_near_dups=False)
+    qc_row = {"score": 90.0, "near_dup": False}
+    decision = qc_policy.decide(qc_row, cfg=qc_cfg)
+    stats.qc.observe_quality(qc_row, decision, did_drop=False)
 
     hook = PostSafetyHook(cfg.qc.safety, safety_scorer)
     ctx = RunContext(cfg=cfg, stats=stats, runtime=_make_runtime(post_safety_scorer=safety_scorer))
@@ -318,8 +348,9 @@ def test_run_safety_over_jsonl_emits_csv(tmp_path):
         scorer=ConstantSafetyScorer({"safety_decision": "drop", "safety_flags": {"flagged": True}}),
     )
 
-    assert summary["safety"]["scored"] == 1
-    assert summary["safety"]["dropped"] == 1
+    safety_summary = summary["screeners"]["safety"]
+    assert safety_summary["scored"] == 1
+    assert safety_summary["dropped"] == 1
 
     csv_path = tmp_path / "safety_safety.csv"
     assert csv_path.exists()

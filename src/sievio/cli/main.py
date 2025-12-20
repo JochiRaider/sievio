@@ -7,8 +7,8 @@ import argparse
 import glob
 import json
 import sys
+from collections.abc import Sequence
 from pathlib import Path
-from typing import Optional, Sequence
 
 from ..core.config import SievioConfig, load_config_from_path
 from ..core.dataset_card import build_dataset_card_from_fragments
@@ -18,10 +18,8 @@ from ..core.sharding import SHARDING_STRATEGIES, generate_shard_configs
 from ..core.stats_aggregate import merge_pipeline_stats
 from .runner import (
     convert,
-    convert_local_dir,
     convert_github,
-    make_local_repo_config,
-    make_github_repo_config,
+    convert_local_dir,
 )
 
 try:  # pragma: no cover - optional dependency
@@ -123,7 +121,7 @@ def _apply_pipeline_overrides(cfg: SievioConfig, args: argparse.Namespace) -> No
         cfg.pipeline.executor_kind = args.override_executor_kind
 
 
-def _load_base_config(path: Optional[str]) -> Optional[SievioConfig]:
+def _load_base_config(path: str | None) -> SievioConfig | None:
     """Load an optional base configuration from a file path.
 
     When ``path`` is provided, the configuration is loaded using
@@ -277,7 +275,7 @@ def _dispatch(args: argparse.Namespace) -> int:
     return 1
 
 
-def main(argv: Optional[Sequence[str]] = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
     """Entry point for the Sievio command-line interface.
 
     Parses arguments, dispatches to the selected subcommand, and returns

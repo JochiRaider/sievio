@@ -1,4 +1,3 @@
-import pytest
 
 from sievio.core.stats_aggregate import merge_pipeline_stats
 

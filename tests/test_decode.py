@@ -15,7 +15,7 @@ def test_decode_utf8_happy_path() -> None:
 
 
 def test_decode_handles_utf8_bom() -> None:
-    data = b"\xef\xbb\xbf" + "Hi".encode("utf-8")
+    data = b"\xef\xbb\xbf" + b"Hi"
 
     dec = decode_bytes(data)
 
@@ -80,7 +80,7 @@ def test_decode_normalizes_newlines_and_strips_controls() -> None:
 
 def test_read_text_full_and_truncated(tmp_path: Path) -> None:
     full_path = tmp_path / "sample.txt"
-    full_path.write_bytes("Hello\nworld".encode("utf-8"))
+    full_path.write_bytes(b"Hello\nworld")
 
     assert read_text(full_path) == "Hello\nworld"
 

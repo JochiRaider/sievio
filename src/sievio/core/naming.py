@@ -3,9 +3,11 @@
 """Helpers for constructing safe output names and normalizing extensions."""
 
 from __future__ import annotations
-import re, unicodedata
+
+import re
+import unicodedata
+from collections.abc import Iterable
 from urllib.parse import urlparse
-from typing import Iterable, Optional, Set
 
 __all__ = [
     "build_output_basename_github",
@@ -40,7 +42,7 @@ _WINDOWS_RESERVED = {
 }
 _SEPS_RX = re.compile(r"[^\w\-]+", flags=re.ASCII)
 
-def _sanitize_component(s: Optional[str], *, lower: bool = True, maxlen: int = 64) -> str:
+def _sanitize_component(s: str | None, *, lower: bool = True, maxlen: int = 64) -> str:
     """Sanitize a text component into a safe ASCII token.
 
     Args:
@@ -68,7 +70,7 @@ def _sanitize_component(s: Optional[str], *, lower: bool = True, maxlen: int = 6
             token = f"{token[:maxlen-1]}_"
     return token
 
-def _normalize_spdx(spdx: Optional[str]) -> str:
+def _normalize_spdx(spdx: str | None) -> str:
     """Normalize an SPDX identifier into a safe uppercase token.
 
     Args:
@@ -84,11 +86,11 @@ def _normalize_spdx(spdx: Optional[str]) -> str:
     return spdx_clean or "UNKNOWN"
 
 def build_output_basename_github(*,
-    owner: Optional[str],
-    repo: Optional[str],
-    ref: Optional[str],            # branch/tag/short-commit; pass "master" if unknown
-    license_spdx: Optional[str],   # e.g., "MIT", "Apache-2.0", or None
-    include_commit: Optional[str] = None,  # short sha (optional suffix)
+    owner: str | None,
+    repo: str | None,
+    ref: str | None,            # branch/tag/short-commit; pass "master" if unknown
+    license_spdx: str | None,   # e.g., "MIT", "Apache-2.0", or None
+    include_commit: str | None = None,  # short sha (optional suffix)
     maxlen: int = 120,
 ) -> str:
     """Build a deterministic basename for GitHub-sourced outputs.
@@ -118,9 +120,9 @@ def build_output_basename_github(*,
     return base[:maxlen]
 
 def build_output_basename_pdf(*,
-    url: Optional[str],
-    title: Optional[str],
-    license_spdx: Optional[str],
+    url: str | None,
+    title: str | None,
+    license_spdx: str | None,
     maxlen: int = 120,
 ) -> str:
     """Build a deterministic basename for PDF-sourced outputs.
@@ -146,7 +148,7 @@ def build_output_basename_pdf(*,
     base = "__".join([host_s, title_s, spdx])
     return base[:maxlen]
 
-def normalize_extensions(exts: Optional[Iterable[str]]) -> Optional[Set[str]]:
+def normalize_extensions(exts: Iterable[str] | None) -> set[str] | None:
     """Normalize extension strings into dotted lowercase values.
 
     Args:
@@ -158,7 +160,7 @@ def normalize_extensions(exts: Optional[Iterable[str]]) -> Optional[Set[str]]:
     """
     if not exts:
         return None
-    out: Set[str] = set()
+    out: set[str] = set()
     for ext in exts:
         if not ext:
             continue

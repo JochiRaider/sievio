@@ -4,37 +4,46 @@
 
 from __future__ import annotations
 
+import pickle
+from collections.abc import Callable, Iterable, Sequence
 from contextlib import ExitStack
 from dataclasses import dataclass, field, replace
-from typing import Optional, Iterable, Sequence, Dict, List, Tuple, Any, Callable, Mapping
 from pathlib import Path
-import pickle
+from typing import Any
 
-from .config import SievioConfig, FileProcessingConfig
-from .builder import PipelinePlan, PipelineOverrides, PipelineRuntime, build_pipeline_plan, build_engine
-from .interfaces import (
-    Source,
-    Sink,
-    RepoContext,
-    Record,
-    FileExtractor,
-    ClosableSource,
-    RecordMiddleware,
-    FileMiddleware,
-    RunContext,
-    RunLifecycleHook,
-    RunSummaryView,
+from .builder import (
+    PipelineOverrides,
+    PipelinePlan,
+    PipelineRuntime,
+    build_engine,
 )
 from .concurrency import (
     Executor,
     process_items_parallel,
     resolve_pipeline_executor_config,
 )
-from .convert import DefaultExtractor, make_limited_stream, _can_open_stream, _OPEN_STREAM_DEFAULT_MAX_BYTES
+from .config import FileProcessingConfig, SievioConfig
+from .convert import (
+    _OPEN_STREAM_DEFAULT_MAX_BYTES,
+    DefaultExtractor,
+    _can_open_stream,
+    make_limited_stream,
+)
+from .interfaces import (
+    FileExtractor,
+    FileMiddleware,
+    Record,
+    RecordMiddleware,
+    RepoContext,
+    RunContext,
+    RunLifecycleHook,
+    RunSummaryView,
+    Sink,
+    Source,
+)
 from .log import get_logger
 from .qc_controller import QCSummaryTracker
 from .records import best_effort_record_path
-
 
 log = get_logger(__name__)
 
@@ -50,38 +59,38 @@ class ErrorRateExceeded(RuntimeError):
 @dataclass(frozen=True)
 class _WorkItem:
     item: Any
-    ctx: Optional[RepoContext]
+    ctx: RepoContext | None
 
 
 class _FuncRecordMiddleware:
     """Internal adapter to treat bare functions as RecordMiddleware."""
 
-    def __init__(self, fn: Callable[[Record], Optional[Record]]) -> None:
+    def __init__(self, fn: Callable[[Record], Record | None]) -> None:
         self._fn = fn
         self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
-    def process(self, record: Record) -> Optional[Record]:
+    def process(self, record: Record) -> Record | None:
         return self._fn(record)
 
-    def __call__(self, record: Record) -> Optional[Record]:
+    def __call__(self, record: Record) -> Record | None:
         return self.process(record)
 
 
 class _FuncFileMiddleware:
     """Internal adapter to treat bare functions as FileMiddleware."""
 
-    def __init__(self, fn: Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]) -> None:
+    def __init__(self, fn: Callable[[Any, Iterable[Record]], Iterable[Record] | None]) -> None:
         self._fn = fn
         self.__name__ = getattr(fn, "__name__", fn.__class__.__name__)
 
-    def process(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
+    def process(self, item: Any, records: Iterable[Record]) -> Iterable[Record] | None:
         return self._fn(item, records)
 
 
 def apply_overrides_to_engine(
-    engine: "PipelineEngine",
-    overrides: "PipelineOverrides | None",
-) -> "PipelineEngine":
+    engine: PipelineEngine,
+    overrides: PipelineOverrides | None,
+) -> PipelineEngine:
     """
     Apply runtime-only overrides that target the PipelineEngine itself.
 
@@ -120,7 +129,7 @@ class _ProcessFileCallable:
     executor_kind: str = "thread"
     materialize: bool = False
 
-    def __call__(self, work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
+    def __call__(self, work: _WorkItem) -> tuple[Any, Iterable[Record]]:
         """Extract records from a work item using the configured extractor.
 
         Args:
@@ -218,13 +227,13 @@ class PipelineStats:
     sink_errors: int = 0
     source_errors: int = 0
     middleware_errors: int = 0
-    by_ext: Dict[str, int] = field(default_factory=dict)
+    by_ext: dict[str, int] = field(default_factory=dict)
     qc: QCSummaryTracker = field(default_factory=QCSummaryTracker)
     primary_jsonl_path: str | None = None
 
-    def as_dict(self) -> Dict[str, object]:
+    def as_dict(self) -> dict[str, object]:
         """Return a stable dict shape for reporting and JSONL footers."""
-        data: Dict[str, object] = {
+        data: dict[str, object] = {
             "files": int(self.files),
             "attempted_files": int(self.attempted_files),
             "bytes": int(self.bytes),
@@ -237,7 +246,7 @@ class PipelineStats:
         data["qc"] = self.qc.as_dict()
         return data
 
-    def qc_top_dup_families(self) -> List[Dict[str, Any]]:
+    def qc_top_dup_families(self) -> list[dict[str, Any]]:
         """Return duplicate-family summary for reporting."""
         return self.qc.top_dup_families()
 
@@ -279,7 +288,7 @@ def _open_source_with_stack(stack: ExitStack, src: Source) -> Source:
         stack.callback(close)  
     return src
 
-def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: Optional[RepoContext], stats: PipelineStats) -> List[Sink]:
+def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: RepoContext | None, stats: PipelineStats) -> list[Sink]:
     """Open sinks once, tracking failures in stats.
 
     Args:
@@ -291,7 +300,7 @@ def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: Optional[RepoCo
     Returns:
         list[Sink]: Sinks successfully opened.
     """
-    open_sinks: List[Sink] = []
+    open_sinks: list[Sink] = []
     for s in sinks:
         try:
             # Call explicit open(context) if available.
@@ -309,7 +318,7 @@ def _prepare_sinks(stack: ExitStack, sinks: Sequence[Sink], ctx: Optional[RepoCo
     return open_sinks
 
 
-def _get_context_from_source(source: Source) -> Optional[RepoContext]:
+def _get_context_from_source(source: Source) -> RepoContext | None:
     """Extract RepoContext from a source when available."""
     return getattr(source, "context", None)  
 
@@ -363,15 +372,15 @@ class PipelineEngine:
         self.config = plan.spec
         self.stats = PipelineStats()
         self.log = get_logger(__name__)
-        self._hooks: Tuple[RunLifecycleHook, ...] = tuple(getattr(plan.runtime, "lifecycle_hooks", ()))
-        self.before_record_hooks: List[Callable[[Record], Record]] = []
-        self.after_record_hooks: List[Callable[[Record], Record]] = []
-        self.record_filter_hooks: List[Callable[[Record], bool]] = []
-        self.record_middlewares: List[RecordMiddleware] = []
-        self.file_middlewares: List[FileMiddleware] = []
-        self.before_source_hooks: List[Callable[[Source], None]] = []
-        self.after_source_hooks: List[Callable[[Source], None]] = []
-        self._record_chain: List[Callable[[Record], Optional[Record]]] = []
+        self._hooks: tuple[RunLifecycleHook, ...] = tuple(getattr(plan.runtime, "lifecycle_hooks", ()))
+        self.before_record_hooks: list[Callable[[Record], Record]] = []
+        self.after_record_hooks: list[Callable[[Record], Record]] = []
+        self.record_filter_hooks: list[Callable[[Record], bool]] = []
+        self.record_middlewares: list[RecordMiddleware] = []
+        self.file_middlewares: list[FileMiddleware] = []
+        self.before_source_hooks: list[Callable[[Source], None]] = []
+        self.after_source_hooks: list[Callable[[Source], None]] = []
+        self._record_chain: list[Callable[[Record], Record | None]] = []
         self._record_chain_dirty = True
         self._middlewares_normalized = False
         rt = getattr(plan, "runtime", None)
@@ -406,11 +415,11 @@ class PipelineEngine:
 
         self._middlewares_normalized = True
 
-    def _middleware_chain_step(self, record: Record) -> Optional[Record]:
+    def _middleware_chain_step(self, record: Record) -> Record | None:
         """Chain adapter for record middlewares."""
         return self._apply_middlewares(record)
 
-    def _apply_middlewares(self, record: Record) -> Optional[Record]:
+    def _apply_middlewares(self, record: Record) -> Record | None:
         """Run a record through all registered record middlewares."""
         current = record
         for middleware in self.record_middlewares:
@@ -433,8 +442,8 @@ class PipelineEngine:
                 return None
         return current
 
-    def _wrap_before_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Optional[Record]]:
-        def _step(record: Record) -> Optional[Record]:
+    def _wrap_before_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Record | None]:
+        def _step(record: Record) -> Record | None:
             try:
                 return hook(record)
             except Exception as exc:  # noqa: BLE001
@@ -447,8 +456,8 @@ class PipelineEngine:
 
         return _step
 
-    def _wrap_after_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Optional[Record]]:
-        def _step(record: Record) -> Optional[Record]:
+    def _wrap_after_record_hook(self, hook: Callable[[Record], Record]) -> Callable[[Record], Record | None]:
+        def _step(record: Record) -> Record | None:
             try:
                 return hook(record)
             except Exception as exc:  # noqa: BLE001
@@ -461,8 +470,8 @@ class PipelineEngine:
 
         return _step
 
-    def _wrap_record_filter(self, check: Callable[[Record], bool]) -> Callable[[Record], Optional[Record]]:
-        def _step(record: Record) -> Optional[Record]:
+    def _wrap_record_filter(self, check: Callable[[Record], bool]) -> Callable[[Record], Record | None]:
+        def _step(record: Record) -> Record | None:
             try:
                 if check(record):
                     return record
@@ -477,9 +486,9 @@ class PipelineEngine:
 
         return _step
 
-    def _wrap_lifecycle_hooks(self) -> Callable[[Record], Optional[Record]]:
-        def _step(record: Record) -> Optional[Record]:
-            rec: Optional[Record] = record
+    def _wrap_lifecycle_hooks(self) -> Callable[[Record], Record | None]:
+        def _step(record: Record) -> Record | None:
+            rec: Record | None = record
             for hook in self._hooks:
                 if rec is None:
                     break
@@ -499,7 +508,7 @@ class PipelineEngine:
 
     def _build_record_chain(self) -> None:
         """Construct the unified per-record processing chain."""
-        chain: List[Callable[[Record], Optional[Record]]] = []
+        chain: list[Callable[[Record], Record | None]] = []
         for hook in self.before_record_hooks:
             chain.append(self._wrap_before_record_hook(hook))
         for check in self.record_filter_hooks:
@@ -517,7 +526,7 @@ class PipelineEngine:
         if self._record_chain_dirty:
             self._build_record_chain()
 
-    def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
+    def _apply_file_middlewares(self, item: Any, records: Iterable[Record]) -> Iterable[Record] | None:
         """Run a file's records through registered file middlewares."""
         current = records
         for middleware in self.file_middlewares:
@@ -580,7 +589,7 @@ class PipelineEngine:
             materialize=materialize,
         )
 
-    def _build_executor(self) -> Tuple[Executor, bool]:
+    def _build_executor(self) -> tuple[Executor, bool]:
         """Resolve executor configuration and fail-fast behavior.
 
         Returns:
@@ -611,7 +620,7 @@ class PipelineEngine:
         chain = self._record_chain
 
         for record in recs:
-            current: Optional[Record] = record
+            current: Record | None = record
             for step in chain:
                 if current is None:
                     break
@@ -763,7 +772,7 @@ class PipelineEngine:
                 stats.attempted_files += 1
                 yield work
 
-        def _process_one(work: _WorkItem) -> Tuple[Any, Iterable[Record]]:
+        def _process_one(work: _WorkItem) -> tuple[Any, Iterable[Record]]:
             return processor(work)
 
         def _on_worker_error(exc: BaseException) -> None:
@@ -772,7 +781,7 @@ class PipelineEngine:
             stats.source_errors += 1
             self._maybe_abort_for_error_rate(exc)
 
-        def _on_result(result: Tuple[Any, Iterable[Record]]) -> None:
+        def _on_result(result: tuple[Any, Iterable[Record]]) -> None:
             item, recs = result
             recs = self._apply_file_middlewares(item, recs)
             if recs is not None:
@@ -861,8 +870,8 @@ class PipelineEngine:
             "QC summary (min_score=%s, drop_near_dups=%s)\n"
             "  scored: %d\n"
             "  kept: %d\n"
-            "  dropped_low_score: %d\n"
-            "  dropped_near_dup: %d\n"
+            "  would_drop_low_score: %d\n"
+            "  would_drop_near_dup: %d\n"
             "  candidates_low_score: %d\n"
             "  candidates_near_dup: %d\n"
             "  errors: %d",
@@ -910,11 +919,11 @@ class PipelineEngine:
 
         try:
             with ExitStack() as stack:
-                open_sources: List[Source] = [
+                open_sources: list[Source] = [
                     _open_source_with_stack(stack, src) for src in self.plan.runtime.sources
                 ]
-                initial_ctx: Optional[RepoContext] = cfg.sinks.context
-                open_sinks: List[Sink] = _prepare_sinks(stack, self.plan.runtime.sinks, initial_ctx, stats)
+                initial_ctx: RepoContext | None = cfg.sinks.context
+                open_sinks: list[Sink] = _prepare_sinks(stack, self.plan.runtime.sinks, initial_ctx, stats)
                 if not open_sinks:
                     self.log.warning("No sinks are open; processed records will be dropped.")
 
@@ -972,7 +981,7 @@ class PipelineEngine:
 # Public API
 # ---------------------------------------------------------------------------
 
-def run_pipeline(*, config: SievioConfig, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
+def run_pipeline(*, config: SievioConfig, overrides: PipelineOverrides | None = None) -> dict[str, int]:
     """Run the end-to-end pipeline described by config.
 
     Args:

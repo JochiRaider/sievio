@@ -8,7 +8,7 @@ Split out from core.factories to isolate quality and safety scorer wiring.
 
 from __future__ import annotations
 
-from typing import Optional, TYPE_CHECKING
+from typing import TYPE_CHECKING
 
 from .interfaces import SafetyScorer
 from .registries import (
@@ -29,11 +29,11 @@ __all__ = [
 
 
 def make_qc_scorer(
-    qc_cfg: Optional["QCConfig"],
+    qc_cfg: QCConfig | None,
     *,
     new_instance: bool = False,
-    scorer_registry: Optional[QualityScorerRegistry] = None,
-) -> Optional["JSONLQualityScorer"]:
+    scorer_registry: QualityScorerRegistry | None = None,
+) -> JSONLQualityScorer | None:
     """
     Instantiate a JSONLQualityScorer when QC is enabled and extras are loaded.
 
@@ -70,11 +70,11 @@ def make_qc_scorer(
 
 
 def make_safety_scorer(
-    safety_cfg: Optional["SafetyConfig"],
+    safety_cfg: SafetyConfig | None,
     *,
     new_instance: bool = False,
-    registry: Optional[SafetyScorerRegistry] = None,
-) -> Optional[SafetyScorer]:
+    registry: SafetyScorerRegistry | None = None,
+) -> SafetyScorer | None:
     """
     Instantiate a SafetyScorer when safety is enabled and extras are loaded.
 

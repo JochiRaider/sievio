@@ -9,6 +9,8 @@ ingestion pipeline and quality-control scoring.
 from __future__ import annotations
 
 import functools
+import os
+from collections.abc import Callable, Iterable
 from concurrent.futures import (
     FIRST_COMPLETED,
     Future,
@@ -17,8 +19,7 @@ from concurrent.futures import (
     wait,
 )
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, Iterable, Literal, Tuple, TypeVar, Optional
-import os
+from typing import Any, Literal, TypeVar
 
 from .config import SievioConfig
 from .interfaces import ConcurrencyProfile
@@ -33,9 +34,9 @@ _MISSING = object()
 
 
 def _call_process_one(
-    process_one: Callable[[T], Tuple[Any, Iterable[Any]]],
+    process_one: Callable[[T], tuple[Any, Iterable[Any]]],
     item: T,
-) -> Tuple[Any, Iterable[Any]]:
+) -> tuple[Any, Iterable[Any]]:
     """Top-level helper so process pool workers can pickle the callable."""
     return process_one(item)
 
@@ -90,7 +91,7 @@ class Executor:
         if self.cfg.max_workers < 1:
             raise ValueError("Executor requires max_workers >= 1")
         kind = self.cfg.kind
-        init_kwargs: Dict[str, Any] = {}
+        init_kwargs: dict[str, Any] = {}
         if kind == "process":
             if self.initializer is not None:
                 init_kwargs["initializer"] = self.initializer
@@ -182,7 +183,7 @@ class Executor:
 
 def process_items_parallel(
     items: Iterable[T],
-    process_one: Callable[[T], Tuple[Any, Iterable[Any]]],
+    process_one: Callable[[T], tuple[Any, Iterable[Any]]],
     write_records: Callable[[Any, Iterable[Any]], None],
     *,
     max_workers: int,
@@ -249,16 +250,16 @@ def process_items_parallel(
         initargs=initargs if normalized_kind == "process" else (),
     )
 
-    def _worker(item: T) -> Tuple[Any, Iterable[Any]]:
+    def _worker(item: T) -> tuple[Any, Iterable[Any]]:
         return process_one(item)
 
-    worker_fn: Callable[[T], Tuple[Any, Iterable[Any]]]
+    worker_fn: Callable[[T], tuple[Any, Iterable[Any]]]
     if normalized_kind == "process":
         worker_fn = functools.partial(_call_process_one, process_one)
     else:
         worker_fn = _worker
 
-    def _on_result(result: Tuple[Any, Iterable[Any]]) -> None:
+    def _on_result(result: tuple[Any, Iterable[Any]]) -> None:
         item, recs = result
         write_records(item, recs)
 
@@ -298,7 +299,7 @@ def _invalid_hint(component: str, attr: str, detail: str) -> None:
     log.warning(message)
 
 
-def _normalize_preferred_executor(raw: Any, component: str, attr_path: str) -> Optional[str]:
+def _normalize_preferred_executor(raw: Any, component: str, attr_path: str) -> str | None:
     if raw is _MISSING or raw is None:
         return None
     if not isinstance(raw, str):
@@ -311,7 +312,7 @@ def _normalize_preferred_executor(raw: Any, component: str, attr_path: str) -> O
     return None
 
 
-def _normalize_cpu_intensive(raw: Any, component: str, attr_path: str) -> Optional[bool]:
+def _normalize_cpu_intensive(raw: Any, component: str, attr_path: str) -> bool | None:
     if raw is _MISSING or raw is None:
         return None
     if isinstance(raw, bool):
@@ -320,7 +321,7 @@ def _normalize_cpu_intensive(raw: Any, component: str, attr_path: str) -> Option
     return None
 
 
-def _extract_concurrency_hint(obj: Any) -> tuple[Optional[str], bool]:
+def _extract_concurrency_hint(obj: Any) -> tuple[str | None, bool]:
     """
     Extract concurrency preferences from an object.
 
@@ -432,7 +433,7 @@ def _infer_executor_kind(cfg: SievioConfig, runtime: Any | None = None) -> str:
         components.append(runtime.file_extractor)
 
     cpu_bound_votes = 0
-    forced_kind: Optional[str] = None
+    forced_kind: str | None = None
 
     for obj in components:
         pref, cpu = _extract_concurrency_hint(obj)

@@ -1,14 +1,18 @@
-import json
 from pathlib import Path
 
 import pytest
 
-from sievio.core.config import DEFAULT_QC_SCORER_ID, QCHeuristics
-from sievio.core.extras.qc import DefaultQualityScorerFactory, JSONLQualityScorer
 from sievio.cli import runner
 from sievio.core import builder
 from sievio.core.builder import build_pipeline_plan
-from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
+from sievio.core.config import (
+    DEFAULT_QC_SCORER_ID,
+    QCHeuristics,
+    SievioConfig,
+    SinkSpec,
+    SourceSpec,
+)
+from sievio.core.extras.qc import DefaultQualityScorerFactory, JSONLQualityScorer
 from sievio.core.interfaces import RepoContext
 from sievio.core.pipeline import PipelineEngine
 

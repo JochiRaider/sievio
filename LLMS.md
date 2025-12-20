@@ -1,8 +1,9 @@
-# Sievio – LLM Guide
+# Sievio - LLM Guide
 
-This file gives LLMs a compact map of Sievio so they can work in the right modules and avoid touching core pipeline wiring by accident.
+This file gives LLMs a compact routing + architecture map so they can work in the
+right modules and avoid touching core pipeline wiring by accident.
 
-For operational rules, invariants, and “how to ask an AI for help,” see `AGENTS.md`.
+For operational rules, invariants, and "how to ask an AI for help," see `AGENTS.md`.
 This `LLMS.md` focuses on architecture, module responsibilities, and where to make
 changes for different tasks.
 
@@ -10,409 +11,475 @@ changes for different tasks.
 
 ## 1. High-level overview
 
-Sievio is a **library-first, configuration-driven ingestion pipeline** that turns repositories and related artifacts into normalized JSONL / Parquet datasets suitable for LLM pre-training, fine-tuning and analysis.
+Sievio is a library-first, configuration-driven ingestion pipeline that turns
+repositories and related artifacts into normalized JSONL / Parquet datasets
+suitable for LLM pre-training, fine-tuning, and analysis.
 
 At a high level:
 
-* You describe a run with `SievioConfig` (Python or TOML).
-* The **builder** turns that config into a `PipelinePlan` and `PipelineRuntime`.
-* The **pipeline engine** coordinates sources → decode → chunk → record construction → sinks.
-* Optional subsystems (QC, dataset cards, language ID, safety/QC extras, CLI runners, plugins) sit **around** the core rather than reimplementing it.
-
-### Config normalization
-
-Per-kind defaults and per-spec options should always be merged into typed dataclasses before constructing sources/sinks/QC objects. This keeps factories declarative, makes new config knobs automatically tunable, and avoids hand-merging option dicts. `build_config_from_defaults_and_options` is the canonical helper for this pattern.
-- Factories should only pull constructor-only identifiers (paths/URLs/ids) directly from `spec.options` and rely on the helper for everything else (sources, sinks, QC).
+- You describe a run with `SievioConfig` (Python or TOML).
+- The builder turns that config into a `PipelinePlan` and `PipelineRuntime`.
+- The pipeline engine coordinates sources -> decode -> chunk -> record
+  construction -> sinks.
+- Optional subsystems (QC, dataset cards, language ID, safety/QC extras, CLI
+  runners, plugins) sit around the core rather than reimplementing it.
 
 ---
 
-## 2. Core vs non-core
+## 2. First 60 seconds: where to start by task
 
-For the purposes of this guide:
-
-* **Core files** are a curated shortlist.
-
-  * They define configs and record schemas, pipeline planning/runtime, registries, language/QC/safety wiring, dataset cards, and top-level orchestration.
-  * They are explicitly marked as **CORE** in **3** (“Module map”) and should be treated as the architectural reference for new sources, sinks, scorers, and plugins.
-  * LLMs should usually **read but not modify** core orchestration logic (builder, pipeline engine, registries, interfaces, factories, QC/dataset-card hooks, concurrency) unless a task explicitly calls for it.
-
-* **Non-core files** are everything else.
-
-  * These include CLI entry points, concrete source/sink implementations, optional extras/plugins, tests, scripts, and other integration glue.
-  * Non-core modules are the **preferred place** to:
-    * add or tweak behavior for a specific integration,
-    * implement new sources/sinks/scorers/safety checks that *use* the core APIs,
-    * and experiment with features without destabilizing the architecture. 
-  * When working with an LLM coding assistant, non-core files may not always be shared in full. This `LLMS.md` exists to give enough high-level context (responsibilities, key entry points, relationships to core) to avoid duplicated work and accidental reimplementation.
+- Add a new source: start with `src/sievio/sources/`,
+  `src/sievio/core/interfaces.py`, `src/sievio/core/factories_sources.py`,
+  `src/sievio/core/registries.py`, `src/sievio/core/config.py`.
+  Avoid: editing the engine loop in `src/sievio/core/pipeline.py` unless the
+  change is truly orchestration-level.
+- Add a new sink/output format: start with `src/sievio/sinks/sinks.py`,
+  `src/sievio/sinks/parquet.py`, `src/sievio/core/interfaces.py`,
+  `src/sievio/core/factories_sinks.py`, `src/sievio/core/registries.py`.
+  Avoid: editing the engine loop in `src/sievio/core/pipeline.py` unless the
+  change is truly orchestration-level.
+- Add a bytes handler (binary format): start with
+  `src/sievio/core/factories_sources.py`, `src/sievio/core/registries.py`,
+  `src/sievio/core/interfaces.py`, and patterns in `src/sievio/sources/pdfio.py`,
+  `src/sievio/sources/evtxio.py`, `src/sievio/sources/parquetio.py`.
+  Avoid: building a custom Source unless location rules are special.
+- Add or modify QC/safety scoring: start with `src/sievio/core/interfaces.py`,
+  `src/sievio/core/extras/qc.py`, `src/sievio/core/extras/safety.py`,
+  `src/sievio/core/factories_qc.py`, `src/sievio/core/qc_controller.py`,
+  `src/sievio/core/qc_post.py`. Avoid: embedding QC logic in sources/sinks.
+- Add middleware or lifecycle hooks: start with `src/sievio/core/interfaces.py`,
+  `src/sievio/core/pipeline.py`, `src/sievio/core/hooks.py`,
+  `src/sievio/core/builder.py`. Avoid: forking the engine for small behavior.
+- Change config knobs/default merging: start with `src/sievio/core/config.py`
+  (`build_config_from_defaults_and_options`) and
+  `src/sievio/core/factories_sources.py` / `src/sievio/core/factories_sinks.py`.
+  Avoid: reading raw `spec.options` except constructor-only identifiers.
+- Adjust concurrency/executor selection: start with
+  `src/sievio/core/concurrency.py`, `src/sievio/core/config.py`,
+  `src/sievio/core/pipeline.py`. Avoid: per-source executor logic.
+- Debug pipeline behavior, stats, dataset cards: start with
+  `src/sievio/core/pipeline.py`, `src/sievio/core/records.py`,
+  `src/sievio/core/hooks.py`, `src/sievio/core/dataset_card.py`,
+  `src/sievio/core/qc_controller.py`. Avoid: sinks for record schema changes.
 
 ---
 
-## 3. Module map
+## 3. Key types and layering (Config -> Plan -> Runtime -> Engine -> Overrides)
 
-### 3.1 Core package – `src/sievio/core/`
+Key types (paths):
+- `SievioConfig` in `src/sievio/core/config.py` (declarative-only spec).
+- `PipelinePlan`, `PipelineRuntime`, `PipelineOverrides` in
+  `src/sievio/core/builder.py`.
+- `PipelineEngine` in `src/sievio/core/pipeline.py`.
+- `RunLifecycleHook`, `RecordMiddleware`, `FileMiddleware`, `InlineScreener` in
+  `src/sievio/core/interfaces.py`.
 
-These are treated as the “core” of the system.
+Flow (text diagram):
+- `SievioConfig` -> `build_pipeline_plan()` -> `PipelinePlan(spec + runtime)`
+  -> `PipelineEngine(plan)` -> `apply_overrides_to_engine()` -> `engine.run()`.
 
-* `__init__.py`
+What belongs where:
+- Config: typed, serializable knobs only (no live clients, scorers, sources,
+  sinks, or hooks). See `HttpConfig`, `QCConfig`, `SinkConfig`, `SourceConfig`.
+- Plan/Runtime: constructed objects (sources, sinks, HTTP clients, bytes
+  handlers, scorers, hooks, language detectors) derived from config + registries.
+- Engine: executes the per-record loop and applies middlewares/hooks.
+- Overrides: runtime-only replacements for config-driven wiring (HTTP client,
+  QC/safety scorers, extractors, bytes handlers, middlewares).
+
+Per-record loop (hot path) summary:
+- `PipelineEngine.run()` opens sources/sinks, builds an extractor, resolves
+  executor settings, and iterates source items.
+- `DefaultExtractor` in `src/sievio/core/convert.py` handles decode -> chunk ->
+  record building.
+- File middleware runs after extraction; record middleware runs before sink
+  writes inside the unified record chain.
+- Lifecycle hooks (`RunLifecycleHook`) run on start, per-record, end, and
+  on-artifacts.
+
+Config normalization rule:
+- `build_config_from_defaults_and_options` in `src/sievio/core/config.py` is the
+  canonical merge helper for defaults + per-spec options; factories should only
+  read constructor-only identifiers from `spec.options`.
+
+Configuration (`SievioConfig`) highlights:
+- `sources`: per-kind defaults in `[sources.defaults.<kind>]` plus declarative
+  `[[sources.specs]]` entries. Factories consume defaults + specs.
+- `decode`: Unicode normalization, control stripping, mojibake repair, and byte
+  caps (`DecodeConfig` in `src/sievio/core/config.py`).
+- `chunk`: tokenizer selection and `ChunkPolicy` for chunk sizes/overlap.
+- `language` / `code_lang`: human and code language detectors and extension
+  hints.
+- `pipeline`: concurrency (`max_workers`, `executor_kind`, `submit_window`,
+  `fail_fast`).
+- `sinks`: output defaults and `[[sinks.specs]]` for primary JSONL and extras.
+- `http`: Safe HTTP client settings (`HttpConfig` -> `SafeHttpClient`).
+- `qc`: quality + safety screening config (`QCConfig`, `SafetyConfig`).
+- `logging`: `LoggingConfig` for logger name/level/format.
+- `metadata`: run identity info for summaries and dataset cards.
+- `dataset_card`: dataset card behavior and fields.
+
+Sources (built-ins, via registries/factories):
+- `local_dir` (`src/sievio/sources/fs.py`)
+- `github_zip` (`src/sievio/sources/githubio.py`)
+- `web_pdf_list` / `web_page_pdf` (`src/sievio/sources/sources_webpdf.py`)
+- `csv_text` (`src/sievio/sources/csv_source.py`)
+- `sqlite` (`src/sievio/sources/sqlite_source.py`)
+- Optional bytes handlers: PDF/EVTX/Parquet (`src/sievio/sources/pdfio.py`,
+  `src/sievio/sources/evtxio.py`, `src/sievio/sources/parquetio.py`).
+
+Decode and chunk:
+- Decode lives in `src/sievio/core/decode.py` (`decode_bytes`, `read_text`).
+- Chunking lives in `src/sievio/core/chunk.py` (`ChunkPolicy`, split helpers);
+  token counts use `tiktoken` when `[tok]` is installed.
+
+Extractors and records:
+- `DefaultExtractor` in `src/sievio/core/convert.py` is the standard pipeline
+  extractor (decode -> chunk -> record).
+- Records are dicts with `"text"` and `"meta"` built by
+  `src/sievio/core/records.py`; summary records include run metadata and QC
+  summaries.
+
+Sinks:
+- JSONL/Prompt sinks in `src/sievio/sinks/sinks.py`.
+- Parquet sink in `src/sievio/sinks/parquet.py` (requires `[parquet]` extra).
+
+Runtime overrides (advanced):
+- `PipelineOverrides` can replace HTTP client, scorers, extractors, bytes
+  handlers, and middlewares for a single run without mutating `SievioConfig`.
+
+Distributed execution (sharded runs):
+- Generate shard configs via `src/sievio/core/sharding.py` and merge stats via
+  `src/sievio/core/stats_aggregate.py` (see CLI helpers in `sievio shard` and
+  `sievio merge-stats`).
+
+---
+
+## 4. Core vs non-core
+
+- Core (`src/sievio/core/`): configs, registries, builder, pipeline engine, QC,
+  dataset cards, safe HTTP, concurrency. Read-mostly unless the task requires
+  changes.
+- Non-core: CLI (`src/sievio/cli/`), sources (`src/sievio/sources/`), sinks
+  (`src/sievio/sinks/`), extras, tests, scripts. Prefer changes here.
+
+---
+
+## 5. Extension points first
+
+### Registries (preferred extension point)
+
+- `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`,
+  `QualityScorerRegistry`, `SafetyScorerRegistry` live in
+  `src/sievio/core/registries.py`.
+- Built-ins are registered via `default_source_registry()` and
+  `default_sink_registry()` and bundled by `default_registries()`.
+- Prefer adding new components via registries or plugins rather than modifying
+  the builder/pipeline.
+
+### Plugins
+
+- Plugin discovery lives in `src/sievio/core/plugins.py` and loads entry points
+  under the `sievio.plugins` group.
+- A plugin function receives registries and registers sources/sinks/scorers.
+
+### Overrides
+
+- `PipelineOverrides` in `src/sievio/core/builder.py` allows runtime-only
+  replacement of HTTP clients, scorers, extractors, bytes handlers, and
+  middlewares.
+- Prefer overrides for one-off or per-run customization; prefer registries for
+  reusable components.
+
+### Middlewares
+
+- Record middleware: `process(record) -> Optional[Record]` (return `None` to
+  drop). Protocol in `src/sievio/core/interfaces.py` and wiring in
+  `src/sievio/core/pipeline.py`.
+- File middleware: `process(item, records) -> Optional[Iterable[Record]]` (return
+  `None` to drop all records for a file). Protocol in
+  `src/sievio/core/interfaces.py` and wiring in `src/sievio/core/pipeline.py`.
+- Prefer middlewares over changing the engine for cross-cutting behavior.
+
+### Lifecycle hooks
+
+- `RunLifecycleHook` in `src/sievio/core/interfaces.py` defines `on_run_start`,
+  `on_record`, `on_run_end`, and `on_artifacts`.
+- Built-ins: `RunSummaryHook` and `LanguageTaggingMiddleware` in
+  `src/sievio/core/hooks.py`, `DatasetCardHook` in
+  `src/sievio/core/dataset_card.py`, `InlineQCHook` in
+  `src/sievio/core/qc_controller.py`, `PostQCHook`/`PostSafetyHook` in
+  `src/sievio/core/qc_post.py`.
+- Hooks should annotate metadata or emit sidecar artifacts; avoid writing output
+  files directly outside sinks.
+
+---
+
+## 6. Module map
+
+Maintenance rules:
+- Keep this list aligned with `project_files.md` and the on-disk tree.
+- Mark core modules as CORE and treat them as read-only unless a task requires
+  edits.
+- Replace placeholders with a one-line summary or a TODO pointing at specific
+  symbols.
+
+### 6.1 Core package - `src/sievio/core/` (CORE, read-only unless required)
+
+- `__init__.py`
   Core package initializer and exports for shared constants/helpers.
-
-* `config.py`
-  Configuration models and helpers for defining `SievioConfig` and related config sections (sources, sinks, QC, safety, chunking, etc.).
-
-* `records.py`
-  Construction and normalization of output record dictionaries, including run headers and consistent metadata fields. Also hosts schema-version helpers (`check_record_schema`) to warn when ingesting JSONL produced by mismatched library versions.
-
-* `naming.py`
-  Utilities for building safe, normalized output filenames and extensions based on config and repo context.
-
-* `licenses.py`
-  Helpers for detecting and normalizing license information from repositories and archives.
-
-* `decode.py`
-  Decoding bytes into normalized text using encoding detection and simple heuristics, plus helpers for text normalization.
-
-* `chunk.py`
-  Token-aware document/code chunking utilities and the `ChunkPolicy` machinery; yields chunk dicts for downstream processing.
-
-* `convert.py`
-  High-level helpers that take file inputs (paths/bytes), run decode + chunking, and produce extractor/record dictionaries.
-
-* `factories.py`
-  Facade re-exporting factory helpers split across sinks, sources, QC, and context modules.
-
-* `factories_sinks.py`
-  Sink and output-path factories (`OutputPaths`, JSONL/Prompt sinks, Parquet dataset sink).
-
-* `factories_sources.py`
-  Source factories (`LocalDirSourceFactory`, `GitHubZipSourceFactory`, etc.) and bytes-handler wiring (`make_bytes_handlers`, `UnsupportedBinary`).
-
-* `factories_qc.py`
+- `config.py`
+  Configuration models and helpers for defining `SievioConfig` and related
+  config sections (sources, sinks, QC, safety, chunking, etc.).
+- `records.py`
+  Construction and normalization of output record dictionaries, including run
+  headers and consistent metadata fields. Hosts schema-version helpers
+  (`check_record_schema`).
+- `naming.py`
+  Utilities for building safe, normalized output filenames and extensions based
+  on config and repo context.
+- `licenses.py`
+  Helpers for detecting and normalizing license information from repositories
+  and archives.
+- `decode.py`
+  Decoding bytes into normalized text using encoding detection and heuristics,
+  plus text normalization helpers.
+- `chunk.py`
+  Token-aware document/code chunking utilities and the `ChunkPolicy` machinery.
+- `convert.py`
+  High-level helpers that take file inputs (paths/bytes), run decode + chunking,
+  and produce extractor/record dictionaries.
+- `factories.py`
+  Facade re-exporting factory helpers split across sinks, sources, QC, context.
+- `factories_sinks.py`
+  Sink and output-path factories (`OutputPaths`, JSONL/Prompt sinks, Parquet
+  dataset sink).
+- `factories_sources.py`
+  Source factories (`LocalDirSourceFactory`, `GitHubZipSourceFactory`, etc.) and
+  bytes-handler wiring (`make_bytes_handlers`, `UnsupportedBinary`).
+- `factories_qc.py`
   QC and safety scorer factory helpers (`make_qc_scorer`, `make_safety_scorer`).
-
-* `factories_context.py`
-  Repo context inference and HTTP client construction helpers (`make_repo_context_from_git`, `make_http_client`).
-
-* `log.py`
-  Logging configuration helpers, package logger setup, and temporary level context manager.
-
-* `registries.py`
-  Registries for sources, sinks, bytes handlers, quality scorers, safety scorers, and lifecycle hooks; central place to register built-ins and plugins, with `RegistryBundle` helpers for passing registry sets into the builder or plugin loader.
-
-* `plugins.py`
-  Plugin discovery and registration helpers (entry-point based), wiring external sources/sinks/scorers into the registries.
-
-* `sharding.py`
-  Helpers to generate per-shard configs with isolated outputs from a base config + target list.
-
-* `stats_aggregate.py`
-  Utilities to merge multiple `PipelineStats.as_dict()` outputs (counts/flags only) for distributed runs; validates QC config consistency and clears non-additive QC fields like per-screener `signal_stats` and `top_dup_families`.
-
-* `interfaces.py`
-  Protocols/typed interfaces shared across the system (sources, sinks, lifecycle hooks, quality/safety scorers, etc.), plus core type aliases.
-
-* `concurrency.py`
-  Abstractions over thread/process executors with bounded submission windows, plus helpers to derive executor settings from `SievioConfig`.
-
-* `builder.py`
-  Orchestrates config → `PipelinePlan`/`PipelineRuntime` construction: builds sources, sinks, bytes handlers, HTTP client, lifecycle hooks, QC wiring, and language detectors from a `SievioConfig`. Hosts `PipelineOverrides` and `build_engine`, which is the preferred entry point for wiring runtime-only overrides (HTTP/QC/safety scorers, language detectors, bytes handlers, file extractor, and record/file middlewares) into a `PipelineEngine`. If you are changing how configs become runtime objects or how overrides/hooks/QC wiring are applied, start here.
-
-* `hooks.py`
-  Built-in pipeline lifecycle hooks for run summaries/finalizers used by the builder to assemble runtime hooks. Hosts `LanguageTaggingMiddleware`, which the builder instantiates from configured detectors and carries on `PipelineRuntime`.
-
-* `pipeline.py`
-  Pipeline engine that runs the ingestion loop: coordinates sources, decoding/chunking/record creation, sinks, hooks, middleware, and statistics. Defines `PipelineEngine`, record/file middleware adapters (`add_record_middleware`, `add_file_middleware` plus `_FuncRecordMiddleware`/`_FuncFileMiddleware`), and helpers like `run_pipeline` and `apply_overrides_to_engine` that turn a config + `PipelineOverrides` into a fully wired engine. The engine consumes record middlewares carried on `PipelineRuntime` (for example, the language-tagging middleware from `hooks.py`). If you need to adjust overall run flow or middleware behavior, this is usually the right place – but prefer adding middlewares/hooks over modifying the engine itself.
-
-* `qc_utils.py`
-  Low-level quality-control utilities (similarity hashing, duplicate detection, basic QC heuristics and summaries).
-
-* `qc_controller.py`
-  Inline screening controller and related helpers for advisory/inline gating during the main pipeline run (e.g., `InlineQCHook`), coordinating both quality and safety screeners with record-level scorers (`score_record`) only. Hosts `QualitySignals`/`filter_qc_meta` and per-screener signal stats (quality `screeners["quality"]["signal_stats"]`) for schema-aligned QC signals (len_tok, ascii_ratio, repetition, gopher_quality, etc.). Safety gating is driven by `SafetyConfig.mode` + `annotate_only` (independent of QC mode) and can run without QC; POST safety is handled by a separate hook/driver after the pipeline completes.
-
-* `qc_post.py`
-  Post-hoc screening lifecycle hooks and reusable JSONL drivers (`run_qc_over_jsonl`, `run_safety_over_jsonl`, `iter/collect_qc_rows_from_jsonl`) for scoring or CSV export after the main run completes, including optional QC/safety signal sidecars (CSV or Parquet). `QCMode.POST` enforces gates only in this pass; POST safety evaluates decisions and updates summaries but does not rewrite the primary JSONL. If you are changing QC/safety export/sidecar behavior or running QC/safety as a separate pass over JSONL, start here instead of modifying sinks.
-
-* `dataset_card.py`
-  Builders for dataset card fragments and rendering/assembling Hugging Face–style dataset cards from run statistics and metadata.
-
-* `safe_http.py`
-  Stdlib-only HTTP client with IP/redirect safeguards and a module-level global client helper for simple use-cases.
-
-* `extras/__init__.py`
-  Namespace for optional or higher-level “extras” built on top of core primitives.
-  *Summary pending for individual extras modules.*
-
-* `extras/md_kql.py`
+- `factories_context.py`
+  Repo context inference and HTTP client construction helpers
+  (`make_repo_context_from_git`, `make_http_client`).
+- `log.py`
+  Logging configuration helpers, package logger setup, and temporary level
+  context manager.
+- `registries.py`
+  Registries for sources, sinks, bytes handlers, quality scorers, safety
+  scorers, and lifecycle hooks; central place to register built-ins and plugins.
+- `plugins.py`
+  Plugin discovery and registration helpers (entry-point based), wiring external
+  sources/sinks/scorers into registries.
+- `sharding.py`
+  Helpers to generate per-shard configs with isolated outputs from a base config
+  + target list.
+- `stats_aggregate.py`
+  Utilities to merge multiple `PipelineStats.as_dict()` outputs (counts/flags
+  only) for distributed runs; validates QC config consistency and clears
+  non-additive QC fields like per-screener `signal_stats` and `top_dup_families`.
+- `interfaces.py`
+  Protocols/typed interfaces shared across the system (sources, sinks, lifecycle
+  hooks, quality/safety scorers, middlewares, etc.), plus core type aliases.
+- `concurrency.py`
+  Abstractions over thread/process executors with bounded submission windows,
+  plus helpers to derive executor settings from `SievioConfig`.
+- `builder.py`
+  Orchestrates config -> `PipelinePlan`/`PipelineRuntime` construction: builds
+  sources, sinks, bytes handlers, HTTP client, lifecycle hooks, QC wiring, and
+  language detectors. Hosts `PipelineOverrides` and `build_engine` for runtime
+  overrides.
+- `hooks.py`
+  Built-in pipeline lifecycle hooks for run summaries/finalizers. Hosts
+  `LanguageTaggingMiddleware` wired from configured detectors.
+- `pipeline.py`
+  Pipeline engine that runs the ingestion loop: coordinates sources, decoding,
+  chunking, record creation, sinks, hooks, middleware, and statistics. Defines
+  `PipelineEngine`, record/file middleware adapters, and helpers like
+  `run_pipeline` and `apply_overrides_to_engine`.
+- `qc_utils.py`
+  Low-level quality-control utilities (similarity hashing, duplicate detection,
+  basic QC heuristics and summaries).
+- `qc_controller.py`
+  Inline screening controller and related helpers for advisory/inline gating
+  during the main pipeline run (e.g., `InlineQCHook`), coordinating quality and
+  safety screeners with `score_record`.
+- `qc_post.py`
+  Post-hoc screening lifecycle hooks and JSONL drivers (`run_qc_over_jsonl`,
+  `run_safety_over_jsonl`) for scoring or CSV export after the main run.
+- `dataset_card.py`
+  Builders for dataset card fragments and rendering/assembling Hugging Face style
+  dataset cards from run statistics and metadata.
+- `safe_http.py`
+  Stdlib-only HTTP client with IP/redirect safeguards and a module-level global
+  client helper for simple use cases.
+- `dedup_store.py`
+  SQLite-backed global deduplication store for MinHash LSH signatures, used by
+  the default quality scorer and seeding scripts.
+- `language_id.py`
+  Central hub for language identification: extension maps, doc-format hints, and
+  detector factories for optional backends.
+- `extras/__init__.py`
+  Namespace for optional extractors and helpers (no side effects on import).
+- `extras/md_kql.py`
   Optional helpers to detect and extract KQL blocks from Markdown content.
+- `extras/qc.py`
+  Optional quality-control scorers and CSV writers (default
+  `JSONLQualityScorer` + factory) with optional global MinHash dedup store.
+- `extras/safety.py`
+  Stdlib-only baseline safety scorer (`RegexSafetyScorer`) and default factory.
+- `extras/langid_lingua.py`
+  Optional Lingua-based human language detector implementing
+  `LanguageDetector`.
+- `extras/langid_pygments.py`
+  Optional Pygments-backed code-language detector implementing
+  `CodeLanguageDetector`.
 
-* `extras/qc.py`
-  Optional quality-control scorers and CSV writers used when QC extras are installed, including the default `JSONLQualityScorer` (SimHash + MinHash LSH) and its factory. Supports an optional global MinHash dedup store shared across processes.
+POST safety semantics:
+- `qc.safety.mode="post"` triggers a safety pass after the main pipeline
+  finishes. The pass reads the primary JSONL without rewriting it, evaluates
+  safety decisions (respecting `annotate_only` for gates), and merges the safety
+  screener summary into `PipelineStats.qc`.
 
-* `extras/safety.py`
-  Stdlib-only baseline safety scorer (`RegexSafetyScorer`) plus a default factory registered with the safety scorer registry.
+### 6.2 Top-level package - `src/sievio/`
 
-### POST safety semantics
+- `__init__.py`
+  Public package surface for `sievio`, re-exporting primary configuration types
+  and helpers such as `convert`, `convert_local_dir`, and `convert_github`.
 
-`qc.safety.mode="post"` triggers a safety pass after the main pipeline finishes. The pass reads the primary JSONL without rewriting it, evaluates safety decisions (respecting `annotate_only` for gates), and merges the safety screener summary into `PipelineStats.qc` alongside legacy safety counters. Optional outputs include a compact CSV report (`_safety.csv` suffix by default) and an optional signals sidecar (`_safety_signals.(csv|parquet)`), derived from streamed scoring results rather than mutating records in place.
+### 6.3 CLI - `src/sievio/cli/`
 
-Example configuration:
+- `__init__.py`
+  CLI package marker; no runtime logic.
+- `main.py`
+  Command-line entrypoint invoked by the `sievio` console script; parses args
+  and dispatches to runner helpers.
+- `runner.py`
+  High-level orchestration helpers used by the CLI and library: builds profiles,
+  constructs configs/output paths, invokes the builder/engine, and provides
+  convenience wrappers.
 
-```toml
-[qc]
-enabled = false
+### 6.4 Sources - `src/sievio/sources/`
 
-[qc.safety]
-enabled = true
-mode = "post"
-write_csv = true
-```
-
-* `dedup_store.py`
-  SQLite-backed global deduplication store for MinHash LSH signatures. Enforces LSH parameters (`n_perm`, `bands`, `jaccard_threshold`) via a `metadata` table and is designed to be used by `JSONLQualityScorer` (and the `seed_dedup_db.py` script) for cross-process/global near-duplicate tracking.
-
-* `language_id.py`
-  Central hub for language identification: extension maps (`CODE_EXTS`, `DOC_EXTS`, `EXT_LANG`), doc format hints, classify helpers, baseline human/code detectors, and factory functions to load optional backends (`extras/langid_lingua.py`, `extras/langid_pygments.py`). It is the single source of truth for code/doc language tags.
-
-* `extras/langid_lingua.py`
-  Optional Lingua-based human language detector implementing the `LanguageDetector` protocol; loaded via `make_language_detector("lingua")`.
-
-* `extras/langid_pygments.py`
-  Optional Pygments-backed code-language detector implementing the `CodeLanguageDetector` protocol; loaded via `make_code_language_detector("pygments")`.
-
-> **Note:** Additional core modules under `core/` that are not listed here yet should be added with short summaries as they are introduced or become relevant.
-
----
-
-### 3.2 Top-level package – `src/sievio/`
-
-* `__init__.py`
-  Defines the public package surface for `sievio`, re-exporting primary configuration types (e.g., `SievioConfig`) and high-level helpers such as `convert`, `convert_local_dir`, and `convert_github`. Non-exported symbols are considered expert/unstable.
-
----
-
-### 3.3 CLI – `src/sievio/cli/`
-
-* `__init__.py`
-  CLI package initializer.
-  *Summary pending (likely minimal; may just expose entrypoints or re-export runner helpers).*
-
-* `main.py`
-  Command-line entrypoint module invoked by the `sievio` console script; responsible for parsing CLI arguments and dispatching to runner helpers.
-  *Summary pending.*
-
-* `runner.py`
-  High-level orchestration helpers used by the CLI and library:
-
-  * Builds GitHub/local/web-PDF repo profiles.
-  * Constructs configs/output paths using the core factories facade.
-  * Invokes the builder and pipeline engine to execute runs.
-  * Provides convenience wrappers (e.g., `convert_github`, `convert_local_dir`).
-
----
-
-### 3.4 Sources – `src/sievio/sources/`
-
-* `__init__.py`
-  Source package initializer.
-  *Summary pending for individual source modules.*
-
-* `fs.py`
-  Local filesystem source that walks repositories with gitignore support and streaming hints.
-
-* `githubio.py`
-  GitHub zipball source utilities: parsing specs/URLs, API helpers, download/iterate archive members.
-
-* `sources_webpdf.py`
-  Web PDF sources for lists of URLs or in-page PDF links with download/extract logic.
-
-* `pdfio.py`
+- `__init__.py`
+  Sources package marker; no runtime logic.
+- `fs.py`
+  Local filesystem source that walks repositories with gitignore support and
+  streaming hints.
+- `githubio.py`
+  GitHub zipball source utilities: parsing specs/URLs, API helpers, download and
+  iterate archive members.
+- `sources_webpdf.py`
+  Web PDF sources for lists of URLs or in-page PDF links with download/extract
+  logic.
+- `pdfio.py`
   PDF reading/extraction helpers used by web-PDF sources.
-
-* `csv_source.py`
+- `csv_source.py`
   CSV-backed source emitting text rows with configurable column selection.
-
-* `jsonl_source.py`
+- `jsonl_source.py`
   JSONL source that streams records from existing JSONL files.
-
-* `parquetio.py`
+- `parquetio.py`
   Parquet source for ingesting Parquet datasets as records.
-
-* `sqlite_source.py`
+- `sqlite_source.py`
   SQLite source for reading text columns from database files.
-
-* `evtxio.py`
+- `evtxio.py`
   Windows Event Log (EVTX) source for ingesting event records.
 
----
+### 6.5 Sinks - `src/sievio/sinks/`
 
-### 3.5 Sinks – `src/sievio/sinks/`
-
-* `__init__.py`
-  Sink package initializer.
-  *Summary pending for individual sink modules.*
-
-* `sinks.py`
-  Built-in sink implementations (JSONL, gzip JSONL, prompt text, no-op) and sink protocol helpers.
-
-* `parquet.py`
+- `__init__.py`
+  Sinks package marker; no runtime logic.
+- `sinks.py`
+  Built-in sink implementations (JSONL, gzip JSONL, prompt text, no-op) and sink
+  protocol helpers.
+- `parquet.py`
   Parquet dataset sink for writing records to Parquet files.
 
----
+### 6.6 Scripts - `scripts/`
 
-### 3.6 Scripts – `scripts/`
+Manual, developer-focused scripts for end-to-end testing and experiments (not
+part of the public API).
 
-Manual, developer-focused scripts for end-to-end testing and experiments (not part of the public API).
-
-* `scripts/manual_test_github.py`
-  Manual smoke-test script to run a GitHub → JSONL/Parquet pipeline using hard-coded parameters.
-
-* `scripts/manual_test_github_toml.py`
+- `scripts/manual_test_github.py`
+  Manual smoke-test script to run a GitHub -> JSONL/Parquet pipeline.
+- `scripts/manual_test_github_toml.py`
   Manual test driving GitHub conversion from a TOML config file.
-
-* `scripts/manual_test_web_pdf.py`
+- `scripts/manual_test_web_pdf.py`
   Manual test for web PDF ingestion and conversion through the pipeline.
+- `scripts/seed_dedup_db.py`
+  CLI helper for seeding a global MinHash deduplication SQLite DB from JSONL
+  files; parameters must match QC MinHash settings.
 
-* `scripts/seed_dedup_db.py`
-  CLI helper for seeding a global MinHash deduplication SQLite DB from existing JSONL/JSONL.GZ files. Uses the same doc_id and MinHash logic as `JSONLQualityScorer` and writes banded LSH data into `core/dedup_store.py`’s schema; parameters must match your QC scorer’s MinHash settings.
+### 6.7 Tests - `tests/`
 
----
+Key tests to start with:
+- `tests/test_builder_runtime_layering.py`
+- `tests/test_pipeline_middlewares.py`
+- `tests/test_qc_controller.py`
+- `tests/test_qc_post.py`
+- `tests/test_safe_http.py`
+- `tests/test_config_builder_pipeline.py`
+- `tests/test_concurrency.py`
+- `tests/test_records.py`
+- `tests/test_dataset_card.py`
+- `tests/test_plugins_and_registries.py`
 
-### 3.7 Tests – `tests/`
+Full suite: see `tests/`.
 
-Pytest-based test suite validating core behavior and non-core wiring.
-
-* `tests/test_builder_runtime_layering.py`
-  Tests around separation of config vs runtime (`PipelinePlan`, `PipelineRuntime`) and layering behavior in the builder.
-
-* `tests/test_chunk.py`
-  Unit tests for chunking logic (`ChunkPolicy`, `iter_chunk_dicts`, token limits, etc.).
-
-* `tests/test_cli_main.py`
-  Tests for the CLI entrypoint (`cli.main`) and argument handling.
-
-* `tests/test_concurrency.py`
-  Tests for `concurrency.py` executors, bounded submission, and configuration via `SievioConfig`.
-
-* `tests/test_config_builder_pipeline.py`
-  End-to-end tests tying together config parsing, builder wiring, and pipeline execution.
-
-* `tests/test_config_merge_helper.py`
-  Tests the config/options merge helper (`build_config_from_defaults_and_options`) used by factories.
-
-* `tests/test_convert.py`
-  Tests for `convert.py` helpers (decode + chunk → records) and mode/format detection.
-
-* `tests/test_convert_integration.py`
-  Integration tests covering decode → chunk → record flows under representative configs.
-
-* `tests/test_dataset_card.py`
-  Tests dataset card generation and rendering behavior.
-
-* `tests/test_decode.py`
-  Tests for byte decoding, encoding detection, and normalization rules.
-
-* `tests/test_decode_fallback.py`
-  Tests fallback decode heuristics/codecs when preferred paths are unavailable.
-
-* `tests/test_dedup_store.py`
-  Tests deduplication store schema/metadata enforcement and LSH lookups.
-
-* `tests/test_factories_sources_config_overlays.py`
-  Tests source config overlay behavior (defaults vs per-spec options).
-
-* `tests/test_hooks.py`
-  Tests lifecycle hook wiring and behavior.
-
-* `tests/test_log_and_naming.py`
-  Tests for logging helpers and naming utilities (`naming.py`).
-
-* `tests/test_pipeline_middlewares.py`
-  Focused tests for `PipelineEngine` middleware behavior (record/file middleware adapters, QC hooks) and basic sink error handling. Middleware-related override wiring should be covered here when adding new behavior to `PipelineOverrides` or `build_engine`.
-
-* `tests/test_plugins_and_registries.py`
-  Tests plugin discovery and registry behavior for sources, sinks, and scorers.
-
-* `tests/test_qc_controller.py`
-  Tests inline QC controller behavior and interaction with the pipeline.
-
-* `tests/test_qc_defaults.py`
-  Tests default QC configuration and behavior (e.g., default scorers, thresholds).
-
-* `tests/test_qc_integration.py`
-  Integration tests that run QC wiring end-to-end through the pipeline.
-
-* `tests/test_qc_post.py`
-  Tests post-hoc QC driver behavior (`PostQCHook`, `run_qc_over_jsonl`).
-
-* `tests/test_qc_safety_modes.py`
-  Tests safety scorer modes (inline/advisory) and their interaction with QC and summary stats.
-
-* `tests/test_qc_simhash_optimization.py`
-  Tests QC SimHash/MinHash optimization and dedup behaviors.
-
-* `tests/test_qc_utils.py`
-  Tests low-level QC utilities (similarity hashing, duplicate detection, heuristics).
-
-* `tests/test_records.py`
-  Tests record construction, metadata propagation, and header generation.
-
-* `tests/test_runner_finalizers.py`
-  Tests that sinks and finalizers run correctly at the end of a pipeline run (run-summary, prompt files, etc.).
-
-* `tests/test_safe_http.py`
-  Tests `safe_http.py` HTTP client behavior, redirect/IP safety, and global client helpers.
-
-* `tests/test_schema_validation.py`
-  Tests config/schema validation behavior.
-
-* `tests/test_sharding.py`
-  Tests sharding helpers and config splitting logic.
-
-* `tests/test_sqlite_source_security.py`
-  Tests SQLite source download/allowlist safeguards and security constraints.
-
-* `tests/test_sqlite_source_validation.py`
-  Tests SQLite source validation rules.
-
-* `tests/test_stats_aggregate.py`
-  Tests stats aggregation behavior.
-
----
-
-### 3.8 Repository root
+### 6.8 Repository root
 
 Top-level files are summarized in `project_files.md`. Key ones:
 
-* `README.md`
-  Human-facing project overview and usage instructions.
-
-* `docs/TECHNICAL_MANUAL.md`
-  Detailed installation, configuration, and operational notes for running the pipeline and its extras.
-
-* `AGENTS.md`
+- `README.md`
+  Project overview and usage instructions.
+- `docs/TECHNICAL_MANUAL.md`
+  Detailed installation, configuration, and operational notes.
+- `AGENTS.md`
   Operational rules and invariants for AI coding assistants.
-
-* `LLMS.md`
+- `LLMS.md`
   This architecture and module-responsibility guide.
-
-* `example_config.toml`, `manual_test_github.toml`
+- `example_config.toml`, `manual_test_github.toml`
   Example `SievioConfig` TOML files for documentation and manual tests.
-
-* `pyproject.toml`
-  Packaging configuration, dependencies, and project metadata.
+- `pyproject.toml`
+  Packaging configuration, dependencies, and tool settings.
 
 ---
 
-### 3.9 Notes for future expansion
+## 7. Trust boundaries
 
-* As new modules are added (especially under `src/sievio/core/` and `src/sievio/sources` / `sinks`), they should be appended here with:
+- All remote access must go through `SafeHttpClient` in
+  `src/sievio/core/safe_http.py` (built via `HttpConfig.build_client()` in
+  `src/sievio/core/config.py` or `make_http_client()` in
+  `src/sievio/core/factories_context.py`).
+- Remote-capable sources (`src/sievio/sources/githubio.py`,
+  `src/sievio/sources/sources_webpdf.py`, `src/sievio/sources/sqlite_source.py`)
+  must use the safe HTTP client and respect its redirect/IP safeguards.
+- Timeouts, redirect limits, and allowed redirect suffixes live in `HttpConfig`.
+- Config remains declarative; live clients and resources belong in runtime.
 
-  * One-line purpose summary.
-  * How they depend on or extend existing core modules.
-* For planned-but-not-yet-implemented modules, add entries like:
+---
 
-  ```markdown
-  - `src/sievio/core/FOO.py`  
-    Summary pending – planned module for …
-  ```
+## 8. Common pitfalls
 
-  and update them once the implementation lands.
+- Stashing live clients/scorers/sources in `SievioConfig` instead of runtime.
+- Bypassing registries with ad-hoc wiring in builder or pipeline code.
+- Confusing QC mode vs safety mode (especially `annotate_only`).
+- Using record middleware for file-level decisions (or vice versa).
+- Using process executors with non-picklable callables/resources.
+- Writing output files outside sinks or mutating record schema in sinks.
+- Reading raw `spec.options` instead of using
+  `build_config_from_defaults_and_options`.
+
+---
+
+## 9. Maintenance contract
+
+- Update this file whenever core modules, extension points, or key symbols are
+  added, removed, or renamed.
+- Verify references by grepping symbols and checking `project_files.md`.
+- `rg` every symbol mentioned in Sections 2–7.
+- Verify every referenced path exists.
+- Keep this doc task-first and concise; link to README/technical manual for
+  broader narrative.
+- Reviewer checklist for core-wiring PRs: confirm registry usage, safe HTTP
+  boundary, QC/safety semantics, and record schema compatibility.

@@ -9,10 +9,9 @@ level overrides.
 
 from __future__ import annotations
 
-from contextlib import contextmanager
-from typing import Optional
 import logging
 import sys
+from contextlib import contextmanager
 
 __all__ = [
     "PACKAGE_LOGGER_NAME",
@@ -28,7 +27,7 @@ PACKAGE_LOGGER_NAME = "sievio"
 logging.getLogger(PACKAGE_LOGGER_NAME).addHandler(logging.NullHandler())
 
 
-def get_logger(name: Optional[str] = None) -> logging.Logger:
+def get_logger(name: str | None = None) -> logging.Logger:
     """Return a named logger scoped to sievio.
 
     Args:
@@ -45,8 +44,8 @@ def configure_logging(
     *,
     level: int | str = logging.INFO,
     stream = None,
-    fmt: Optional[str] = None,
-    datefmt: Optional[str] = None,
+    fmt: str | None = None,
+    datefmt: str | None = None,
     propagate: bool = False,
     logger_name: str = PACKAGE_LOGGER_NAME,
 ) -> logging.Logger:
@@ -89,7 +88,7 @@ def configure_logging(
 
 
 @contextmanager
-def temp_level(level: int | str, name: Optional[str] = None):
+def temp_level(level: int | str, name: str | None = None):
     """Temporarily set a logger level inside a context manager.
 
     Args:

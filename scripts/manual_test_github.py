@@ -12,16 +12,16 @@ Set GITHUB_TOKEN or GH_TOKEN to avoid rate limiting.
 from __future__ import annotations
 
 # Allow running from a source checkout without installing the package.
-import os
-import sys, pathlib
+import pathlib
+import sys
+
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from pathlib import Path
 
-from sievio import SievioConfig, convert_github, configure_logging
-from sievio.core.config import DEFAULT_QC_SCORER_ID
+from sievio import SievioConfig, configure_logging, convert_github
 from sievio.cli.runner import default_paths_for_github
-
+from sievio.core.config import DEFAULT_QC_SCORER_ID
 
 # Default repo to try; override with SIEVIO_GH_URL env var.
 REPO_URL = "https://github.com/JochiRaider/URL_Research_Tool"

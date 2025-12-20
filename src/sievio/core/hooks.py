@@ -4,11 +4,12 @@
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Any, Dict, Iterable, Mapping, Optional, Sequence
 import json
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
+from typing import Any
 
-from .interfaces import RunLifecycleHook, RunContext, Sink, Record, RunArtifacts
+from .interfaces import Record, RunArtifacts, RunContext, RunLifecycleHook, Sink
 from .language_id import CodeLanguageDetector, LanguageDetector
 from .log import get_logger
 from .qc_utils import open_jsonl_output_maybe_gz
@@ -23,10 +24,10 @@ class RunSummary:
 
     config: Mapping[str, Any]
     stats: Mapping[str, Any]
-    qc_summary: Optional[Mapping[str, Any]]
+    qc_summary: Mapping[str, Any] | None
     metadata: Mapping[str, Any]
 
-    def to_record(self) -> Dict[str, Any]:
+    def to_record(self) -> dict[str, Any]:
         meta = RunSummaryMeta(
             config=dict(self.config),
             stats=dict(self.stats),
@@ -105,13 +106,13 @@ class RunSummaryHook(RunLifecycleHook):
 
 def _dispatch_finalizers(
     sinks: Sequence[Sink],
-    summary_record: Dict[str, Any],
-    primary_jsonl: Optional[str],
+    summary_record: dict[str, Any],
+    primary_jsonl: str | None,
     context: Any = None,
 ) -> None:
     """Dispatch finalize hooks to sinks and ensure JSONL footer behavior."""
 
-    from ..sinks.sinks import JSONLSink, GzipJSONLSink  # local import to avoid cycles
+    from ..sinks.sinks import GzipJSONLSink, JSONLSink  # local import to avoid cycles
 
     wrote_jsonl = False
     for sink in sinks:

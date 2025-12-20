@@ -4,13 +4,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path
-from typing import Optional, Mapping, Any, Iterable, Sequence
+from typing import Any
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from ..core.interfaces import Sink, RepoContext, Record
+from ..core.interfaces import Record, RepoContext, Sink
 from ..core.log import get_logger
 
 log = get_logger(__name__)
@@ -35,9 +36,9 @@ class ParquetDatasetSink(Sink):
         *,
         text_field: str = "text",
         meta_field: str = "meta",
-        partition_by: Optional[Iterable[str]] = None,
+        partition_by: Iterable[str] | None = None,
         compression: str = "snappy",
-        row_group_size: Optional[int] = None,
+        row_group_size: int | None = None,
         overwrite: bool = True,
     ) -> None:
         """Initialize the sink configuration.
@@ -61,12 +62,12 @@ class ParquetDatasetSink(Sink):
         self._row_group_size = row_group_size
         self._overwrite = bool(overwrite)
         self._buffer: list[Record] = []
-        self._writer: Optional[pq.ParquetWriter] = None
-        self._context: Optional[RepoContext] = None
+        self._writer: pq.ParquetWriter | None = None
+        self._context: RepoContext | None = None
         self._closed = False
         self._append_existing = False
 
-    def open(self, context: Optional[RepoContext] = None) -> None:
+    def open(self, context: RepoContext | None = None) -> None:
         """Prepare the sink for writing.
 
         Args:

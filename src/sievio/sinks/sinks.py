@@ -3,17 +3,20 @@
 """Sinks for writing repository records to various file formats."""
 from __future__ import annotations
 
+import gzip
+import json
+import os
+from collections.abc import Mapping
 from pathlib import Path
-from typing import Optional, Dict, Any, Mapping
-import os, json, gzip
+from typing import Any
 
-from ..core.interfaces import RepoContext, Record
+from ..core.interfaces import Record, RepoContext
 
 
 class _BaseJSONLSink:
     """Shared JSONL sink logic with optional header support."""
 
-    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Mapping[str, Any] | None = None):
         """Configure a JSONL sink.
 
         Args:
@@ -23,11 +26,11 @@ class _BaseJSONLSink:
         """
         self._path = Path(out_path)
         self._fp = None
-        self._tmp_path: Optional[Path] = None
-        self._header_record: Optional[Mapping[str, Any]] = dict(header_record) if header_record else None
+        self._tmp_path: Path | None = None
+        self._header_record: Mapping[str, Any] | None = dict(header_record) if header_record else None
         self._header_written = False
 
-    def open(self, context: Optional[RepoContext] = None) -> None:
+    def open(self, context: RepoContext | None = None) -> None:
         """Create a temp file for writing and emit the header if set."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         # If we've already written a header (e.g., during the main pipeline run)
@@ -45,7 +48,7 @@ class _BaseJSONLSink:
             self.write(dict(self._header_record))
             self._header_written = True
 
-    def write(self, record: Dict[str, Any]) -> None:
+    def write(self, record: dict[str, Any]) -> None:
         """Write a single JSON record as a compact line."""
         assert self._fp is not None
         self._fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -62,7 +65,7 @@ class _BaseJSONLSink:
             os.replace(self._tmp_path, self._path)
             self._tmp_path = None
 
-    def __enter__(self) -> "JSONLSink":
+    def __enter__(self) -> JSONLSink:
         self.open()
         return self
 
@@ -78,7 +81,7 @@ class _BaseJSONLSink:
         """Return an append handle for an existing file path."""
         raise NotImplementedError
 
-    def set_header_record(self, record: Optional[Mapping[str, Any]]) -> None:
+    def set_header_record(self, record: Mapping[str, Any] | None) -> None:
         """Replace the header record to be written on the next open call."""
         self._header_record = dict(record) if record else None
         self._header_written = False
@@ -104,7 +107,7 @@ class _BaseJSONLSink:
 class JSONLSink(_BaseJSONLSink):
     """Simple streaming JSONL sink (one record per line)."""
 
-    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Mapping[str, Any] | None = None):
         super().__init__(out_path, header_record=header_record)
 
     def _open_handle(self, path: Path):
@@ -117,7 +120,7 @@ class JSONLSink(_BaseJSONLSink):
 class GzipJSONLSink(_BaseJSONLSink):
     """Streaming JSONL sink that gzip-compresses its output."""
 
-    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Optional[Mapping[str, Any]] = None):
+    def __init__(self, out_path: str | os.PathLike[str], *, header_record: Mapping[str, Any] | None = None):
         super().__init__(out_path, header_record=header_record)
 
     def _open_handle(self, path: Path):
@@ -140,16 +143,16 @@ class PromptTextSink:
         self._path = Path(out_path)
         self._heading_fmt = heading_fmt
         self._fp = None
-        self._tmp_path: Optional[Path] = None
+        self._tmp_path: Path | None = None
 
-    def open(self, context: Optional[RepoContext] = None) -> None:
+    def open(self, context: RepoContext | None = None) -> None:
         """Create a temp file for writing prompt text output."""
         self._path.parent.mkdir(parents=True, exist_ok=True)
         tmp_name = f"{self._path.name}.tmp"
         self._tmp_path = self._path.parent / tmp_name
         self._fp = open(self._tmp_path, "w", encoding="utf-8", newline="")
 
-    def write(self, record: Dict[str, Any]) -> None:
+    def write(self, record: dict[str, Any]) -> None:
         """Write a heading and its associated text block.
 
         Args:
@@ -175,7 +178,7 @@ class PromptTextSink:
             os.replace(self._tmp_path, self._path)
             self._tmp_path = None
 
-    def __enter__(self) -> "PromptTextSink":
+    def __enter__(self) -> PromptTextSink:
         """Open the sink for use as a context manager."""
         self.open()
         return self
@@ -188,7 +191,7 @@ class PromptTextSink:
 class NoopSink:
     """Trivial sink with no-op lifecycle hooks for tests or mixins."""
 
-    def open(self, context: Optional[RepoContext] = None) -> None:  # noqa: D401
+    def open(self, context: RepoContext | None = None) -> None:  # noqa: D401
         """Perform no setup."""
         pass
 

@@ -3,52 +3,45 @@
 """Registries for sources, sinks, byte handlers, and quality scorers."""
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import (
     TYPE_CHECKING,
     Any,
-    Callable,
-    Dict,
-    Iterable,
-    List,
-    Mapping,
-    Optional,
     Protocol,
-    Sequence,
-    Tuple,
 )
 
-from .config import SievioConfig, SourceSpec, SinkSpec
+from .config import SievioConfig, SinkSpec, SourceSpec
 from .interfaces import (
-    Source,
-    Sink,
-    SourceFactory,
-    SinkFactory,
     QualityScorer,
-    SafetyScorer,
-    SourceFactoryContext,
-    SinkFactoryContext,
     RunLifecycleHook,
+    SafetyScorer,
     SafetyScorerFactory,
+    Sink,
+    SinkFactory,
+    SinkFactoryContext,
+    Source,
+    SourceFactory,
+    SourceFactoryContext,
 )
 from .log import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - type-only deps
-    from .factories import SinkFactoryResult
     from .builder import PipelineRuntime
+    from .factories import SinkFactoryResult
 
 
 @dataclass
 class SourceRegistry:
     """Registry for source factories keyed by their ids."""
 
-    _factories: Dict[str, SourceFactory] = field(default_factory=dict)
+    _factories: dict[str, SourceFactory] = field(default_factory=dict)
 
     def register(self, factory: SourceFactory) -> None:
         """Register a source factory."""
         self._factories[factory.id] = factory
 
-    def build_all(self, ctx: SourceFactoryContext, specs: Sequence[SourceSpec]) -> List[Source]:
+    def build_all(self, ctx: SourceFactoryContext, specs: Sequence[SourceSpec]) -> list[Source]:
         """Instantiate sources for each spec using the registered factories.
 
         Args:
@@ -61,7 +54,7 @@ class SourceRegistry:
         Raises:
             ValueError: If a spec references an unknown source kind.
         """
-        out: List[Source] = []
+        out: list[Source] = []
         for spec in specs:
             factory = self._factories.get(spec.kind)
             if factory is None:
@@ -74,13 +67,13 @@ class SourceRegistry:
 class SinkRegistry:
     """Registry for sink factories and related metadata merges."""
 
-    _factories: Dict[str, SinkFactory] = field(default_factory=dict)
+    _factories: dict[str, SinkFactory] = field(default_factory=dict)
 
     def register(self, factory: SinkFactory) -> None:
         """Register a sink factory."""
         self._factories[factory.id] = factory
 
-    def build_all(self, ctx: SinkFactoryContext, specs: Sequence[SinkSpec]) -> Tuple[List[Sink], Mapping[str, Any], SinkFactoryContext]:
+    def build_all(self, ctx: SinkFactoryContext, specs: Sequence[SinkSpec]) -> tuple[list[Sink], Mapping[str, Any], SinkFactoryContext]:
         """Instantiate sinks for each spec and merge factory metadata.
 
         The context may be updated by successive factories; the final context
@@ -98,14 +91,14 @@ class SinkRegistry:
         Raises:
             ValueError: If a spec references an unknown sink kind.
         """
-        sinks: List[Sink] = []
-        merged_meta: Dict[str, Any] = {}
+        sinks: list[Sink] = []
+        merged_meta: dict[str, Any] = {}
         current_ctx = ctx
         for spec in specs:
             factory = self._factories.get(spec.kind)
             if factory is None:
                 raise ValueError(f"Unknown sink kind {spec.kind!r}")
-            result: "SinkFactoryResult" = factory.build(current_ctx, spec)
+            result: SinkFactoryResult = factory.build(current_ctx, spec)
             sinks.extend(result.sinks)
             for k, v in result.metadata.items():
                 if k not in merged_meta or merged_meta[k] is None:
@@ -124,13 +117,13 @@ class BytesHandlerRegistry:
     """Registry for handlers operating on raw bytes inputs."""
 
     def __init__(self) -> None:
-        self._handlers: List[Tuple[Callable[[bytes, str], bool], Callable[..., Optional[Iterable[Any]]]]] = []
+        self._handlers: list[tuple[Callable[[bytes, str], bool], Callable[..., Iterable[Any] | None]]] = []
 
-    def register(self, sniff: Callable[[bytes, str], bool], handler: Callable[..., Optional[Iterable[Any]]]) -> None:
+    def register(self, sniff: Callable[[bytes, str], bool], handler: Callable[..., Iterable[Any] | None]) -> None:
         """Register a handler with a sniff predicate."""
         self._handlers.append((sniff, handler))
 
-    def handlers(self) -> Tuple[Tuple[Callable[[bytes, str], bool], Callable[..., Optional[Iterable[Any]]]], ...]:
+    def handlers(self) -> tuple[tuple[Callable[[bytes, str], bool], Callable[..., Iterable[Any] | None]], ...]:
         """Return registered (sniff, handler) pairs."""
         return tuple(self._handlers)
 
@@ -148,7 +141,7 @@ class QualityScorerRegistry:
     """Registry for quality scorer factories with safe construction."""
 
     def __init__(self) -> None:
-        self._factories: Dict[str, QualityScorerFactory] = {}
+        self._factories: dict[str, QualityScorerFactory] = {}
         self.log = get_logger(__name__)
         # DEFAULT_QC_SCORER_ID is used when qc.scorer_id is None and a default scorer is registered.
 
@@ -156,7 +149,7 @@ class QualityScorerRegistry:
         """Register a quality scorer factory."""
         self._factories[factory.id] = factory
 
-    def get(self, factory_id: Optional[str] = None) -> Optional[QualityScorerFactory]:
+    def get(self, factory_id: str | None = None) -> QualityScorerFactory | None:
         """Return a scorer factory by id or the first registered one."""
         if factory_id is not None:
             return self._factories.get(factory_id)
@@ -169,8 +162,8 @@ class QualityScorerRegistry:
         self,
         options: Mapping[str, Any],
         *,
-        factory_id: Optional[str] = None,
-    ) -> Optional[QualityScorer]:
+        factory_id: str | None = None,
+    ) -> QualityScorer | None:
         """Safely build a quality scorer instance.
 
         Args:
@@ -190,7 +183,7 @@ class QualityScorerRegistry:
             self.log.warning("Quality scorer factory %s failed: %s", getattr(factory, "id", None), exc)
             return None
 
-    def ids(self) -> Tuple[str, ...]:
+    def ids(self) -> tuple[str, ...]:
         """Return ids of registered quality scorer factories."""
         return tuple(self._factories.keys())
 
@@ -199,7 +192,7 @@ class SafetyScorerRegistry:
     """Registry for safety scorer factories with safe construction."""
 
     def __init__(self) -> None:
-        self._factories: Dict[str, SafetyScorerFactory] = {}
+        self._factories: dict[str, SafetyScorerFactory] = {}
         self.log = get_logger(__name__)
 
     def register(self, factory: SafetyScorerFactory) -> None:
@@ -231,7 +224,7 @@ class SafetyScorerRegistry:
             self.log.warning("Safety scorer factory %s failed: %s", factory_id or "<default>", exc)
             return None
 
-    def ids(self) -> Tuple[str, ...]:
+    def ids(self) -> tuple[str, ...]:
         """Return ids of registered safety scorer factories."""
         return tuple(self._factories.keys())
 
@@ -241,7 +234,7 @@ class LifecycleHookFactory(Protocol):
 
     id: str
 
-    def build(self, cfg: SievioConfig, runtime: "PipelineRuntime") -> RunLifecycleHook:
+    def build(self, cfg: SievioConfig, runtime: PipelineRuntime) -> RunLifecycleHook:
         ...
 
 
@@ -249,12 +242,12 @@ class LifecycleHookRegistry:
     """Registry for lifecycle hook factories keyed by id."""
 
     def __init__(self) -> None:
-        self._factories: Dict[str, LifecycleHookFactory] = {}
+        self._factories: dict[str, LifecycleHookFactory] = {}
 
     def register(self, factory: LifecycleHookFactory) -> None:
         self._factories[factory.id] = factory
 
-    def build_all(self, cfg: SievioConfig, runtime: "PipelineRuntime", ids: Sequence[str]) -> list[RunLifecycleHook]:
+    def build_all(self, cfg: SievioConfig, runtime: PipelineRuntime, ids: Sequence[str]) -> list[RunLifecycleHook]:
         hooks: list[RunLifecycleHook] = []
         for hook_id in ids:
             factory = self._factories.get(hook_id)
@@ -267,12 +260,12 @@ class LifecycleHookRegistry:
 def default_source_registry() -> SourceRegistry:
     """Build a SourceRegistry populated with the default factories."""
     from .factories import (
-        LocalDirSourceFactory,
-        GitHubZipSourceFactory,
-        WebPdfListSourceFactory,
-        WebPagePdfSourceFactory,
         CsvTextSourceFactory,
+        GitHubZipSourceFactory,
+        LocalDirSourceFactory,
         SQLiteSourceFactory,
+        WebPagePdfSourceFactory,
+        WebPdfListSourceFactory,
     )
 
     reg = SourceRegistry()

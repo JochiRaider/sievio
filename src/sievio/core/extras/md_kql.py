@@ -5,14 +5,14 @@
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Iterator, List, Optional, Sequence
-import re
 
-from ..interfaces import RepoContext, Record
-from ..records import build_record
+from ..interfaces import Record, RepoContext
 from ..language_id import MD_EXTS
+from ..records import build_record
 
 __all__ = [
     "KQLBlock",
@@ -43,9 +43,9 @@ class KQLBlock:
     text: str
     start: int  # character offset in source markdown
     end: int    # exclusive
-    lang: Optional[str] = None  # 'kql' | 'kusto' | None (inferred)
-    title: Optional[str] = None  # preceding heading, if found
-    tables: Optional[list[str]] = None  # best-effort table guesses
+    lang: str | None = None  # 'kql' | 'kusto' | None (inferred)
+    title: str | None = None  # preceding heading, if found
+    tables: list[str] | None = None  # best-effort table guesses
 
 
 # -----------------
@@ -118,7 +118,7 @@ def is_probable_kql(text: str) -> bool:
 # Block scanners / extractors
 # --------------------------
 
-def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, Optional[str], int, int]]:
+def _iter_fenced_blocks(md: str) -> Iterator[tuple[str, str | None, int, int]]:
     """Yield fenced code blocks with language and character offsets."""
     lines = md.splitlines(keepends=True)
     i = 0
@@ -166,7 +166,7 @@ def _iter_indented_blocks(md: str) -> Iterator[tuple[str, int, int]]:
         i += 1
 
 
-def _find_heading_before(md: str, char_index: int, *, max_lines_back: int = 5) -> Optional[str]:
+def _find_heading_before(md: str, char_index: int, *, max_lines_back: int = 5) -> str | None:
     """Locate the nearest heading above a character index within a window."""
     # Walk backwards from char_index up to N lines to find a heading
     head = None
@@ -206,7 +206,7 @@ accept_unlabeled_fences: bool = True,
 accept_indented_blocks: bool = True,
 min_lines: int = 2,
 skip_indented_inside_fences: bool = True,
- ) -> List[KQLBlock]:
+ ) -> list[KQLBlock]:
     """Extract likely KQL code blocks from Markdown content.
 
     Fenced blocks labeled as KQL (or unlabeled but heuristically KQL) are
@@ -381,8 +381,8 @@ class KqlFromMarkdownExtractor:
         *,
         text: str,
         path: str,
-        context: Optional[RepoContext] = None,
-    ) -> Optional[Iterable[Record]]:
+        context: RepoContext | None = None,
+    ) -> Iterable[Record] | None:
         """Extract KQL records from Markdown-like files.
 
         Args:
@@ -410,7 +410,7 @@ class KqlFromMarkdownExtractor:
         cat = derive_category_from_rel(path)
         context_meta = (context.as_meta_seed() or None) if context else None
         file_nlines = 0 if text == "" else text.count("\n") + 1
-        out: List[Record] = []
+        out: list[Record] = []
         n = len(blocks)
         for i, b in enumerate(blocks, start=1):
             extra_meta = {"subkind": "kql", "title": getattr(b, "title", None), "category": cat}

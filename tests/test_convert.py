@@ -1,6 +1,7 @@
 import io
 import os
 from pathlib import Path
+
 import pytest
 
 from sievio.core.chunk import ChunkPolicy
@@ -12,9 +13,9 @@ from sievio.core.convert import (
     iter_records_from_bytes,
     iter_records_from_file_item,
     list_records_for_file,
-    resolve_bytes_from_file_item,
     make_limited_stream,
     maybe_reopenable_local_path,
+    resolve_bytes_from_file_item,
 )
 from sievio.core.factories_sources import UnsupportedBinary
 from sievio.core.interfaces import FileItem, RepoContext

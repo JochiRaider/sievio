@@ -4,15 +4,16 @@
 
 from __future__ import annotations
 
-from typing import Iterable, Optional, Any, Dict, Sequence
+from collections.abc import Iterable, Sequence
 from pathlib import Path
+from typing import Any
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 import pyarrow.dataset as ds
+import pyarrow.parquet as pq
 
 from ..core.chunk import ChunkPolicy
-from ..core.interfaces import RepoContext, Record
+from ..core.interfaces import Record, RepoContext
 from ..core.log import get_logger
 
 log = get_logger(__name__)
@@ -41,7 +42,7 @@ def sniff_parquet(data: bytes, rel: str) -> bool:
 def _iter_rows_from_table(
     table: pa.Table,
     rel: str,
-    ctx: Optional[RepoContext],
+    ctx: RepoContext | None,
     *,
     text_column: str = DEFAULT_TEXT_COLUMN,
     meta_column: str = DEFAULT_META_COLUMN,
@@ -78,7 +79,7 @@ def _iter_rows_from_table(
                 raw_meta = meta_arr[idx].as_py()
             except Exception:
                 raw_meta = None
-            meta: Dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, dict) else {}
+            meta: dict[str, Any] = dict(raw_meta) if isinstance(raw_meta, dict) else {}
             if ctx_defaults:
                 for key, value in ctx_defaults.items():
                     meta.setdefault(key, value)
@@ -96,9 +97,9 @@ def _iter_rows_from_table(
 def handle_parquet(
     data: bytes,
     rel: str,
-    ctx: Optional[RepoContext],
-    chunk_policy: Optional[ChunkPolicy],
-) -> Optional[Iterable[Record]]:
+    ctx: RepoContext | None,
+    chunk_policy: ChunkPolicy | None,
+) -> Iterable[Record] | None:
     """Reads Parquet bytes and emits records, ignoring chunk policy.
 
     Args:

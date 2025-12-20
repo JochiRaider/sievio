@@ -8,10 +8,11 @@ chunk text into token-bounded spans suitable for LLM ingestion.
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import List, Optional, Tuple, Callable, Dict, Any, Iterator
-import re
 import math
+import re
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
+from typing import Any
 
 # -----------------------------
 # Optional tiktoken integration
@@ -24,13 +25,13 @@ except Exception:
     _HAVE_TIKTOKEN = False
 
 _DEFAULT_TOKENIZER: Any | None = None
-_TOKENIZER_CACHE: Dict[str, Any] = {}
+_TOKENIZER_CACHE: dict[str, Any] = {}
 
 
 # -----------------
 # Tokenizer helpers
 # -----------------
-def _get_tokenizer(tokenizer_name: Optional[str] = None):
+def _get_tokenizer(tokenizer_name: str | None = None):
     """Return a tiktoken tokenizer for the given name if available.
 
     Args:
@@ -168,7 +169,7 @@ _FENCE_CLOSE = re.compile(r'^[ \t]{0,3}([`~]{3,})[ \t]*$', re.M)
 _PARA_SPLITTER = re.compile(r'\n[ \t]*\n+')
 _SENTENCE_BOUNDARY = re.compile(r'(?<=[.!?])(?:["\')\]]+)?\s+(?=[A-Z0-9])')
 
-def _split_markdown_blocks(text: str, tokenizer) -> List[Block]:
+def _split_markdown_blocks(text: str, tokenizer) -> list[Block]:
     """Split Markdown text into logical blocks.
 
     The splitter recognizes ATX and Setext headings and fenced
@@ -187,8 +188,8 @@ def _split_markdown_blocks(text: str, tokenizer) -> List[Block]:
     n = len(lines)
     i = 0
     pos = 0
-    out: List[Block] = []
-    buf: List[str] = []
+    out: list[Block] = []
+    buf: list[str] = []
     bstart = 0
 
     def flush():
@@ -320,7 +321,7 @@ def _underline_long_enough(adorn_line: str, title_line: str) -> bool:
     return ulen >= tlen
 
 
-def _split_rst_blocks(text: str, tokenizer) -> List[Block]:
+def _split_rst_blocks(text: str, tokenizer) -> list[Block]:
     """Split reStructuredText into logical blocks.
 
     The splitter recognizes section titles (underline-only or
@@ -339,8 +340,8 @@ def _split_rst_blocks(text: str, tokenizer) -> List[Block]:
     n = len(lines)
     i = 0
     pos = 0
-    out: List[Block] = []
-    buf: List[str] = []
+    out: list[Block] = []
+    buf: list[str] = []
     bstart = 0
 
     def flush():
@@ -477,9 +478,9 @@ def _split_rst_blocks(text: str, tokenizer) -> List[Block]:
 # Splitter registry + public dispatcher
 # -------------------------
 # Callable signature for a splitter: (full text, tokenizer) -> list of Blocks
-BlockSplitter = Callable[[str, Any], List[Block]]
+BlockSplitter = Callable[[str, Any], list[Block]]
 
-_SPLITTER_REGISTRY: Dict[str, BlockSplitter] = {
+_SPLITTER_REGISTRY: dict[str, BlockSplitter] = {
     "markdown": _split_markdown_blocks,    
     "md": _split_markdown_blocks,
     "restructuredtext": _split_rst_blocks,
@@ -498,7 +499,7 @@ def register_doc_splitter(fmt_name: str, splitter: BlockSplitter) -> None:
     """
     _SPLITTER_REGISTRY[fmt_name.strip().lower()] = splitter
 
-def split_doc_blocks(text: str, fmt: Optional[str], tokenizer) -> List[Block]:
+def split_doc_blocks(text: str, fmt: str | None, tokenizer) -> list[Block]:
     """Split documentation text into blocks using a registered splitter.
 
     Args:
@@ -541,7 +542,7 @@ class ChunkPolicy:
     overlap_tokens: int = 40
     min_tokens: int = 400
     semantic_doc: bool = False
-    semantic_tokens_per_block: Optional[int] = None
+    semantic_tokens_per_block: int | None = None
 
 
 def _semantic_block_limit(pol: ChunkPolicy) -> int:
@@ -561,7 +562,7 @@ def _semantic_block_limit(pol: ChunkPolicy) -> int:
     return max(80, base)
 
 
-def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
+def _paragraph_spans(text: str) -> list[tuple[int, int]]:
     """Compute paragraph span offsets for a text blob.
 
     Paragraphs are separated by blank lines. If no separators are
@@ -574,7 +575,7 @@ def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
         list[tuple[int, int]]: Character ranges for each paragraph
             as ``(start, end)`` offsets.
     """
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     last = 0
     for match in _PARA_SPLITTER.finditer(text):
         end = match.end()
@@ -587,7 +588,7 @@ def _paragraph_spans(text: str) -> List[Tuple[int, int]]:
     return spans
 
 
-def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, tokenizer) -> List[Block]:
+def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, tokenizer) -> list[Block]:
     """Split a paragraph segment into sentence-based blocks.
 
     Sentences are grouped so that each block stays under the given
@@ -603,7 +604,7 @@ def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, token
     Returns:
         list[Block]: Sentence-grouped blocks covering the segment.
     """
-    spans: List[Tuple[int, int]] = []
+    spans: list[tuple[int, int]] = []
     last = 0
     for match in _SENTENCE_BOUNDARY.finditer(segment_text):
         end = match.end()
@@ -616,7 +617,7 @@ def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, token
         return [Block(segment_text, abs_start, abs_start + len(segment_text), tokens, kind="text")]
 
     min_group = max(1, limit_tokens // 2)
-    groups: List[Tuple[int, int, int]] = []
+    groups: list[tuple[int, int, int]] = []
     cur_start, cur_end = spans[0]
     cur_tokens = count_tokens(segment_text[cur_start:cur_end], tokenizer, "doc")
     for seg_start, seg_end in spans[1:]:
@@ -632,7 +633,7 @@ def _split_sentences(segment_text: str, abs_start: int, limit_tokens: int, token
             cur_tokens = seg_tokens
     groups.append((cur_start, cur_end, cur_tokens))
 
-    out: List[Block] = []
+    out: list[Block] = []
     for rel_start, rel_end, tok_count in groups:
         sub_text = segment_text[rel_start:rel_end]
         out.append(
@@ -654,7 +655,7 @@ def _split_paragraph_span(
     block_abs_start: int,
     limit_tokens: int,
     tokenizer,
-) -> List[Block]:
+) -> list[Block]:
     """Split a paragraph span into semantic sub-blocks.
 
     Depending on token counts and sentence boundaries, the span is
@@ -684,7 +685,7 @@ def _split_paragraph_span(
     return _split_sentences(segment, abs_start, limit_tokens, tokenizer)
 
 
-def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> List[Block]:
+def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> list[Block]:
     """Refine a text block into smaller semantic sub-blocks.
 
     Paragraphs and sentences are used as boundaries while enforcing
@@ -699,7 +700,7 @@ def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> Li
         list[Block]: Refined blocks covering the original text.
     """
     spans = _paragraph_spans(block.text)
-    refined: List[Block] = []
+    refined: list[Block] = []
     for span_start, span_end in spans:
         refined.extend(
             _split_paragraph_span(
@@ -715,10 +716,10 @@ def _split_text_block_semantic(block: Block, limit_tokens: int, tokenizer) -> Li
 
 
 def _semantic_refine_doc_blocks(
-    blocks: List[Block],
+    blocks: list[Block],
     policy: ChunkPolicy,
     tokenizer,
-) -> List[Block]:
+) -> list[Block]:
     """Apply semantic refinement to documentation blocks.
 
     When ``policy.semantic_doc`` is enabled, large text blocks are
@@ -737,7 +738,7 @@ def _semantic_refine_doc_blocks(
     if not policy.semantic_doc:
         return blocks
     limit = _semantic_block_limit(policy)
-    refined: List[Block] = []
+    refined: list[Block] = []
     for block in blocks:
         if block.kind != "text" or block.tokens <= limit:
             refined.append(block)
@@ -772,14 +773,14 @@ def _take_tail_chars_for_overlap(text: str, approx_tokens: int, mode: str) -> st
 
 
 def iter_packed_blocks(
-    blocks: List[Block],
+    blocks: list[Block],
     *,
     target_tokens: int,
     overlap_tokens: int,
     min_tokens: int,
     tokenizer,
     mode,
-) -> Iterator[Tuple[str, int, int, int]]:
+) -> Iterator[tuple[str, int, int, int]]:
     """Pack blocks into chunks near the target token size.
 
     Blocks are accumulated until the target token count is reached,
@@ -800,12 +801,12 @@ def iter_packed_blocks(
         tuple[str, int, int, int]: Chunk text, start offset, end
             offset, and token count.
     """
-    cur_buf: List[str] = []
-    cur_start: Optional[int] = None
+    cur_buf: list[str] = []
+    cur_start: int | None = None
     cur_len_tok = 0
     cur_mode = mode
 
-    def flush() -> Optional[Tuple[str, int, int, int]]:
+    def flush() -> tuple[str, int, int, int] | None:
         nonlocal cur_buf, cur_start, cur_len_tok, cur_mode
         if not cur_buf:
             return None
@@ -890,7 +891,7 @@ def iter_packed_blocks(
             yield flushed
 
 
-def _split_code_lines(text: str, tokenizer) -> List[Block]:
+def _split_code_lines(text: str, tokenizer) -> list[Block]:
     """Split code text into line-based blocks.
 
     Contiguous sections of code are grouped together, with runs of
@@ -905,10 +906,10 @@ def _split_code_lines(text: str, tokenizer) -> List[Block]:
         list[Block]: Code blocks covering the input text.
     """
     lines = text.splitlines(keepends=True)
-    blocks: List[Block] = []
+    blocks: list[Block] = []
     start = 0
     pos = 0
-    buf: List[str] = []
+    buf: list[str] = []
 
     def flush():
         nonlocal buf, start, pos
@@ -941,9 +942,9 @@ def iter_chunk_dicts(
     text: str,
     *,
     mode: str = "doc",
-    fmt: Optional[str] = None,
-    policy: Optional[ChunkPolicy] = None,
-    tokenizer_name: Optional[str] = None,
+    fmt: str | None = None,
+    policy: ChunkPolicy | None = None,
+    tokenizer_name: str | None = None,
 ) -> Iterator[dict]:
     """Yield chunk dictionaries for the given text.
 
@@ -999,10 +1000,10 @@ def chunk_text(
     text: str,
     *,
     mode: str = "doc",
-    fmt: Optional[str] = None,
-    policy: Optional[ChunkPolicy] = None,
-    tokenizer_name: Optional[str] = None,
-) -> List[dict]:
+    fmt: str | None = None,
+    policy: ChunkPolicy | None = None,
+    tokenizer_name: str | None = None,
+) -> list[dict]:
     """Chunk text into a list of token-bounded spans.
 
     Each chunk is returned as a dictionary containing the text,
@@ -1039,7 +1040,7 @@ def chunk_text(
 # -------------
 # Convenience IO
 # -------------
-def detect_fmt_from_lang(lang: Optional[str]) -> str:
+def detect_fmt_from_lang(lang: str | None) -> str:
     """Infer a document format name from a language label.
 
     Args:

@@ -9,20 +9,19 @@ handler registration.
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
-    Callable,
-    Iterable,
     Optional,
-    Sequence,
-    Tuple,
 )
 
+from ..sources.fs import PatternFileSource
+from ..sources.sources_webpdf import WebPagePdfSource, WebPdfListSource
 from .interfaces import (
-    RepoContext,
     Record,
+    RepoContext,
     Source,
     SourceFactory,
     SourceFactoryContext,
@@ -31,17 +30,13 @@ from .registries import (
     BytesHandlerRegistry,
     bytes_handler_registry,
 )
-from ..sources.fs import PatternFileSource
-from ..sources.sources_webpdf import WebPdfListSource, WebPagePdfSource
 
 if TYPE_CHECKING:  # pragma: no cover - type-only imports
     from .chunk import ChunkPolicy
     from .config import (
-        CsvSourceConfig,
         GitHubSourceConfig,
         LocalDirSourceConfig,
         PdfSourceConfig,
-        SQLiteSourceConfig,
         SourceSpec,
     )
     from .interfaces import SourceFactory
@@ -49,8 +44,8 @@ if TYPE_CHECKING:  # pragma: no cover - type-only imports
 
 Sniff = Callable[[bytes, str], bool]
 BytesHandler = Callable[
-    [bytes, str, Optional[RepoContext], Optional["ChunkPolicy"]],
-    Optional[Iterable[Record]],
+    [bytes, str, RepoContext | None, Optional["ChunkPolicy"]],
+    Iterable[Record] | None,
 ]
 
 __all__ = [
@@ -79,7 +74,7 @@ class UnsupportedBinary(Exception):
 def make_jsonl_text_source(
     paths: Sequence[str | Path],
     *,
-    context: Optional[RepoContext] = None,
+    context: RepoContext | None = None,
     text_key: str = "text",
     check_schema: bool = True,
 ):
@@ -110,9 +105,9 @@ def make_jsonl_text_source(
 def make_csv_text_source(
     paths: Sequence[str | Path],
     *,
-    context: Optional[RepoContext] = None,
+    context: RepoContext | None = None,
     text_column: str = "text",
-    delimiter: Optional[str] = None,
+    delimiter: str | None = None,
     encoding: str = "utf-8",
     has_header: bool = True,
     text_column_index: int = 0,
@@ -152,8 +147,8 @@ def make_pattern_file_source(
     root: str | Path,
     patterns: Sequence[str],
     *,
-    config: "LocalDirSourceConfig",
-    context: Optional[RepoContext] = None,
+    config: LocalDirSourceConfig,
+    context: RepoContext | None = None,
 ) -> PatternFileSource:
     """
     Build a PatternFileSource rooted at a directory.
@@ -178,7 +173,7 @@ class LocalDirSourceFactory(SourceFactory):
 
     id: str = "local_dir"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a LocalDirSource from a source specification.
 
@@ -232,7 +227,7 @@ class GitHubZipSourceFactory(SourceFactory):
 
     id: str = "github_zip"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a GitHubZipSource from a source specification.
 
@@ -289,7 +284,7 @@ class WebPdfListSourceFactory(SourceFactory):
 
     id: str = "web_pdf_list"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a WebPdfListSource from a source specification.
 
@@ -347,7 +342,7 @@ class WebPagePdfSourceFactory(SourceFactory):
 
     id: str = "web_page_pdf"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a WebPagePdfSource from a source specification.
 
@@ -407,7 +402,7 @@ class SQLiteSourceFactory(SourceFactory):
 
     id: str = "sqlite"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a SQLiteSource from a source specification.
 
@@ -516,7 +511,7 @@ class CsvTextSourceFactory(SourceFactory):
 
     id: str = "csv_text"
 
-    def build(self, ctx: SourceFactoryContext, spec: "SourceSpec") -> Sequence[Source]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Sequence[Source]:
         """
         Construct a CSVTextSource from a source specification.
 
@@ -587,8 +582,8 @@ class CsvTextSourceFactory(SourceFactory):
 def make_local_dir_source(
     root: Path | str,
     *,
-    config: "LocalDirSourceConfig",
-    context: Optional[RepoContext] = None,
+    config: LocalDirSourceConfig,
+    context: RepoContext | None = None,
 ):
     """
     Build a LocalDirSource for a filesystem root.
@@ -615,10 +610,10 @@ def make_local_dir_source(
 def make_github_zip_source(
     url: str,
     *,
-    config: "GitHubSourceConfig",
-    context: Optional[RepoContext],
-    download_timeout: Optional[float],
-    http_client: Optional["SafeHttpClient"] = None,
+    config: GitHubSourceConfig,
+    context: RepoContext | None,
+    download_timeout: float | None,
+    http_client: SafeHttpClient | None = None,
 ):
     """
     Build a GitHubZipSource for a GitHub archive URL.
@@ -654,8 +649,8 @@ def make_github_zip_source(
 def make_web_pdf_source(
     urls: Sequence[str | Path],
     *,
-    config: "PdfSourceConfig",
-    http_client: Optional["SafeHttpClient"] = None,
+    config: PdfSourceConfig,
+    http_client: SafeHttpClient | None = None,
 ):
     """
     Build a WebPdfListSource from a sequence of URLs.
@@ -680,7 +675,7 @@ def make_web_pdf_source(
     )
 
 
-def make_bytes_handlers(registry: Optional[BytesHandlerRegistry] = None) -> Sequence[Tuple[Sniff, BytesHandler]]:
+def make_bytes_handlers(registry: BytesHandlerRegistry | None = None) -> Sequence[tuple[Sniff, BytesHandler]]:
     """
     Return the default sniff/handler pairs for binary formats.
 
@@ -723,9 +718,9 @@ def _fallback_sniff_pdf(data: bytes, rel: str) -> bool:
 def _fallback_handle_pdf(
     data: bytes,
     rel: str,
-    ctx: Optional[RepoContext],
-    policy: Optional["ChunkPolicy"],
-) -> Optional[Iterable[Record]]:
+    ctx: RepoContext | None,
+    policy: ChunkPolicy | None,
+) -> Iterable[Record] | None:
     """Raise an error indicating PDF support is unavailable."""
 
     raise UnsupportedBinary("pdf support is not installed")
@@ -747,9 +742,9 @@ def _fallback_sniff_evtx(data: bytes, rel: str) -> bool:
 def _fallback_handle_evtx(
     data: bytes,
     rel: str,
-    ctx: Optional[RepoContext],
-    policy: Optional["ChunkPolicy"],
-) -> Optional[Iterable[Record]]:
+    ctx: RepoContext | None,
+    policy: ChunkPolicy | None,
+) -> Iterable[Record] | None:
     """Raise an error indicating EVTX support is unavailable."""
 
     raise UnsupportedBinary("evtx support is not installed")

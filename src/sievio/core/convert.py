@@ -4,18 +4,19 @@
 from __future__ import annotations
 
 import io
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any, Callable, Dict, Iterable, Iterator, List, Mapping, Optional, Sequence, Tuple
+from typing import Any
 from urllib.parse import urlparse, urlunparse
-from contextlib import closing
 
-from .config import SievioConfig, FileProcessingConfig, DecodeConfig, ChunkConfig
+from ..sources.fs import read_file_prefix
 from .chunk import ChunkPolicy, iter_chunk_dicts
+from .config import ChunkConfig, DecodeConfig, FileProcessingConfig, SievioConfig
 from .decode import decode_bytes
 from .factories_sources import UnsupportedBinary
-from ..sources.fs import read_file_prefix
-from .interfaces import FileExtractor, FileItem, RepoContext, Record, StreamingExtractor
+from .interfaces import FileExtractor, FileItem, Record, RepoContext, StreamingExtractor
 from .language_id import classify_path_kind
 from .log import get_logger
 from .records import build_record
@@ -109,7 +110,7 @@ class _LimitedRaw(io.RawIOBase):
             super().close()
 
 
-def make_limited_stream(raw: io.BufferedIOBase, limit: Optional[int]) -> io.BufferedReader:
+def make_limited_stream(raw: io.BufferedIOBase, limit: int | None) -> io.BufferedReader:
     """Wrap a raw binary stream with an optional total-byte limiter."""
 
     if limit is None:
@@ -139,8 +140,8 @@ log = get_logger(__name__)
 
 Sniff = Callable[[bytes, str], bool]
 BytesHandler = Callable[
-    [bytes, str, Optional[RepoContext], Optional[ChunkPolicy]],
-    Optional[Iterable[Record]],
+    [bytes, str, RepoContext | None, ChunkPolicy | None],
+    Iterable[Record] | None,
 ]
 
 
@@ -154,9 +155,9 @@ class ByteSource:
         size (int | None): File size in bytes when known.
     """
 
-    data: Optional[bytes]
-    origin: Optional[Path]
-    size: Optional[int]
+    data: bytes | None
+    origin: Path | None
+    size: int | None
 
 
 @dataclass(slots=True)
@@ -175,7 +176,7 @@ class RecordBuilderContext:
     metadata_seed: Mapping[str, Any] | None = None
 
 
-def _derive_source_domain(source_url: Optional[str], source_domain: Optional[str]) -> Optional[str]:
+def _derive_source_domain(source_url: str | None, source_domain: str | None) -> str | None:
     """Return a hostname derived from the source URL when none is provided."""
 
     if source_domain is not None:
@@ -189,9 +190,9 @@ def _derive_source_domain(source_url: Optional[str], source_domain: Optional[str
 
 
 def _normalize_source_ref(
-    source_url: Optional[str],
-    source_domain: Optional[str],
-) -> Tuple[Optional[str], Optional[str]]:
+    source_url: str | None,
+    source_domain: str | None,
+) -> tuple[str | None, str | None]:
     """Sanitize source URL metadata to avoid leaking credentials/tokens.
 
     Only http/https URLs are normalized; other schemes are omitted from
@@ -219,9 +220,9 @@ def _normalize_source_ref(
 
 # Shape of the callable adapter the pipeline passes into this module
 # (it wraps interfaces.Extractor.extract and returns an Iterable[Record])
-ExtractorFn = Callable[[str, str], Optional[Iterable[Record]]]
+ExtractorFn = Callable[[str, str], Iterable[Record] | None]
 
-def _build_record_context(config: ConfigForRecords, context: Optional[RepoContext]) -> RecordBuilderContext:
+def _build_record_context(config: ConfigForRecords, context: RepoContext | None) -> RecordBuilderContext:
     """Build a RecordBuilderContext from config and repository context.
 
     Args:
@@ -240,10 +241,10 @@ def _build_record_context(config: ConfigForRecords, context: Optional[RepoContex
 
 
 def _augment_context_with_source(
-    context: Optional[RepoContext],
-    source_url: Optional[str],
-    source_domain: Optional[str],
-) -> Optional[RepoContext]:
+    context: RepoContext | None,
+    source_url: str | None,
+    source_domain: str | None,
+) -> RepoContext | None:
     """Merge source URL metadata into an existing repository context.
 
     Args:
@@ -256,7 +257,7 @@ def _augment_context_with_source(
     """
     if not source_url and not source_domain:
         return context
-    extra: Dict[str, Any] = {}
+    extra: dict[str, Any] = {}
     if context and context.extra:
         extra.update(context.extra)
     if source_url:
@@ -279,7 +280,7 @@ def _can_open_stream(item: FileItem) -> bool:
     )
 
 
-def maybe_reopenable_local_path(item: FileItem) -> Optional[Path]:
+def maybe_reopenable_local_path(item: FileItem) -> Path | None:
     """Return a safe local Path to reopen for streaming, or None when disallowed.
 
     A path is reopenable only when the FileItem is marked streamable, the
@@ -294,7 +295,7 @@ def maybe_reopenable_local_path(item: FileItem) -> Optional[Path]:
     if getattr(item, "stream_hint", None) != "file":
         return None
     origin_str = str(origin)
-    candidate: Optional[Path] = None
+    candidate: Path | None = None
     if "://" in origin_str:
         try:
             parsed = urlparse(origin_str)
@@ -372,14 +373,14 @@ def list_records_for_file(
     text: str,
     rel_path: str,
     config: ConfigForRecords,
-    context: Optional[RepoContext],
+    context: RepoContext | None,
     encoding: str,
     had_replacement: bool,
     file_bytes: int | None = None,
     truncated_bytes: int | None = None,
-    source_url: Optional[str] = None,
-    source_domain: Optional[str] = None,
-) -> List[Dict[str, object]]:
+    source_url: str | None = None,
+    source_domain: str | None = None,
+) -> list[dict[str, object]]:
     """Materialize records for a decoded file using configured extractors.
 
     Args:
@@ -423,15 +424,15 @@ def iter_records_for_file(
     text: str,
     rel_path: str,
     record_ctx: RecordBuilderContext,
-    context: Optional[RepoContext],
+    context: RepoContext | None,
     encoding: str,
     had_replacement: bool,
     file_bytes: int | None = None,
     truncated_bytes: int | None = None,
-    source_url: Optional[str] = None,
-    source_domain: Optional[str] = None,
+    source_url: str | None = None,
+    source_domain: str | None = None,
     extractors: Sequence[Any] = (),
-) -> Iterator[Dict[str, object]]:
+) -> Iterator[dict[str, object]]:
     """Yield chunk records followed by extractor records for decoded text.
 
     Args:
@@ -450,7 +451,7 @@ def iter_records_for_file(
     Yields:
         Dict[str, object]: Chunk or extractor record dictionaries.
     """
-    extractor_recs: List[Dict[str, object]] = []
+    extractor_recs: list[dict[str, object]] = []
     context_meta = record_ctx.metadata_seed
     file_nlines = 0 if text == "" else text.count("\n") + 1
     if extractors:
@@ -526,11 +527,11 @@ def iter_records_from_bytes(
     rel_path: str,
     *,
     config: ConfigForRecords,
-    context: Optional[RepoContext],
+    context: RepoContext | None,
     file_size: int | None = None,
-    source_url: Optional[str] = None,
-    source_domain: Optional[str] = None,
-) -> Iterator[Dict[str, object]]:
+    source_url: str | None = None,
+    source_domain: str | None = None,
+) -> Iterator[dict[str, object]]:
     """Decode bytes for a file and yield chunk and extractor records.
 
     Args:
@@ -569,11 +570,11 @@ def iter_records_from_bytes_with_plan(
     rel_path: str,
     *,
     plan: Any,
-    context: Optional[RepoContext] = None,
+    context: RepoContext | None = None,
     file_size: int | None = None,
-    source_url: Optional[str] = None,
-    source_domain: Optional[str] = None,
-) -> Iterator[Dict[str, object]]:
+    source_url: str | None = None,
+    source_domain: str | None = None,
+) -> Iterator[dict[str, object]]:
     """Build records from bytes using handlers from a pipeline plan.
 
     Args:
@@ -608,8 +609,8 @@ def list_records_from_bytes(
     rel_path: str,
     *,
     config: ConfigForRecords,
-    context: Optional[RepoContext],
-) -> List[Dict[str, object]]:
+    context: RepoContext | None,
+) -> list[dict[str, object]]:
     """Materialize records from raw bytes for a single file.
 
     Args:
@@ -640,14 +641,14 @@ def build_records_from_bytes(
     rel_path: str,
     *,
     record_ctx: RecordBuilderContext,
-    bytes_handlers: Sequence[Tuple[Sniff, BytesHandler]],
+    bytes_handlers: Sequence[tuple[Sniff, BytesHandler]],
     extractors: Sequence[Any],
-    context: Optional[RepoContext],
+    context: RepoContext | None,
     chunk_policy: ChunkPolicy,
     file_size: int | None = None,
-    source_url: Optional[str] = None,
-    source_domain: Optional[str] = None,
-) -> Iterator[Dict[str, object]]:
+    source_url: str | None = None,
+    source_domain: str | None = None,
+) -> Iterator[dict[str, object]]:
     """Build records from bytes by applying sniffers, decoding, and chunking.
 
     The caller is responsible for deciding streaming versus buffered handling
@@ -733,9 +734,9 @@ def iter_records_from_file_item(
     item: FileItem,
     *,
     config: ConfigForRecords,
-    context: Optional[RepoContext],
-    streaming_extractor: Optional[StreamingExtractor] = None,
-) -> Iterator[Dict[str, object]]:
+    context: RepoContext | None,
+    streaming_extractor: StreamingExtractor | None = None,
+) -> Iterator[dict[str, object]]:
     """Yield records for a FileItem using streaming or buffered decoding.
 
     Args:
@@ -749,8 +750,8 @@ def iter_records_from_file_item(
         Dict[str, object]: Chunk or extractor record dictionaries.
     """
     cfg = config
-    origin_url_raw: Optional[str] = None
-    origin_domain_raw: Optional[str] = None
+    origin_url_raw: str | None = None
+    origin_domain_raw: str | None = None
     if getattr(item, "origin_path", None):
         try:
             parsed = urlparse(str(item.origin_path))
@@ -819,7 +820,7 @@ class DefaultExtractor(FileExtractor):
             extractor used before buffered decoding.
     """
 
-    def __init__(self, streaming_extractor: Optional[StreamingExtractor] = None) -> None:
+    def __init__(self, streaming_extractor: StreamingExtractor | None = None) -> None:
         """Initialize the extractor.
 
         Args:
@@ -833,8 +834,8 @@ class DefaultExtractor(FileExtractor):
         item: FileItem,
         *,
         config: ConfigForRecords,
-        context: Optional[RepoContext] = None,
-    ) -> Iterable[Dict[str, object]]:
+        context: RepoContext | None = None,
+    ) -> Iterable[dict[str, object]]:
         """Extract records for a file item using the configured pipeline.
 
         Args:

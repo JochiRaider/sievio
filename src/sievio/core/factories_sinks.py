@@ -11,13 +11,14 @@ Split out from core.factories to keep sink logic localized:
 from __future__ import annotations
 
 import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Mapping, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING
 
+from ..sinks.sinks import GzipJSONLSink, JSONLSink, PromptTextSink
 from .config import build_config_from_defaults_and_options
 from .interfaces import RepoContext, Sink, SinkFactory, SinkFactoryContext
-from ..sinks.sinks import GzipJSONLSink, JSONLSink, PromptTextSink
 
 if TYPE_CHECKING:  # pragma: no cover - type-only imports
     from .config import SinkConfig
@@ -51,7 +52,7 @@ class SinkFactoryResult:
 
     jsonl_path: str
     sinks: Sequence[Sink]
-    sink_config: "SinkConfig"
+    sink_config: SinkConfig
     metadata: Mapping[str, object]
 
 
@@ -67,10 +68,10 @@ class OutputPaths:
     """
 
     jsonl: Path
-    prompt: Optional[Path] = None
-    artifacts: Optional[Path] = None
+    prompt: Path | None = None
+    artifacts: Path | None = None
 
-    def as_tuple(self) -> Tuple[str, Optional[str]]:
+    def as_tuple(self) -> tuple[str, str | None]:
         """
         Return the JSONL and prompt paths as strings.
 
@@ -106,12 +107,12 @@ class ParquetDatasetSinkOptions:
 
 
 def build_default_sinks(
-    cfg: "SinkConfig",
-    basename: Optional[str] = None,
+    cfg: SinkConfig,
+    basename: str | None = None,
     *,
-    jsonl_path: Optional[str | Path] = None,
-    prompt_path: Optional[str | Path] = None,
-    context: Optional[RepoContext] = None,
+    jsonl_path: str | Path | None = None,
+    prompt_path: str | Path | None = None,
+    context: RepoContext | None = None,
 ) -> SinkFactoryResult:
     """
     Build the canonical JSONL and prompt sinks for a sink configuration.
@@ -153,7 +154,7 @@ def build_default_sinks(
     sink_class = GzipJSONLSink if use_gzip else JSONLSink
     sinks: list[Sink] = [sink_class(jsonl_str)]
 
-    prompt_target: Optional[str]
+    prompt_target: str | None
     if prompt_path is not None:
         prompt_target = str(Path(prompt_path))
     elif cfg.prompt.include_prompt_file:
@@ -208,7 +209,7 @@ class DefaultJsonlPromptSinkFactory(SinkFactory):
 
     id: str = "default_jsonl_prompt"
 
-    def build(self, ctx: SinkFactoryContext, spec: "SinkSpec") -> SinkFactoryResult:
+    def build(self, ctx: SinkFactoryContext, spec: SinkSpec) -> SinkFactoryResult:
         """
         Construct JSONL and prompt sinks from a sink specification.
 
@@ -268,7 +269,7 @@ class ParquetDatasetSinkFactory(SinkFactory):
 
     id: str = "parquet_dataset"
 
-    def build(self, ctx: SinkFactoryContext, spec: "SinkSpec") -> SinkFactoryResult:
+    def build(self, ctx: SinkFactoryContext, spec: SinkSpec) -> SinkFactoryResult:
         """
         Construct a ParquetDatasetSink from a sink specification.
 
@@ -349,12 +350,12 @@ def make_output_paths_for_github(
     *,
     owner: str,
     repo: str,
-    ref: Optional[str],
-    license_spdx: Optional[str],
+    ref: str | None,
+    license_spdx: str | None,
     out_dir: Path | str,
     include_prompt: bool = True,
-    timestamp: Optional[str] = None,
-    include_commit: Optional[str] = None,
+    timestamp: str | None = None,
+    include_commit: str | None = None,
 ) -> OutputPaths:
     """
     Build output paths for a GitHub dataset.
@@ -398,11 +399,11 @@ def make_output_paths_for_github(
 def make_output_paths_for_pdf(
     *,
     url: str,
-    title: Optional[str],
-    license_spdx: Optional[str],
+    title: str | None,
+    license_spdx: str | None,
     out_dir: Path | str,
     include_prompt: bool = True,
-    timestamp: Optional[str] = None,
+    timestamp: str | None = None,
 ) -> OutputPaths:
     """
     Build output paths for a PDF corpus using URL, title, and license metadata.
@@ -438,7 +439,7 @@ def _normalize_out_dir(out_dir: Path | str) -> Path:
     return Path(out_dir).expanduser()
 
 
-def _append_timestamp(base: str, timestamp: Optional[str]) -> str:
+def _append_timestamp(base: str, timestamp: str | None) -> str:
     if not timestamp:
         return base
     cleaned = re.sub(r"[^\w\-]+", "_", timestamp.strip())

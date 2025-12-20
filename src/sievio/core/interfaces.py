@@ -4,31 +4,26 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass
 from typing import (
     IO,
-    Any,
-    Callable,
-    Dict,
-    Iterable,
-    Mapping,
-    Optional,
-    Protocol,
     TYPE_CHECKING,
+    Any,
+    Protocol,
     runtime_checkable,
 )
 
 if TYPE_CHECKING:  # pragma: no cover - type checking only
-    from pathlib import Path
     from .config import (
-        SievioConfig,
         FileProcessingConfig,
-        SourceSpec,
-        SinkSpec,
         HttpConfig,
+        SievioConfig,
+        SinkSpec,
+        SourceSpec,
     )
-    from .pipeline import PipelineRuntime, PipelineStats
     from .factories import SinkFactoryResult
+    from .pipeline import PipelineRuntime, PipelineStats
     from .safe_http import SafeHttpClient
 
 
@@ -60,12 +55,12 @@ class FileItem:
             provided, callers must close the stream.
     """
     path: str
-    data: Optional[bytes]
+    data: bytes | None
     size: int | None = None
     origin_path: str | None = None
     stream_hint: str | None = None
     streamable: bool = False
-    open_stream: Optional[Callable[[], IO[bytes]]] = None
+    open_stream: Callable[[], IO[bytes]] | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,20 +79,20 @@ class RepoContext:
             consumers.
     """
 
-    repo_full_name: Optional[str] = None     # e.g., "owner/name"
-    repo_url: Optional[str] = None           # https://github.com/owner/name
-    license_id: Optional[str] = None         # SPDX-ish id if known (e.g., "MIT")
-    commit_sha: Optional[str] = None         # archive commit or ref resolved
-    extra: Optional[Mapping[str, Any]] = None
+    repo_full_name: str | None = None     # e.g., "owner/name"
+    repo_url: str | None = None           # https://github.com/owner/name
+    license_id: str | None = None         # SPDX-ish id if known (e.g., "MIT")
+    commit_sha: str | None = None         # archive commit or ref resolved
+    extra: Mapping[str, Any] | None = None
 
-    def as_meta_seed(self) -> Dict[str, Any]:
+    def as_meta_seed(self) -> dict[str, Any]:
         """
         Return a metadata seed dictionary for initializing records.
 
         Returns:
             Dict[str, Any]: Mapping of metadata keys to values.
         """
-        meta: Dict[str, Any] = {}
+        meta: dict[str, Any] = {}
         if self.repo_url:
             meta.setdefault("source", self.repo_url)
             meta.setdefault("repo_url", self.repo_url)
@@ -120,9 +115,9 @@ class RepoContext:
 class RunContext:
     """Context object passed to lifecycle hooks for a pipeline run."""
 
-    cfg: "SievioConfig"
-    stats: "PipelineStats"
-    runtime: "PipelineRuntime"
+    cfg: SievioConfig
+    stats: PipelineStats
+    runtime: PipelineRuntime
 
 
 # A JSONL record shape is intentionally loose: dict-like with string keys.
@@ -277,15 +272,15 @@ class Extractor(Protocol):
         name (str | None): Short identifier for logging or registry display.
     """
 
-    name: Optional[str]  # type: ignore[assignment]
+    name: str | None  # type: ignore[assignment]
 
     def extract(
         self,
         *,
         text: str,
         path: str,
-        context: Optional[RepoContext] = None,
-    ) -> Optional[Iterable[Record]]:
+        context: RepoContext | None = None,
+    ) -> Iterable[Record] | None:
         """
         Produce derived records for a decoded file.
 
@@ -311,8 +306,8 @@ class FileExtractor(Protocol):
         self,
         item: FileItem,
         *,
-        config: "SievioConfig | FileProcessingConfig",
-        context: Optional[RepoContext] = None,
+        config: SievioConfig | FileProcessingConfig,
+        context: RepoContext | None = None,
     ) -> Iterable[Record]:
         """
         Process a file item and emit records.
@@ -341,15 +336,15 @@ class StreamingExtractor(Protocol):
     a valid origin_path.
     """
 
-    name: Optional[str]  # type: ignore[assignment]
+    name: str | None  # type: ignore[assignment]
 
     def extract_stream(
         self,
         *,
         stream: IO[bytes],
         path: str,
-        context: Optional[RepoContext] = None,
-    ) -> Optional[Iterable[Record]]:
+        context: RepoContext | None = None,
+    ) -> Iterable[Record] | None:
         """
         Process a readable byte stream and emit records.
 
@@ -374,7 +369,7 @@ class Sink(Protocol):
     should be robust to being opened/closed even if no records are written.
     """
 
-    def open(self, context: Optional[RepoContext] = None) -> None:
+    def open(self, context: RepoContext | None = None) -> None:
         """
         Prepare resources prior to writes.
 
@@ -414,7 +409,7 @@ class QualityScorer(Protocol):
     Implementers may also expose ``reset_state`` to clear caches between runs.
     """
 
-    def score_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+    def score_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
         """
         Compute QC metrics for a single record.
 
@@ -433,13 +428,13 @@ class SafetyScorer(Protocol):
     Safety scorers should emit signals separate from general quality heuristics.
     """
 
-    def score_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+    def score_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
         """Compute safety signals for a single record."""
 
-    def score_jsonl_path(self, path: str) -> Iterable[Dict[str, Any]]:  # pragma: no cover - optional
+    def score_jsonl_path(self, path: str) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
         """Iterate safety signals for every record within a JSONL file."""
 
-    def clone_for_parallel(self) -> "SafetyScorer":  # pragma: no cover - optional
+    def clone_for_parallel(self) -> SafetyScorer:  # pragma: no cover - optional
         """Return a fresh scorer for use in parallel workers."""
 
     def reset_state(self) -> None:  # pragma: no cover - optional
@@ -459,10 +454,10 @@ class SafetyScorerFactory(Protocol):
 class JsonlAwareScorer(QualityScorer, Protocol):
     """Extension for scorers that can handle JSONL files or parallel clones."""
 
-    def score_jsonl_path(self, path: str, **kwargs: Any) -> Iterable[Dict[str, Any]]:  # pragma: no cover - optional
+    def score_jsonl_path(self, path: str, **kwargs: Any) -> Iterable[dict[str, Any]]:  # pragma: no cover - optional
         """Iterate QC metrics for every record within a JSONL file."""
 
-    def clone_for_parallel(self) -> "QualityScorer":  # pragma: no cover - optional
+    def clone_for_parallel(self) -> QualityScorer:  # pragma: no cover - optional
         """Return a fresh scorer for use in parallel workers."""
 
 
@@ -472,7 +467,7 @@ class SourceFactory(Protocol):
 
     id: str
 
-    def build(self, ctx: "SourceFactoryContext", spec: "SourceSpec") -> Iterable["Source"]:
+    def build(self, ctx: SourceFactoryContext, spec: SourceSpec) -> Iterable[Source]:
         """
         Create one or more sources from a specification.
 
@@ -492,7 +487,7 @@ class SinkFactory(Protocol):
 
     id: str
 
-    def build(self, ctx: "SinkFactoryContext", spec: "SinkSpec") -> "SinkFactoryResult":
+    def build(self, ctx: SinkFactoryContext, spec: SinkSpec) -> SinkFactoryResult:
         """
         Create one or more sinks from a specification.
 
@@ -510,10 +505,10 @@ class SinkFactory(Protocol):
 class RecordMiddleware(Protocol):
     """Per-record middleware that can transform or drop a record."""
 
-    def __call__(self, record: Record) -> Optional[Record]:  # pragma: no cover - interface
+    def __call__(self, record: Record) -> Record | None:  # pragma: no cover - interface
         ...
 
-    def process(self, record: Record) -> Optional[Record]:  # pragma: no cover - interface
+    def process(self, record: Record) -> Record | None:  # pragma: no cover - interface
         ...
 
 
@@ -524,7 +519,7 @@ class FileMiddleware(Protocol):
     Returning None drops all records for that item.
     """
 
-    def process(self, item: Any, records: Iterable[Record]) -> Optional[Iterable[Record]]:
+    def process(self, item: Any, records: Iterable[Record]) -> Iterable[Record] | None:
         """
         Inspect or modify records associated with a file item.
 
@@ -568,7 +563,7 @@ class ConcurrencyProfile(Protocol):
         cpu_intensive (bool): True when the work is CPU-bound.
     """
 
-    preferred_executor: Optional[str]  # "thread" or "process"
+    preferred_executor: str | None  # "thread" or "process"
     cpu_intensive: bool
 
 
@@ -589,9 +584,9 @@ class SourceFactoryContext:
             keyed by source id.
     """
 
-    repo_context: Optional[RepoContext]
-    http_client: Optional["SafeHttpClient"]
-    http_config: "HttpConfig"
+    repo_context: RepoContext | None
+    http_client: SafeHttpClient | None
+    http_config: HttpConfig
     source_defaults: Mapping[str, Mapping[str, Any]]
 
 
@@ -608,8 +603,8 @@ class SinkFactoryContext:
             by SinkSpec.kind.
     """
 
-    repo_context: Optional[RepoContext]
-    sink_config: "SinkConfig"
+    repo_context: RepoContext | None
+    sink_config: SinkConfig
     sink_defaults: Mapping[str, Mapping[str, Any]]
 
 

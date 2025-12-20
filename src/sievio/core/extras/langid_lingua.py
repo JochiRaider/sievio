@@ -4,7 +4,8 @@
 
 from __future__ import annotations
 
-from typing import Any, Optional, Sequence
+from collections.abc import Sequence
+from typing import Any
 
 from ..language_id import LanguagePrediction
 
@@ -30,7 +31,7 @@ class LinguaLanguageDetector:
             builder = LanguageDetectorBuilder.from_all_languages()
         self._detector = builder.build()
 
-    def detect(self, text: str) -> Optional[LanguagePrediction]:
+    def detect(self, text: str) -> LanguagePrediction | None:
         detected = self._detector.detect_language_of(text)
         if detected is None:
             return None

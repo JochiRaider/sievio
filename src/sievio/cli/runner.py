@@ -3,22 +3,25 @@
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Optional, Dict, Any, List
-import os
+from typing import Any
 
-from ..core.config import SievioConfig, SourceSpec, SinkSpec
-from ..core.factories_sinks import make_output_paths_for_github, make_output_paths_for_pdf
+from ..core.builder import PipelineOverrides, build_engine
+from ..core.config import SievioConfig, SinkSpec, SourceSpec
 from ..core.factories_context import make_repo_context_from_git
-from ..core.factories_qc import make_qc_scorer  # re-export for tests
+from ..core.factories_sinks import make_output_paths_for_github, make_output_paths_for_pdf
 from ..core.interfaces import RepoContext
-from ..core.licenses import detect_license_in_tree, apply_license_to_context
-from ..core.builder import build_pipeline_plan, build_engine, PipelineOverrides
-from ..core.pipeline import PipelineEngine
-from ..core.hooks import _dispatch_finalizers  # re-export for legacy tests
-from ..sources.githubio import get_repo_info, parse_github_url, RepoSpec, detect_license_for_github_repo
+from ..core.licenses import apply_license_to_context, detect_license_in_tree
 from ..core.log import get_logger
+from ..core.pipeline import PipelineEngine
+from ..sources.githubio import (
+    RepoSpec,
+    detect_license_for_github_repo,
+    get_repo_info,
+    parse_github_url,
+)
 
 log = get_logger(__name__)
 
@@ -48,7 +51,7 @@ class GitHubRepoProfile:
 
 
 
-def run_engine(engine: PipelineEngine) -> Dict[str, int]:
+def run_engine(engine: PipelineEngine) -> dict[str, int]:
     """Run a prepared pipeline engine and return primitive stats."""
 
     stats_obj = engine.run()
@@ -57,7 +60,7 @@ def run_engine(engine: PipelineEngine) -> Dict[str, int]:
 
 
 # ---------- One generic entry point ----------
-def convert(config: SievioConfig | PipelineEngine, *, overrides: PipelineOverrides | None = None) -> Dict[str, int]:
+def convert(config: SievioConfig | PipelineEngine, *, overrides: PipelineOverrides | None = None) -> dict[str, int]:
     """Convert sources to datasets using a config or prepared engine.
 
     This is the main programmatic entry point for Sievio. When
@@ -86,7 +89,7 @@ def convert(config: SievioConfig | PipelineEngine, *, overrides: PipelineOverrid
     return run_engine(engine)
 
 
-def _clone_base_config(base_config: Optional[SievioConfig]) -> SievioConfig:
+def _clone_base_config(base_config: SievioConfig | None) -> SievioConfig:
     """Clone a base configuration or build a fresh default one.
 
     Uses a shallow ``dataclasses.replace`` so that the returned config
@@ -127,7 +130,7 @@ def _build_github_repo_profile(
     spec = parse_github_url(url)
     if not spec:
         raise ValueError(f"Invalid GitHub URL: {url!r}")
-    info: Dict[str, Any] | None = None
+    info: dict[str, Any] | None = None
     try:
         info = get_repo_info(spec)
     except Exception:
@@ -238,8 +241,8 @@ def convert_local_dir(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
-) -> Dict[str, int]:
+    base_config: SievioConfig | None = None,
+) -> dict[str, int]:
     """Convert a local directory into a dataset.
 
     Builds a ``SievioConfig`` for a local directory via
@@ -271,8 +274,8 @@ def convert_github(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
-) -> Dict[str, int]:
+    base_config: SievioConfig | None = None,
+) -> dict[str, int]:
     """Convert a GitHub repository into a dataset.
 
     Builds a ``SievioConfig`` for a GitHub repository via
@@ -303,7 +306,7 @@ def make_local_repo_config(
     root_dir: str | Path,
     out_jsonl: str | Path,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
+    base_config: SievioConfig | None = None,
 ) -> SievioConfig:
     """Build a configuration for a local repository without running it.
 
@@ -337,7 +340,7 @@ def make_github_repo_config(
     url: str,
     out_jsonl: str | Path,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
+    base_config: SievioConfig | None = None,
 ) -> SievioConfig:
     """Build a configuration for a GitHub repository without running it.
 
@@ -369,7 +372,7 @@ def make_local_profile(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
+    base_config: SievioConfig | None = None,
 ) -> SievioConfig:
     """Construct a local-directory profile config.
 
@@ -430,8 +433,8 @@ def make_github_profile(
     out_jsonl: str | Path,
     *,
     out_prompt: str | Path | None = None,
-    base_config: Optional[SievioConfig] = None,
-    repo_context: Optional[RepoContext] = None,
+    base_config: SievioConfig | None = None,
+    repo_context: RepoContext | None = None,
 ) -> SievioConfig:
     """Construct a GitHub repository profile config.
 

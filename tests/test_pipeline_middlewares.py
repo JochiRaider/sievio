@@ -1,12 +1,13 @@
-from pathlib import Path
 import json
 import logging
+from pathlib import Path
 
 import pytest
-from sievio.core.builder import build_pipeline_plan, build_engine, PipelineOverrides
+
+from sievio.core.builder import PipelineOverrides, build_engine, build_pipeline_plan
+from sievio.core.config import SievioConfig, SinkSpec, SourceSpec
 from sievio.core.interfaces import RepoContext
 from sievio.core.pipeline import MiddlewareError, PipelineEngine, _FuncRecordMiddleware
-from sievio.core.config import SievioConfig, SourceSpec, SinkSpec
 
 
 def _make_basic_plan(tmp_path: Path, *, fail_fast: bool = False) -> PipelineEngine:

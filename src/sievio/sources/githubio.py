@@ -5,14 +5,24 @@
 
 from __future__ import annotations
 
+import contextlib
+import json
+import os
+import re
+import tempfile
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import zipfile
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
-from typing import Iterator, Optional, Tuple, Dict, Any, Iterable
-import contextlib, json, os, re, tempfile, time, urllib.error, urllib.parse, urllib.request, zipfile
 from pathlib import Path
+from typing import Any
 
 from ..core import safe_http
 from ..core.interfaces import FileItem, RepoContext, Source
-from ..core.licenses import detect_license_in_zip, apply_license_to_context
+from ..core.licenses import apply_license_to_context, detect_license_in_zip
 from ..core.log import get_logger
 from ..core.naming import normalize_extensions
 
@@ -47,8 +57,8 @@ class RepoSpec:
 
     owner: str
     repo: str
-    ref: Optional[str] = None  
-    subpath: Optional[str] = None  
+    ref: str | None = None  
+    subpath: str | None = None  
 
     @property
     def full_name(self) -> str:
@@ -67,7 +77,7 @@ _GH_BLOB = re.compile(r"^https?://github\.com/([^/]+)/([^/]+)/blob/([^/]+)/(.+)$
 _SSH = re.compile(r"^(?:git@|ssh://git@)github\.com[:/](?P<owner>[^/]+)/(?P<repo>[^/]+?)(?:\.git)?$")
 
 
-def parse_github_url(url: str) -> Optional[RepoSpec]:
+def parse_github_url(url: str) -> RepoSpec | None:
     """Parses a GitHub URL into a RepoSpec.
 
     Supported forms include:
@@ -110,11 +120,11 @@ _API_BASE = "https://api.github.com"
 _USER_AGENT = "sievio/0.1 (+https://github.com/jochiraider/sievio)"
 
 
-def _auth_token() -> Optional[str]:
+def _auth_token() -> str | None:
     return os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
 
 
-def _build_request(url: str, *, accept: Optional[str] = None) -> urllib.request.Request:
+def _build_request(url: str, *, accept: str | None = None) -> urllib.request.Request:
     headers = {
         "User-Agent": _USER_AGENT,
         "Accept": accept or "application/vnd.github+json",
@@ -128,10 +138,10 @@ def _build_request(url: str, *, accept: Optional[str] = None) -> urllib.request.
 def github_api_get(
     path: str,
     *,
-    accept: Optional[str] = None,
+    accept: str | None = None,
     timeout: int = 30,
-    client: Optional[safe_http.SafeHttpClient] = None,
-) -> Tuple[int, Dict[str, Any], bytes]:
+    client: safe_http.SafeHttpClient | None = None,
+) -> tuple[int, dict[str, Any], bytes]:
     """Performs a GitHub API GET request for the given path.
 
     Args:
@@ -162,7 +172,7 @@ def github_api_get(
         raise
 
 
-def _rate_limit_note(headers: Dict[str, Any]) -> str:
+def _rate_limit_note(headers: dict[str, Any]) -> str:
     rem = headers.get("X-RateLimit-Remaining")
     rst = headers.get("X-RateLimit-Reset")
     if rem is None:
@@ -184,7 +194,7 @@ def _rate_limit_note(headers: Dict[str, Any]) -> str:
 # Repo info / license API
 # -----------------------
 
-def get_repo_info(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] = None) -> Dict[str, Any]:
+def get_repo_info(spec: RepoSpec, *, client: safe_http.SafeHttpClient | None = None) -> dict[str, Any]:
     """Retrieves repository metadata and license information.
 
     Args:
@@ -204,7 +214,7 @@ def get_repo_info(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] 
         note = _rate_limit_note(headers)
         raise RuntimeError(f"GitHub /repos request failed: HTTP {status}{note}: {body[:256]!r}")
     meta = json.loads(body.decode("utf-8", "replace"))
-    out: Dict[str, Any] = {"default_branch": meta.get("default_branch") or "main"}
+    out: dict[str, Any] = {"default_branch": meta.get("default_branch") or "main"}
     lic = meta.get("license") or {}
     if isinstance(lic, dict):
         spdx = lic.get("spdx_id")
@@ -235,7 +245,7 @@ def get_repo_info(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] 
     return out
 
 
-def get_repo_license_spdx(spec: RepoSpec, *, client: Optional[safe_http.SafeHttpClient] = None) -> Optional[str]:
+def get_repo_license_spdx(spec: RepoSpec, *, client: safe_http.SafeHttpClient | None = None) -> str | None:
     """Fetches the SPDX license identifier for a repository if available.
 
     Args:
@@ -262,11 +272,11 @@ _DEF_ZIP_TIMEOUT = 60
 def download_zipball_to_temp(
     spec: RepoSpec,
     *,
-    ref: Optional[str] = None,
+    ref: str | None = None,
     timeout: float = _DEF_ZIP_TIMEOUT,
     chunk_size: int = 1024 * 1024,                  # 1 MiB
     max_zip_bytes: int = 3 * 1024 * 1024 * 1024,    # 3 GiB hard cap
-    client: Optional[safe_http.SafeHttpClient] = None,
+    client: safe_http.SafeHttpClient | None = None,
 ) -> str:
     """Downloads a repository zipball to a temporary file.
 
@@ -348,10 +358,10 @@ def download_zipball_to_temp(
 def detect_license_for_github_repo(
     spec: RepoSpec,
     *,
-    ref: Optional[str] = None,
+    ref: str | None = None,
     timeout: float = _DEF_ZIP_TIMEOUT,
-    client: Optional[safe_http.SafeHttpClient] = None,
-) -> Optional[str]:
+    client: safe_http.SafeHttpClient | None = None,
+) -> str | None:
     """Attempts to detect a repository license by scanning a zipball.
 
     Args:
@@ -364,7 +374,7 @@ def detect_license_for_github_repo(
         str | None: Detected license identifier (for example, "MIT") or
             None if detection fails.
     """
-    zip_path: Optional[str] = None
+    zip_path: str | None = None
     try:
         zip_path = download_zipball_to_temp(
             spec,
@@ -391,7 +401,7 @@ def detect_license_for_github_repo(
 # Zip utilities (zip-bomb defenses)
 # -------------------
 
-def _safe_relpath(name: str) -> Optional[str]:
+def _safe_relpath(name: str) -> str | None:
     """Normalizes a zip member path and rejects unsafe traversal segments.
 
     Args:
@@ -424,11 +434,11 @@ def _safe_relpath(name: str) -> Optional[str]:
 def iter_zip_members(
     zip_path: str,
     *,
-    max_bytes_per_file: Optional[int] = None,
+    max_bytes_per_file: int | None = None,
     max_total_uncompressed: int = 2 * 1024 * 1024 * 1024,  # 2 GiB cap across all files
     max_members: int = 200_000,
     max_compression_ratio: float = 100.0,                   # file_size / compress_size
-) -> Iterator[Tuple[str, bytes, int]]:
+) -> Iterator[tuple[str, bytes, int]]:
     """Iterates safe members of a repository zipball.
 
     Applies zip-bomb defenses to limit size, member count, and compression
@@ -540,9 +550,9 @@ class GitHubZipSource(Source):
         url: str,
         *,
         config,
-        context: Optional[RepoContext] = None,
-        download_timeout: Optional[float] = None,
-        http_client: Optional[safe_http.SafeHttpClient] = None,
+        context: RepoContext | None = None,
+        download_timeout: float | None = None,
+        http_client: safe_http.SafeHttpClient | None = None,
     ) -> None:
         """Initializes the source with a GitHub repository URL.
 
@@ -568,7 +578,7 @@ class GitHubZipSource(Source):
         self.include_exts = normalize_extensions(getattr(config, "include_exts", None))
         self.exclude_exts = normalize_extensions(getattr(config, "exclude_exts", None))
 
-    def __enter__(self) -> "GitHubZipSource":
+    def __enter__(self) -> GitHubZipSource:
         """Downloads the zipball and performs optional license detection."""
 
         client = self._http_client or safe_http.get_global_http_client()

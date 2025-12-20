@@ -7,11 +7,12 @@ from __future__ import annotations
 
 import csv
 import gzip
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable, Optional, Sequence, Dict, Any
+from typing import Any
 
-from ..core.interfaces import Source, FileItem, RepoContext
+from ..core.interfaces import FileItem, RepoContext, Source
 from ..core.log import get_logger
 
 __all__ = ["CSVTextSource"]
@@ -37,9 +38,9 @@ class CSVTextSource(Source):
             present.
     """
     paths: Sequence[Path]
-    context: Optional[RepoContext] = None
+    context: RepoContext | None = None
     text_column: str = "text"
-    delimiter: Optional[str] = None
+    delimiter: str | None = None
     encoding: str = "utf-8"
     has_header: bool = True
     text_column_index: int = 0
@@ -83,7 +84,7 @@ class CSVTextSource(Source):
             return "\t"
         return ","
 
-    def _row_to_fileitems(self, *, row: Dict[str, Any], path: Path, lineno: int) -> Iterable[FileItem]:
+    def _row_to_fileitems(self, *, row: dict[str, Any], path: Path, lineno: int) -> Iterable[FileItem]:
         """Create file items from a dict row using the configured column.
 
         Args:
@@ -123,7 +124,7 @@ class CSVTextSource(Source):
         yield FileItem(path=rel, data=data, size=len(data))
 
 
-def _extract_text_from_row_with_header(row: Dict[str, Any], text_column: str) -> Optional[str]:
+def _extract_text_from_row_with_header(row: dict[str, Any], text_column: str) -> str | None:
     """Return stripped text from a header row or None if missing."""
     val = row.get(text_column)
     if isinstance(val, str):
@@ -132,7 +133,7 @@ def _extract_text_from_row_with_header(row: Dict[str, Any], text_column: str) ->
     return None
 
 
-def _derive_rel_path(path: Path, lineno: int, row: Dict[str, Any]) -> str:
+def _derive_rel_path(path: Path, lineno: int, row: dict[str, Any]) -> str:
     """Derive a relative reference path from row metadata or fallback."""
     for key in ("path", "filepath", "file_path", "id"):
         val = row.get(key)
@@ -144,7 +145,7 @@ def _derive_rel_path(path: Path, lineno: int, row: Dict[str, Any]) -> str:
 def _open_csv(path: Path, *, encoding: str):
     """Open a plain CSV file with newline handling for the csv module."""
     # newline="" ensures correct handling of embedded newlines/quoting for csv module.
-    return open(path, "r", encoding=encoding, newline="")
+    return open(path, encoding=encoding, newline="")
 
 
 def _open_csv_gz(path: Path, *, encoding: str):

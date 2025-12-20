@@ -13,8 +13,9 @@ from __future__ import annotations
 import math
 import sqlite3
 import struct
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, NamedTuple, Optional, Tuple
+from typing import NamedTuple
 
 from .log import get_logger
 from .qc_utils import MinHashLSH
@@ -26,7 +27,7 @@ _BULK_INSERT_BATCH_SIZE = 10_000
 class DedupCheckResult(NamedTuple):
     is_duplicate: bool
     score: float  # estimated Jaccard similarity from MinHash
-    match_id: Optional[str]
+    match_id: str | None
 
 
 class GlobalDedupStore:
@@ -54,7 +55,7 @@ class GlobalDedupStore:
             jaccard_threshold=jaccard_threshold,
         )
 
-        self._conn: Optional[sqlite3.Connection] = None
+        self._conn: sqlite3.Connection | None = None
 
         if self._persistent:
             self._conn = self._connect()
@@ -186,7 +187,7 @@ class GlobalDedupStore:
         return cur.fetchone() is not None
 
     @staticmethod
-    def _find_duplicate_content_hash(conn: sqlite3.Connection) -> Optional[str]:
+    def _find_duplicate_content_hash(conn: sqlite3.Connection) -> str | None:
         cur = conn.execute(
             """
             SELECT content_hash
@@ -269,7 +270,7 @@ class GlobalDedupStore:
             self._conn.close()
             self._conn = None
 
-    def __enter__(self) -> "GlobalDedupStore":
+    def __enter__(self) -> GlobalDedupStore:
         return self
 
     def __exit__(self, exc_type, exc, tb) -> None:
@@ -298,7 +299,7 @@ class GlobalDedupStore:
         doc_id: str,
         sig: tuple[int, ...],
         *,
-        content_hash: Optional[str] = None,
+        content_hash: str | None = None,
         add_if_missing: bool = True,
     ) -> DedupCheckResult:
         """Check for near-duplicates and optionally add the signature.
@@ -349,8 +350,8 @@ class GlobalDedupStore:
         doc_id: str,
         sig: tuple[int, ...],
         *,
-        content_hash: Optional[str],
-    ) -> tuple[DedupCheckResult, Optional[list[str]]]:
+        content_hash: str | None,
+    ) -> tuple[DedupCheckResult, list[str] | None]:
         if content_hash:
             cur = conn.execute("SELECT doc_id FROM signatures WHERE content_hash = ?", (content_hash,))
             row = cur.fetchone()
@@ -366,7 +367,7 @@ class GlobalDedupStore:
             candidates = {row[0] for row in cur.fetchall()}
 
         best_eq = 0
-        best_id: Optional[str] = None
+        best_id: str | None = None
         if candidates:
             placeholders = ",".join("?" * len(candidates))
             cur = conn.execute(
@@ -389,7 +390,7 @@ class GlobalDedupStore:
         conn: sqlite3.Connection,
         doc_id: str,
         sig: tuple[int, ...],
-        content_hash: Optional[str],
+        content_hash: str | None,
         band_keys: list[str],
     ) -> None:
         conn.execute(
@@ -405,7 +406,7 @@ class GlobalDedupStore:
         self,
         conn: sqlite3.Connection,
         doc_id: str,
-        content_hash: Optional[str],
+        content_hash: str | None,
         *,
         fallback_result: DedupCheckResult,
         exc: sqlite3.IntegrityError,
@@ -418,12 +419,12 @@ class GlobalDedupStore:
         log.debug("Doc %s already present in dedup store %s", doc_id, self.db_path, exc_info=exc)
         return fallback_result
 
-    def bulk_add(self, items: Iterable[Tuple[str, tuple[int, ...], Optional[str]]]) -> None:
+    def bulk_add(self, items: Iterable[tuple[str, tuple[int, ...], str | None]]) -> None:
         """Insert many signatures efficiently."""
         if self.read_only:
             raise ValueError("Cannot bulk add to GlobalDedupStore in read-only mode.")
 
-        batch: list[Tuple[str, tuple[int, ...], Optional[str]]] = []
+        batch: list[tuple[str, tuple[int, ...], str | None]] = []
         for doc_id, sig, content_hash in items:
             assert len(sig) == self.lsh_logic.n_perm, "Signature length mismatch for configured n_perm"
             batch.append((doc_id, sig, content_hash))
@@ -433,7 +434,7 @@ class GlobalDedupStore:
         if batch:
             self._bulk_insert(batch)
 
-    def _bulk_insert(self, batch: list[Tuple[str, tuple[int, ...]]]) -> None:
+    def _bulk_insert(self, batch: list[tuple[str, tuple[int, ...]]]) -> None:
         if not batch:
             return
         conn = self._get_conn()
@@ -446,12 +447,12 @@ class GlobalDedupStore:
     def _bulk_insert_with_conn(
         self,
         conn: sqlite3.Connection,
-        batch: list[Tuple[str, tuple[int, ...], Optional[str]]],
+        batch: list[tuple[str, tuple[int, ...], str | None]],
         *,
         commit: bool,
     ) -> None:
         # Deduplicate doc_ids within the batch
-        unique_batch: dict[str, tuple[tuple[int, ...], Optional[str]]] = {}
+        unique_batch: dict[str, tuple[tuple[int, ...], str | None]] = {}
         for doc_id, sig, content_hash in batch:
             if doc_id not in unique_batch:
                 unique_batch[doc_id] = (sig, content_hash)

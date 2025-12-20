@@ -1,19 +1,19 @@
 from __future__ import annotations
 
+import pathlib
+
 # Allow running from a source checkout without installing the package.
 import sys
-import pathlib
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
 
 from pathlib import Path
-from typing import Optional, Sequence
 
 from sievio import SievioConfig, convert, load_config_from_path
 from sievio.cli.runner import default_paths_for_pdf
 from sievio.core.builder import build_pipeline_plan
 from sievio.core.chunk import ChunkPolicy
-from sievio.core.config import QCMode, SourceSpec, SinkSpec
+from sievio.core.config import QCMode, SinkSpec, SourceSpec
 from sievio.core.interfaces import RepoContext
 from sievio.core.log import configure_logging
 from sievio.core.pipeline import PipelineEngine
@@ -35,7 +35,7 @@ URLS = [
 ]
 
 # Alternatively, set PAGE_URL to scrape a single page for PDF links.
-PAGE_URL: Optional[str] = None  # e.g., "https://example.org/resources"
+PAGE_URL: str | None = None  # e.g., "https://example.org/resources"
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 OUT_DIR = REPO_ROOT / "out"
@@ -55,15 +55,15 @@ QC_CSV_SUFFIX = "_quality.csv"
 
 # Concurrency
 EXECUTOR_KIND = "thread"     # "thread" or "process"
-MAX_WORKERS: Optional[int] = None
-SUBMIT_WINDOW: Optional[int] = None
+MAX_WORKERS: int | None = None
+SUBMIT_WINDOW: int | None = None
 
 # Prompt output?
 ALSO_PROMPT_TEXT = True
 
 # PDF fetch/streaming limits
 MAX_PDF_MB = 100
-MAX_DECODE_MB: Optional[int] = None  # cap decode stage per file (MiB)
+MAX_DECODE_MB: int | None = None  # cap decode stage per file (MiB)
 
 # QC extras probe (to avoid hard crashes when optional deps are missing)
 try:

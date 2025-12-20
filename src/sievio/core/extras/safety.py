@@ -4,7 +4,8 @@ from __future__ import annotations
 
 import ipaddress
 import re
-from typing import Any, Dict, Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
+from typing import Any
 
 from ..interfaces import SafetyScorer
 from ..log import get_logger
@@ -48,7 +49,7 @@ class RegexSafetyScorer(SafetyScorer):
             "toxicity_threshold": toxicity_threshold,
         }
 
-    def score_record(self, record: Mapping[str, Any]) -> Dict[str, Any]:
+    def score_record(self, record: Mapping[str, Any]) -> dict[str, Any]:
         text = str(record.get("text") or "") if isinstance(record, Mapping) else ""
         meta = record.get("meta") if isinstance(record, Mapping) else None
         license_id = None
@@ -112,18 +113,18 @@ class RegexSafetyScorer(SafetyScorer):
             "license_id": license_id,
         }
 
-    def score_jsonl_path(self, path: str) -> Iterable[Dict[str, Any]]:
+    def score_jsonl_path(self, path: str) -> Iterable[dict[str, Any]]:
         """Best-effort JSONL iterator; minimal for parity with QualityScorer."""
 
         try:
-            with open(path, "r", encoding="utf-8") as handle:
+            with open(path, encoding="utf-8") as handle:
                 for line in handle:
                     yield self.score_record({"text": line})
         except Exception as exc:  # pragma: no cover - defensive fallback
             log.warning("Safety scorer could not read %s: %s", path, exc)
             return []
 
-    def clone_for_parallel(self) -> "RegexSafetyScorer":
+    def clone_for_parallel(self) -> RegexSafetyScorer:
         return RegexSafetyScorer(**self._init_kwargs)
 
     def reset_state(self) -> None:

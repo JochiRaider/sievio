@@ -1,7 +1,7 @@
 import json
 
-from sievio.core.hooks import _dispatch_finalizers
 from sievio.core.config import SievioConfig
+from sievio.core.hooks import _dispatch_finalizers
 from sievio.core.records import build_run_header_record
 from sievio.sinks.sinks import JSONLSink
 
