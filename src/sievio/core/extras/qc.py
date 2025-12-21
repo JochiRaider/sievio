@@ -307,7 +307,12 @@ class JSONLQualityScorer:
         comp = code_complexity(text, heuristics=self.heuristics)
         p_ok = parse_ok(text, lang)
 
-        sh = simhash64(text)
+        simhash_max_tokens = None
+        minhash_max_shingles = None
+        if self.heuristics is not None:
+            simhash_max_tokens = getattr(self.heuristics, "simhash_max_tokens", None)
+            minhash_max_shingles = getattr(self.heuristics, "minhash_max_shingles", None)
+        sh = simhash64(text, max_tokens=simhash_max_tokens)
         ham_min, sim_dup_of = self.sim_index.query(sh)
         near_dup_sim = ham_min is not None
         self.sim_index.add(sh, doc_id)
@@ -317,7 +322,12 @@ class JSONLQualityScorer:
         sig = None
         if need_minhash:
             # Global dedup forces MinHash even if local in-memory MinHash is disabled.
-            sig = minhash_signature_for_text(text, k=self.minhash_k, n_perm=self.lsh.n_perm)
+            sig = minhash_signature_for_text(
+                text,
+                k=self.minhash_k,
+                n_perm=self.lsh.n_perm,
+                max_shingles=minhash_max_shingles,
+            )
         if self.enable_minhash and sig is not None:
             near_dup_mh, mh_j, mh_of = self.lsh.add_and_check(doc_id, sig)
         else:

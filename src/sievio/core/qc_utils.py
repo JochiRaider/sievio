@@ -10,6 +10,7 @@ perplexity scoring when transformer models are available.
 from __future__ import annotations
 
 import gzip
+import hashlib
 import json
 import math
 import os
@@ -69,13 +70,9 @@ except Exception:
     yaml = None
 
 _HF_OK = False
-try:
-    import torch
-    from transformers import AutoModelForCausalLM, AutoTokenizer
-
-    _HF_OK = True
-except Exception:
-    pass
+torch: Any | None = None
+AutoModelForCausalLM: Any | None = None
+AutoTokenizer: Any | None = None
 
 
 # ---------- Language groupings & tunables ----------
@@ -187,6 +184,7 @@ def repetition_rate(
     k: int | None = None,
     *,
     heuristics: QCHeuristics | None = None,
+    max_grams: int | None = None,
 ) -> float:
     """Measure the share of text covered by repeated k-grams.
 
@@ -202,8 +200,18 @@ def repetition_rate(
         k = heuristics.repetition_k
     if k is None:
         k = 16
+    if max_grams is None and heuristics is not None:
+        max_grams = getattr(heuristics, "repetition_max_grams", None)
+    if max_grams is None:
+        max_grams = _DEFAULT_REPETITION_MAX_GRAMS
+    if max_grams is not None and max_grams <= 0:
+        max_grams = None
     if len(s) < 2 * k:
         return 0.0
+    if max_grams is not None:
+        total = len(s) - k + 1
+        if total > max_grams:
+            s = s[: max_grams + k - 1]
     seen: dict[str, int] = {}
     reps = 0
     for i in range(0, len(s) - k + 1):
@@ -300,6 +308,11 @@ def _tokenize_for_simhash(text: str) -> Iterable[str]:
         yield tok
 
 
+_DEFAULT_SIMHASH_MAX_TOKENS = 20000
+_DEFAULT_REPETITION_MAX_GRAMS = 20000
+_DEFAULT_MINHASH_MAX_SHINGLES = 20000
+
+
 def _fletcher32(data: bytes) -> int:
     """Compute a Fletcher-32 checksum for the given bytes."""
     sum1 = 0xFFFF
@@ -312,15 +325,27 @@ def _fletcher32(data: bytes) -> int:
     return (sum2 << 16) | sum1
 
 
+def _token_hash64(token: str) -> int:
+    """Hash a token into a deterministic 64-bit value."""
+    digest = hashlib.blake2b(token.encode("utf-8"), digest_size=8).digest()
+    return int.from_bytes(digest, "little")
+
+
 def _feature_hash(token: str) -> int:
     """Hash a token into a 64-bit value for Simhash features."""
-    return _fletcher32(token.encode("utf-8")) & 0xFFFFFFFFFFFFFFFF
+    return _token_hash64(token)
 
 
-def simhash64(text: str) -> int:
+def simhash64(text: str, *, max_tokens: int | None = None) -> int:
     """Compute a 64-bit Simhash fingerprint for the given text."""
     v = [0] * 64
-    for tok in _tokenize_for_simhash(text):
+    if max_tokens is None:
+        max_tokens = _DEFAULT_SIMHASH_MAX_TOKENS
+    if max_tokens is not None and max_tokens <= 0:
+        return 0
+    for idx, tok in enumerate(_tokenize_for_simhash(text)):
+        if max_tokens is not None and idx >= max_tokens:
+            break
         h = _feature_hash(tok)
         for i in range(64):
             v[i] += 1 if (h >> i) & 1 else -1
@@ -412,12 +437,20 @@ _MINHASH_COEF: list[tuple[int, int]] = [
 ]
 
 
-def _shingle_hashes(text: str, k: int = 5) -> set[int]:
+def _shingle_hashes(text: str, k: int = 5, *, max_shingles: int | None = None) -> set[int]:
     """Build hashed byte k-grams, skipping all-whitespace shingles."""
     if len(text) < k:
         return set()
     out: set[int] = set()
     enc = text.encode("utf-8", "ignore")
+    if max_shingles is None:
+        max_shingles = _DEFAULT_MINHASH_MAX_SHINGLES
+    if max_shingles is not None and max_shingles <= 0:
+        max_shingles = None
+    if max_shingles is not None:
+        total = len(enc) - k + 1
+        if total > max_shingles:
+            enc = enc[: max_shingles + k - 1]
     for i in range(0, len(enc) - k + 1):
         gram = enc[i : i + k]
         if not any(c > 32 for c in gram):
@@ -440,7 +473,13 @@ def _minhash_signature(shingles: set[int], n_perm: int = 128) -> tuple[int, ...]
     return tuple(sig)
 
 
-def minhash_signature_for_text(text: str, *, k: int, n_perm: int) -> tuple[int, ...]:
+def minhash_signature_for_text(
+    text: str,
+    *,
+    k: int,
+    n_perm: int,
+    max_shingles: int | None = None,
+) -> tuple[int, ...]:
     """Build a deterministic MinHash signature for text.
 
     Args:
@@ -451,7 +490,7 @@ def minhash_signature_for_text(text: str, *, k: int, n_perm: int) -> tuple[int, 
     Returns:
         tuple[int, ...]: Deterministic signature of length n_perm.
     """
-    shingles = _shingle_hashes(text, k=k)
+    shingles = _shingle_hashes(text, k=k, max_shingles=max_shingles)
     return _minhash_signature(shingles, n_perm=n_perm)
 
 
@@ -477,13 +516,29 @@ class MinHashLSH:
             bands (int): Number of bands; must evenly divide n_perm.
             jaccard_threshold (float): Score above which items are near-dups.
         """
-        assert n_perm % bands == 0, "n_perm must be divisible by bands"
+        if n_perm <= 0:
+            raise ValueError(f"n_perm must be positive; got {n_perm!r}.")
+        if bands <= 0:
+            raise ValueError(f"bands must be positive; got {bands!r}.")
+        if n_perm % bands != 0:
+            raise ValueError("n_perm must be divisible by bands.")
+        if not (0.0 <= jaccard_threshold <= 1.0):
+            raise ValueError(
+                "jaccard_threshold must be between 0 and 1; "
+                f"got {jaccard_threshold!r}."
+            )
         self.n_perm = n_perm
         self.bands = bands
         self.rows = n_perm // bands
         self.jaccard_threshold = float(jaccard_threshold)
         self.buckets: dict[tuple[int, int], set[str]] = {}
         self.sigs: dict[str, tuple[int, ...]] = {}
+
+    def _validate_sig(self, sig: tuple[int, ...]) -> None:
+        if len(sig) != self.n_perm:
+            raise ValueError(
+                f"signature length {len(sig)!r} does not match n_perm={self.n_perm!r}."
+            )
 
     @staticmethod
     def _fnv1a_fold(vals: Iterable[int]) -> int:
@@ -508,6 +563,7 @@ class MinHashLSH:
 
     def candidates(self, sig: tuple[int, ...]) -> Iterable[str]:
         """Yield document ids that share at least one band with the signature."""
+        self._validate_sig(sig)
         seen: set[str] = set()
         for b in range(self.bands):
             key = self._band_key(sig, b)
@@ -527,6 +583,7 @@ class MinHashLSH:
             tuple[bool, float, Optional[str]]: Tuple of near-dup flag, best
             Jaccard estimate, and the id of the closest match if any.
         """
+        self._validate_sig(sig)
         best_j, best_id = 0.0, None
         for cand in self.candidates(sig):
             csig = self.sigs[cand]
@@ -756,19 +813,21 @@ class PerplexityModel:
         """
         self.model: Any | None = None
         self.tok: Any | None = None
-        if not _HF_OK:
+        allow_downloads = os.getenv("SIEVIO_ALLOW_HF_DOWNLOADS", "").strip().lower()
+        effective_local_only = local_files_only or allow_downloads not in {"1", "true", "yes"}
+        if not _ensure_hf():
             return
         self.tok = AutoTokenizer.from_pretrained(
             model_id,
             use_fast=True,
-            local_files_only=local_files_only,
+            local_files_only=effective_local_only,
         )
         dtype_value = (
             getattr(torch, dtype)
             if hasattr(torch, dtype)
             else None
         )
-        model_kwargs = {"local_files_only": local_files_only}
+        model_kwargs = {"local_files_only": effective_local_only}
         if dtype_value is not None:
             model_kwargs["dtype"] = dtype_value
         try:
@@ -788,9 +847,8 @@ class PerplexityModel:
 
     def ppl(self, text: str) -> float:
         """Compute perplexity for text, returning inf if unavailable."""
-        if self.model is None or self.tok is None:
+        if self.model is None or self.tok is None or torch is None:
             return float("inf")
-        import torch
 
         ids = self.tok.encode(text, add_special_tokens=False)
         if not ids:
@@ -812,6 +870,25 @@ class PerplexityModel:
                 loss_val = float(out.loss.detach())
             nll += loss_val * trg
         return math.exp(nll / max(1, denom))
+
+
+def _ensure_hf() -> bool:
+    """Load HF modules lazily to keep perplexity opt-in."""
+    global _HF_OK, torch, AutoModelForCausalLM, AutoTokenizer
+    if _HF_OK:
+        return True
+    try:
+        import torch as _torch  # type: ignore[import-untyped]
+        from transformers import AutoModelForCausalLM as _AutoModelForCausalLM
+        from transformers import AutoTokenizer as _AutoTokenizer
+
+        torch = _torch
+        AutoModelForCausalLM = _AutoModelForCausalLM
+        AutoTokenizer = _AutoTokenizer
+        _HF_OK = True
+        return True
+    except Exception:
+        return False
 
 
 # ---------- Duplicate family summaries ----------

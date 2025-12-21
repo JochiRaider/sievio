@@ -494,6 +494,7 @@ class QCHeuristics:
     target_other_max: int = 3000
 
     repetition_k: int = 16
+    repetition_max_grams: int | None = 20000
 
     code_short_line_threshold: int = 60
     code_punct_weight: float = 0.5
@@ -501,11 +502,13 @@ class QCHeuristics:
 
     # Advanced dedup tuning (Simhash + MinHash); override scorer defaults when set.
     simhash_window: int = 128
+    simhash_max_tokens: int | None = 20000
     simhash_hamm_thresh: int | None = None
     enable_minhash: bool | None = None
     minhash_perms: int | None = None
     minhash_bands: int | None = None
     minhash_shingle_k: int | None = None
+    minhash_max_shingles: int | None = 20000
     minhash_jaccard_thresh: float | None = None
 
     def validate(self) -> None:
@@ -520,8 +523,11 @@ class QCHeuristics:
             ("target_other_min", self.target_other_min),
             ("target_other_max", self.target_other_max),
             ("repetition_k", self.repetition_k),
+            ("repetition_max_grams", self.repetition_max_grams),
             ("code_short_line_threshold", self.code_short_line_threshold),
             ("simhash_window", self.simhash_window),
+            ("simhash_max_tokens", self.simhash_max_tokens),
+            ("minhash_max_shingles", self.minhash_max_shingles),
         ]
         for name, value in numeric_positive:
             if value is not None and value <= 0:
