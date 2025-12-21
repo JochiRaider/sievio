@@ -332,7 +332,6 @@ def run_safety_over_jsonl(
 
     tracker = QCSummaryTracker(enabled=bool(safety_cfg.enabled), mode=safety_cfg.mode)
     policy = SafetyDecisionPolicy()
-    apply_gates = not getattr(safety_cfg, "annotate_only", False)
     should_write_csv = safety_cfg.write_csv if write_csv is None else bool(write_csv)
     should_write_signals = (
         safety_cfg.write_signals_sidecar
@@ -351,11 +350,10 @@ def run_safety_over_jsonl(
     def _consume_rows(rows: Iterable[dict[str, Any]]) -> None:
         for row in rows:
             decision = policy.decide(row, cfg=safety_cfg)
-            did_drop = apply_gates and bool(decision.would_drop)
             tracker.observe_safety(
                 row,
                 decision,
-                did_drop=did_drop,
+                did_drop=False,
                 screener_id="safety",
                 mode=QCMode.POST,
             )
@@ -421,11 +419,10 @@ def run_safety_over_jsonl(
                 )
         for row in rows:
             decision = policy.decide(row, cfg=safety_cfg)
-            did_drop = apply_gates and bool(decision.would_drop)
             tracker.observe_safety(
                 row,
                 decision,
-                did_drop=did_drop,
+                did_drop=False,
                 screener_id="safety",
                 mode=QCMode.POST,
             )
@@ -1406,10 +1403,10 @@ def _log_post_safety_summary(summary: dict[str, Any]) -> None:
     safety = screeners.get("safety") if isinstance(screeners, Mapping) else {}
     safety_payload = safety if isinstance(safety, Mapping) else {}
     log.info(
-        "Post-safety summary (mode=%s, scored=%s, dropped=%s, errors=%s)",
+        "Post-safety summary (mode=%s, scored=%s, would_drop_records=%s, errors=%s)",
         safety_payload.get("mode") or summary.get("mode"),
         int(safety_payload.get("scored", 0) or 0),
-        int(safety_payload.get("dropped", 0) or 0),
+        int(safety_payload.get("would_drop_records", 0) or 0),
         int(safety_payload.get("errors", 0) or 0),
     )
     flags = safety_payload.get("flags") or {}

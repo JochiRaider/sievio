@@ -6,6 +6,7 @@ from sievio.core.config import QCConfig, QCMode, SafetyConfig, SievioConfig
 from sievio.core.interfaces import RunContext
 from sievio.core.pipeline import PipelineStats
 from sievio.core.qc_controller import (
+    gate_policy_for_safety,
     InlineQCController,
     InlineQCHook,
     QCSummaryTracker,
@@ -150,13 +151,14 @@ def test_qc_inline_safety_advisory_annotates_only():
 
 def test_inline_safety_annotate_only_records_would_drop():
     safety_cfg = SafetyConfig(enabled=True, mode=QCMode.INLINE, annotate_only=True)
+    gate_policy = gate_policy_for_safety(safety_cfg)
     summary = QCSummaryTracker()
     screener = SafetyInlineScreener(
         cfg=safety_cfg,
         scorer=ConstantSafetyScorer({"safety_decision": "drop", "safety_flags": {"blocked": True}}),
         summary=summary,
         logger=None,
-        enforce_drops=True,
+        enforce_drops=gate_policy.enforce_drops,
     )
     record = {"text": "unsafe", "meta": {"path": "drop.txt"}}
 
@@ -167,6 +169,7 @@ def test_inline_safety_annotate_only_records_would_drop():
     assert stats is not None
     assert stats.kept == 1
     assert stats.dropped == 0
+    assert stats.would_drop_records == 1
     assert stats.drops.get("drop") == 1
 
 
@@ -328,7 +331,8 @@ def test_post_safety_hook_preserves_quality(tmp_path):
     hook.on_run_end(ctx)
 
     assert ctx.stats.qc.screeners["quality"].scored == 1
-    assert ctx.stats.qc.safety_dropped == 1
+    assert ctx.stats.qc.safety_dropped == 0
+    assert ctx.stats.qc.screeners["safety"].would_drop_records == 1
 
 
 def test_run_safety_over_jsonl_emits_csv(tmp_path):
@@ -350,7 +354,8 @@ def test_run_safety_over_jsonl_emits_csv(tmp_path):
 
     safety_summary = summary["screeners"]["safety"]
     assert safety_summary["scored"] == 1
-    assert safety_summary["dropped"] == 1
+    assert safety_summary["dropped"] == 0
+    assert safety_summary["would_drop_records"] == 1
 
     csv_path = tmp_path / "safety_safety.csv"
     assert csv_path.exists()

@@ -79,8 +79,8 @@ CONFIG_PATH = REPO_ROOT / "manual_test_github.toml"
 # Markdown → KQL extraction (via Extractor; this just toggles whether we add it)
 ENABLE_KQL_MD_EXTRACTOR = False
 
-# Chunking policy: tweak as needed (not expressed in TOML yet)
-POLICY = ChunkPolicy(mode="doc")  # , target_tokens=1700, overlap_tokens=40, min_tokens=400
+# Chunking policy: prefer TOML config; override here only if needed.
+POLICY: ChunkPolicy | None = None
 
 # Write prompt text too? (affects how we plan output paths)
 ALSO_PROMPT_TEXT = True
@@ -149,9 +149,11 @@ def _build_config(
     cfg = base_cfg
 
     # Runtime-only wiring that isn't TOML-friendly.
-    cfg.chunk.policy = POLICY
+    if POLICY is not None:
+        cfg.chunk.policy = POLICY
     cfg.qc.scorer = None
     cfg.pipeline.executor_kind = PIPELINE_EXECUTOR
+    cfg.sinks.prompt.include_prompt_file = ALSO_PROMPT_TEXT
     if DISABLE_DEDUP:
         cfg.qc.exact_dedup = False
         scorer_opts = dict(getattr(cfg.qc, "scorer_options", {}) or {})

@@ -6,11 +6,11 @@ Sievio’s screening layer evaluates records for quality and safety. It can anno
 - `qc.enabled=false` → QC off regardless of mode.
 - `mode="inline"` → score during extraction and drop records below `min_score`/near-dup gates.
 - `mode="advisory"` → score inline, annotate only (no drops).
-- `mode="post"` → main pipeline runs without QC drops; QC gates in a post pass (`sievio qc ...` or post hook) and can emit CSV/sidecars.
+- `mode="post"` → main pipeline runs without QC drops; QC scores in a post pass (`sievio qc ...` or post hook) and can emit CSV/sidecars. Post summaries never count actual drops; use `would_drop_records` + drop reasons for “would drop” reporting.
 - Safety (`qc.safety.*`) is independent: supports `inline`/`advisory`/`post` with `annotate_only` to disable drops.
 
 ## Signals and metadata
-- Inline QC writes signals under `meta["extra"]["qc_signals"]`; summaries live in `stats["qc"]["screeners"]["quality"]["signal_stats"]`.
+- Inline QC writes signals under `meta["extra"]["qc_signals"]`; summaries live in `stats["qc"]["screeners"]["quality"]["signal_stats"]` and include `would_drop_records` for post-hoc gate reporting.
 - Default signals from `JSONLQualityScorer` (when `[qc]` extras installed): token counts (`len_tok`), ascii ratio, repetition, gopher_quality, perplexity (when a model is configured), near-duplicate hashes/ids, language hints.
 - Safety scorer (`default_safety`) flags regex-based PII/toxicity/license issues; flags are reported in QC summaries and optional `_safety.csv`/`_safety_signals.*` sidecars when safety post mode is used.
 

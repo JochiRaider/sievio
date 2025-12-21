@@ -47,6 +47,8 @@ from .language_id import (
 )
 from .log import get_logger
 from .qc_controller import (
+    gate_policy_for_quality,
+    gate_policy_for_safety,
     InlineQCHook,
     InlineScreeningController,
     QCSummaryTracker,
@@ -735,6 +737,8 @@ def _prepare_qc(
         min_score=qc_cfg.min_score,
         drop_near_dups=bool(qc_cfg.drop_near_dups),
     )
+    qc_gate_policy = gate_policy_for_quality(qc_cfg)
+    safety_gate_policy = gate_policy_for_safety(safety_cfg) if safety_cfg is not None else None
 
     if qc_cfg.enabled and qc_cfg.mode in {QCMode.INLINE, QCMode.ADVISORY}:
         if qc_scorer is None:
@@ -750,7 +754,7 @@ def _prepare_qc(
                 scorer=qc_scorer,  # type: ignore[arg-type]
                 summary=tracker,
                 logger=log,
-                enforce_drops=(qc_cfg.mode == QCMode.INLINE),
+                enforce_drops=qc_gate_policy.enforce_drops,
             )
         )
         if qc_cfg.write_csv:
@@ -764,13 +768,14 @@ def _prepare_qc(
     )
     safety_post = safety_cfg and safety_cfg.enabled and safety_cfg.mode == QCMode.POST
     if safety_inline and safety_scorer is not None:
+        enforce_drops = safety_gate_policy.enforce_drops if safety_gate_policy is not None else False
         screeners.append(
             SafetyInlineScreener(
                 cfg=safety_cfg,  # type: ignore[arg-type]
                 scorer=safety_scorer,
                 summary=tracker,
                 logger=log,
-                enforce_drops=(safety_cfg.mode == QCMode.INLINE),  # type: ignore[union-attr]
+                enforce_drops=enforce_drops,
             )
         )
 

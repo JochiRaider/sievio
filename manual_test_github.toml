@@ -2,9 +2,8 @@
 # Base configuration for manual_test_github_toml.py / manual_test_web_pdf.py
 #
 # This file encodes the stable, serializable knobs for the GitHub manual smoke test.
-# The Python script stitches in runtime-only objects such as:
-# - the ChunkPolicy instance
-# - optional Extractors (e.g., KqlFromMarkdownExtractor)
+# The Python script stitches in runtime-only objects such as optional Extractors
+# (e.g., KqlFromMarkdownExtractor) and optional chunk policy overrides.
 #
 # Paths are interpreted relative to the working directory unless otherwise noted.
 
@@ -12,17 +11,14 @@
 # Source configuration (GitHub zipball)
 # ---------------------------------------------------------------------------
 
-[sources.github]
+# Apply an extension allowlist to all github_zip specs built by the manual script.
+[sources.defaults.github_zip]
 # Cap bytes per file inside the GitHub archive (50 MiB, down from the 200 MiB default).
 per_file_cap = 52428800
-# Note: GitHub defaults here are informational; per-spec defaults live under [sources.defaults.github_zip] below.
+include_exts = [".rst",".md",".py"]
 
 # Other GitHubSourceConfig fields (max_total_uncompressed, max_members, etc.)
 # are left at their library defaults.
-
-# Apply an extension allowlist to all github_zip specs built by the manual script.
-[sources.defaults.github_zip]
-include_exts = [".rst",".md",".py"]
 
 # ---------------------------------------------------------------------------
 # Pipeline concurrency / behavior
@@ -33,6 +29,22 @@ include_exts = [".rst",".md",".py"]
 executor_kind = "auto"
 # max_workers = 0 → auto; submit_window = null → derived from max_workers.
 # We rely on those defaults here.
+
+# ---------------------------------------------------------------------------
+# Chunking
+# ---------------------------------------------------------------------------
+
+[chunk]
+# tokenizer_name = "cl100k_base" # Optional tokenizer name for token counting (requires [tok] extra)
+attach_language_metadata = true  # Attach language labels to chunks in record metadata
+
+  [chunk.policy]
+  mode = "doc"                # "doc" or "code"
+  target_tokens = 1700        # Approximate target token count per chunk
+  overlap_tokens = 40         # Approximate token overlap between consecutive chunks
+  min_tokens = 400            # Minimum token count before forcing a flush
+  semantic_doc = false        # Enable paragraph/sentence-aware splitting for long doc blocks
+  # semantic_tokens_per_block = 600  # Target tokens per semantic sub-block when semantic_doc is true
 
 # ---------------------------------------------------------------------------
 # Quality control (QC)
