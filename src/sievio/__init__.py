@@ -1,26 +1,47 @@
 # __init__.py
 # SPDX-License-Identifier: MIT
+"""
+Top-level package exports for :mod:`sievio`.
 
-"""Top-level package exports for :mod:`sievio`.
+Public surface and stability
+----------------------------
+Sievio intentionally exposes a *small* stable API for most callers. The symbols
+listed in :data:`PRIMARY_API` are considered the recommended public surface and
+are exported via :data:`__all__`. In general, callers should:
 
-The names listed in :data:`PRIMARY_API` form the recommended, stable
-surface for most callers: configure a run via :class:`SievioConfig`
-or a TOML/JSON file, invoke a runner such as :func:`convert_local_dir`
-/ :func:`convert_github` or :func:`convert`, and consume records via the
-provided sinks.
+- Build a configuration via :class:`SievioConfig` or load one from TOML/JSON with
+  :func:`load_config_from_path`.
+- Run an orchestration helper such as :func:`convert`, :func:`convert_local_dir`,
+  or :func:`convert_github`.
+- Consume output through the configured sinks (e.g., JSONL, prompt text).
 
-High-level entry points such as :func:`convert`, :func:`convert_local_dir`,
-and :func:`convert_github` are thin orchestration layers. They build
-profiles, construct a :class:`PipelineEngine`, and run it; new
-functionality should generally plug into the builder, registries, and
-factories used by the engine rather than creating ad-hoc pipelines in
-these helpers.
+Orchestration helpers
+---------------------
+High-level entry points (:func:`convert`, :func:`convert_local_dir`,
+:func:`convert_github`) are thin orchestration layers: they assemble configuration,
+construct a :class:`PipelineEngine`, and execute it. New functionality should
+generally plug into the builder/registries/factories and hook interfaces rather
+than creating ad-hoc pipelines inside these helpers.
 
-Quality control (inline or post-hoc) is configured via :class:`QCConfig`.
-When ``mode="post"``, :func:`run_engine` (from
-:mod:`sievio.cli.runner`) can rescore the primary JSONL after
-extraction, optionally using process-based parallel scoring and emitting
-QC CSV diagnostics.
+Quality control (QC)
+--------------------
+QC is configured via :class:`QCConfig`. When ``mode="post"``, :func:`run_engine`
+(from :mod:`sievio.cli.runner`) can rescore the primary JSONL after extraction,
+optionally using process-based parallel scoring and emitting CSV/sidecar
+diagnostics.
+
+HTTP client guidance
+--------------------
+For remote inputs (GitHub zipballs, web PDFs), prefer configuring ``cfg.http``.
+The builder/factories will construct and reuse a :class:`SafeHttpClient` across
+sources. The module-level client in ``core.safe_http`` is intended primarily for
+simple one-shot scripts and the CLI, not long-lived applications.
+
+Advanced / expert surface
+-------------------------
+This module imports additional utilities for convenience. Anything *not* listed
+in :data:`PRIMARY_API` should be treated as an expert surface and may change
+between releases.
 
 Examples:
     Minimal local directory run::
@@ -36,33 +57,25 @@ Examples:
         >>> from sievio import load_config_from_path, convert
         >>> cfg = load_config_from_path("example_config.toml")
         >>> stats = convert(cfg)
-
-Advanced utilities are imported here for convenience, but anything not in
-``PRIMARY_API`` is considered an expert surface and may change between
-releases.
-
-For HTTP access (GitHub zipballs, web PDFs), prefer configuring
-``cfg.http``; the builder/factories will construct a :class:`SafeHttpClient`
-and reuse it for remote sources. The module-level client in
-``core.safe_http`` is intended primarily for simple one-shot scripts and
-the CLI, not long-lived applications.
 """
+
 
 from __future__ import annotations
 
 # ---------------------------------------------------------------------------
-# Version
+# Package version
 # ---------------------------------------------------------------------------
 try:
     from importlib.metadata import version as _pkg_version  # Py3.8+
 
     __version__ = _pkg_version("sievio")
-except Exception:  # PackageNotFoundError or any runtime env oddities
+except Exception: # PackageNotFoundError or runtime env oddities
+    # Keep imports resilient for editable installs, vendored builds, etc.
     __version__ = "0.0.0+unknown"
 
 
 # ---------------------------------------------------------------------------
-# Primary public API (stable)
+# Primary public API (stable; exported via __all__)
 # ---------------------------------------------------------------------------
 from .cli.runner import (
     convert,
@@ -74,7 +87,7 @@ from .cli.runner import (
 )
 
 # ---------------------------------------------------------------------------
-# Advanced / expert API (subject to change)
+# Advanced / expert API (imported for convenience; not exported via __all__)
 # ---------------------------------------------------------------------------
 from .core.builder import PipelineOverrides, PipelinePlan, PipelineRuntime
 from .core.chunk import (
@@ -163,7 +176,8 @@ from .sources.githubio import (
 )
 from .sources.sources_webpdf import WebPagePdfSource, WebPdfListSource
 
-# Optional extras (not part of PRIMARY_API)
+# Optional extras (available only when optional dependencies are installed).
+# These are intentionally not part of PRIMARY_API.
 try:  # pragma: no cover - optional dependency
     from .core.extras.qc import JSONLQualityScorer, score_jsonl_to_csv
 except Exception:  # pragma: no cover - keep import errors silent
@@ -179,7 +193,9 @@ try:  # pragma: no cover - optional dependency
 except Exception:  # pragma: no cover
     pass
 
-
+# ---------------------------------------------------------------------------
+# Stable export list
+# ---------------------------------------------------------------------------
 PRIMARY_API = [
     "__version__",
     "SievioConfig",
@@ -217,4 +233,5 @@ PRIMARY_API = [
     "detect_license_in_zip",
 ]
 
+# Export the stable surface area only.
 __all__ = list(PRIMARY_API)

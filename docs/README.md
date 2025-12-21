@@ -7,7 +7,7 @@ Start here to find the right doc for your role.
 - **Quality control:** `docs/QUALITY_CONTROL.md` – QC/safety signals, modes, tuning, and exports.
 - **Deployment & sharding:** `docs/DEPLOYMENT.md` – running shards, merging stats, and operational tips.
 - **Cookbook:** `docs/cookbook/` – task-focused recipes (PDF ingestion, custom scrubbing, dedup/QC workflows).
-- **Contributing:** `docs/CONTRIBUTING.md` – contributor workflow, extension patterns, and required checks (see also `AGENTS.md` and `LLMS.md`).
+- **Contributing:** `docs/CONTRIBUTING.md` – links to the canonical `CONTRIBUTING.md` (see also `AGENTS.md` and `LLMS.md`).
 
 Other references:
 - Root README: `README.md` – quick intro and usage snippets.

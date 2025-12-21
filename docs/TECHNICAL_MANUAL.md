@@ -10,7 +10,7 @@ Define a run declaratively in Python or TOML (`SievioConfig`), execute it via a 
 - QC deep dive: `docs/QUALITY_CONTROL.md`
 - Deployment/sharding: `docs/DEPLOYMENT.md`
 - Cookbook recipes: `docs/cookbook/`
-- Contributor guide: `docs/CONTRIBUTING.md` (canonical copy of the contributor sections below)
+- Contributor guide: `docs/CONTRIBUTING.md` (links to the canonical `CONTRIBUTING.md`)
 
 ## Key features
 - **Sources (ingest):** Local directories, GitHub zipballs, web PDFs (page scrape or URL list), CSV/TSV, and SQLite tables/queries. Optional bytes handlers (PDF/EVTX/Parquet) activate when extras are installed. All are configured via `SourceConfig` and declarative `[[sources.specs]]` entries (see `core/config.py` and `example_config.toml`), and implemented under `src/sievio/sources`.
@@ -310,7 +310,7 @@ split_name = "train"
 See `example_config.toml` for every knob (includes HTTP, logging, QC heuristics, and dataset card fields).
 
 ## Extending Sievio
-_See also: `docs/CONTRIBUTING.md` for the canonical contributor guide._
+_See also: `docs/CONTRIBUTING.md` (links to the canonical `CONTRIBUTING.md`)._
 - **New Source/Sink:** Implement the `Source` or `Sink` protocol, then register a factory with `SourceRegistry`/`SinkRegistry` (via `core/registries.default_*` or a plugin). For lightweight extensions, use `SourceRegistry.register_callable` / `SinkRegistry.register_callable` (or the `@registry.source` / `@registry.sink` decorators) to adapt a callable into a factory. Place code under `src/sievio/sources/` or `sinks/` and add tests.
 - **New bytes handler:** Register `(sniff, handler)` with `BytesHandlerRegistry` (e.g., for new binary formats). Handlers return iterable records given bytes, relative path, optional `RepoContext`, and optional `ChunkPolicy`.
 - **Custom QC scorer:** Implement `QualityScorer` or a factory with an `id` and `build(cfg: QCConfig)`. Register via `quality_scorer_registry` or a plugin. Keep `qc.scorer` unset in declarative configs; use the registry instead.
@@ -354,7 +354,7 @@ stats = convert(cfg, overrides=overrides)
 ```
 
 ## Conventions for contributors
-_Canonical copy: `docs/CONTRIBUTING.md`._
+_See: `docs/CONTRIBUTING.md`._
 - **File layout:** New ingestion code lives under `src/sievio/sources/`, new sinks under `src/sievio/sinks/`, QC-related helpers under `src/sievio/core/extras/` or `src/sievio/core/`, and orchestration/CLI helpers under `src/sievio/cli/`. Keep new modules cohesive and small.
 - **Registration, not wiring by hand:** Prefer `SourceRegistry`, `SinkRegistry`, `BytesHandlerRegistry`, and `QualityScorerRegistry` (optionally via `sievio.plugins`) over ad-hoc wiring. Declarative configs should stay runtime-free: do not stash live clients, scorers, or extractors inside `SievioConfig` fields in TOML.
 - **HTTP and safety:** Use `SafeHttpClient` via `HttpConfig.build_client()` or `safe_http.get_global_http_client()` for all remote access (GitHub, PDFs, SQLite downloads). Avoid direct `requests` or `urllib` usage outside `safe_http` and source modules that already use it.
@@ -363,7 +363,7 @@ _Canonical copy: `docs/CONTRIBUTING.md`._
 - **Tests and style:** Add tests under `tests/` using `pytest`, and run `PYTHONPATH=src pytest`. Maintain typing and style with `mypy --config-file pyproject.toml src` and `ruff check .`. Follow existing naming patterns (`*Source`, `*Sink`, `*Config`, `*Factory`) to keep the API surface predictable.
 
 ## Development & testing
-_Canonical copy: `docs/CONTRIBUTING.md`._
+_See: `docs/CONTRIBUTING.md`._
 - Dev dependencies: `[project.optional-dependencies].dev` (`pytest`, `pytest-cov`, `ruff`, `mypy`, `build`, `twine`).
 - Tests: `PYTHONPATH=src pytest`
 - Lint/format/type-check: `ruff check .` and `mypy --config-file pyproject.toml src`
