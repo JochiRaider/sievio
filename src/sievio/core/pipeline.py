@@ -645,7 +645,7 @@ class PipelineEngine:
                 self.config,
                 runtime=self.plan.runtime,
             )
-        return Executor(exec_cfg), fail_fast
+        return Executor(exec_cfg, allow_fallback=True), fail_fast
 
     def _write_records(
         self,

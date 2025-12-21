@@ -83,10 +83,12 @@ class Executor:
         *,
         initializer: Callable[..., Any] | None = None,
         initargs: tuple[Any, ...] = (),
+        allow_fallback: bool = False,
     ) -> None:
         self.cfg = cfg
         self.initializer = initializer
         self.initargs = tuple(initargs or ())
+        self.allow_fallback = bool(allow_fallback)
 
     def _make_executor(self):
         if self.cfg.max_workers < 1:
@@ -102,7 +104,20 @@ class Executor:
             executor_cls = ThreadPoolExecutor
             if self.initializer is not None:
                 log.debug("Executor initializer ignored for thread executor.")
-        return executor_cls(max_workers=self.cfg.max_workers, **init_kwargs)
+        try:
+            return executor_cls(max_workers=self.cfg.max_workers, **init_kwargs)
+        except OSError as exc:
+            if kind != "process":
+                raise
+            if not self.allow_fallback:
+                raise
+            log.warning(
+                "Process executor unavailable (%s); falling back to thread executor.",
+                exc,
+            )
+            if self.initializer is not None:
+                log.debug("Process initializer ignored for thread fallback.")
+            return ThreadPoolExecutor(max_workers=self.cfg.max_workers)
 
     def map_unordered(
         self,
@@ -459,11 +474,12 @@ def _infer_executor_kind(cfg: SievioConfig, runtime: Any | None = None) -> str:
         has_heavy_source = any(_looks_heavy_source(src) for src in cfg.sources.sources)
 
     handler_pairs: list[tuple[Any, Any]] = list(getattr(cfg.pipeline, "bytes_handlers", ()))
-    if runtime and getattr(runtime, "bytes_handlers", None):
-        handler_pairs.extend(runtime.bytes_handlers)
     for _, handler in handler_pairs:
         components.append(handler)
         has_heavy_handler = has_heavy_handler or _looks_heavy_bytes_handler(handler)
+    if runtime and getattr(runtime, "bytes_handlers", None):
+        for _, handler in runtime.bytes_handlers:
+            has_heavy_handler = has_heavy_handler or _looks_heavy_bytes_handler(handler)
 
     extractor = getattr(cfg.pipeline, "file_extractor", None)
     if extractor:

@@ -311,7 +311,7 @@ See `example_config.toml` for every knob (includes HTTP, logging, QC heuristics,
 
 ## Extending Sievio
 _See also: `docs/CONTRIBUTING.md` for the canonical contributor guide._
-- **New Source/Sink:** Implement the `Source` or `Sink` protocol, then register a factory with `SourceRegistry`/`SinkRegistry` (via `core/registries.default_*` or a plugin). Place code under `src/sievio/sources/` or `sinks/` and add tests.
+- **New Source/Sink:** Implement the `Source` or `Sink` protocol, then register a factory with `SourceRegistry`/`SinkRegistry` (via `core/registries.default_*` or a plugin). For lightweight extensions, use `SourceRegistry.register_callable` / `SinkRegistry.register_callable` (or the `@registry.source` / `@registry.sink` decorators) to adapt a callable into a factory. Place code under `src/sievio/sources/` or `sinks/` and add tests.
 - **New bytes handler:** Register `(sniff, handler)` with `BytesHandlerRegistry` (e.g., for new binary formats). Handlers return iterable records given bytes, relative path, optional `RepoContext`, and optional `ChunkPolicy`.
 - **Custom QC scorer:** Implement `QualityScorer` or a factory with an `id` and `build(cfg: QCConfig)`. Register via `quality_scorer_registry` or a plugin. Keep `qc.scorer` unset in declarative configs; use the registry instead.
 - **Plugins:** Publish an entry point under `sievio.plugins` that receives all registries and performs registrations.
