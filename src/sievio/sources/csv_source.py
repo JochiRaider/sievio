@@ -69,10 +69,10 @@ class CSVTextSource(Source):
                                 row=row, path=path, lineno=lineno
                             )
                     else:
-                        reader = csv.reader(fp, delimiter=dialect_delim)
-                        for lineno, row in enumerate(reader, start=1):
+                        reader_no_header = csv.reader(fp, delimiter=dialect_delim)
+                        for lineno, row_values in enumerate(reader_no_header, start=1):
                             yield from self._row_to_fileitems_no_header(
-                                row=row, path=path, lineno=lineno
+                                row=row_values, path=path, lineno=lineno
                             )
             except FileNotFoundError:
                 log.warning("CSV file not found: %s", path)

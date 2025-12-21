@@ -8,7 +8,7 @@ import json
 import os
 from collections.abc import Iterable, Mapping
 from pathlib import Path
-from typing import Any
+from typing import Any, Self, TextIO
 
 from ..core.interfaces import Record, RepoContext
 
@@ -30,7 +30,7 @@ class _BaseJSONLSink:
                 written once at the start of the file.
         """
         self._path = Path(out_path)
-        self._fp = None
+        self._fp: TextIO | None = None
         self._tmp_path: Path | None = None
         self._header_record: Mapping[str, Any] | None = (
             dict(header_record) if header_record else None
@@ -55,7 +55,7 @@ class _BaseJSONLSink:
             self.write(dict(self._header_record))
             self._header_written = True
 
-    def write(self, record: dict[str, Any]) -> None:
+    def write(self, record: Mapping[str, Any]) -> None:
         """Write a single JSON record as a compact line."""
         assert self._fp is not None
         self._fp.write(json.dumps(record, ensure_ascii=False, separators=(",", ":")) + "\n")
@@ -72,7 +72,7 @@ class _BaseJSONLSink:
             os.replace(self._tmp_path, self._path)
             self._tmp_path = None
 
-    def __enter__(self) -> JSONLSink:
+    def __enter__(self) -> Self:
         self.open()
         return self
 
@@ -164,7 +164,7 @@ class PromptTextSink:
         """
         self._path = Path(out_path)
         self._heading_fmt = heading_fmt
-        self._fp = None
+        self._fp: TextIO | None = None
         self._tmp_path: Path | None = None
 
     def open(self, context: RepoContext | None = None) -> None:
@@ -174,7 +174,7 @@ class PromptTextSink:
         self._tmp_path = self._path.parent / tmp_name
         self._fp = open(self._tmp_path, "w", encoding="utf-8", newline="")
 
-    def write(self, record: dict[str, Any]) -> None:
+    def write(self, record: Mapping[str, Any]) -> None:
         """Write a heading and its associated text block.
 
         Args:
@@ -187,6 +187,9 @@ class PromptTextSink:
         text = record.get("text") or ""
         heading = self._heading_fmt.format(path=rel, chunk=cid, meta=meta)
         self._fp.write(f"{heading}\n{text}\n\n")
+
+    def finalize(self, records: Iterable[Mapping[str, Any]]) -> None:
+        """Optional sink hook for finalizer records (no-op for prompt text)."""
 
     def close(self) -> None:
         """Close any open handle and move the temp file into place."""

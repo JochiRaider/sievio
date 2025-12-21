@@ -6,7 +6,6 @@ from sievio.core.config import QCConfig, QCMode, SafetyConfig, SievioConfig
 from sievio.core.interfaces import RunContext
 from sievio.core.pipeline import PipelineStats
 from sievio.core.qc_controller import (
-    gate_policy_for_safety,
     InlineQCController,
     InlineQCHook,
     QCSummaryTracker,
@@ -14,6 +13,7 @@ from sievio.core.qc_controller import (
     QualityInlineScreener,
     SafetyDecisionPolicy,
     SafetyInlineScreener,
+    gate_policy_for_safety,
 )
 from sievio.core.qc_post import PostQCHook, PostSafetyHook, run_safety_over_jsonl
 from sievio.core.registries import QualityScorerRegistry, SafetyScorerRegistry

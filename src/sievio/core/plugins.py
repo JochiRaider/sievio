@@ -4,8 +4,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping, Sequence
 from importlib import metadata
+from typing import cast
 
 from .log import get_logger
 from .registries import (
@@ -53,11 +54,12 @@ def load_entrypoint_plugins(
         log.debug("Plugin discovery skipped: %s", exc)
         return
 
-    eps = (
-        entry_points.select(group=group)
-        if hasattr(entry_points, "select")
-        else entry_points.get(group, [])
-    )
+    eps: Sequence[metadata.EntryPoint]
+    if hasattr(entry_points, "select"):
+        eps = cast(Sequence[metadata.EntryPoint], entry_points.select(group=group))
+    else:
+        grouped = cast(Mapping[str, Sequence[metadata.EntryPoint]], entry_points)
+        eps = grouped.get(group, ())
     for ep in eps:
         try:
             func = ep.load()

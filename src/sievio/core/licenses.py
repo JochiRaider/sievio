@@ -10,21 +10,27 @@ Detection order (per requirements):
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import re
 import zipfile
 from collections.abc import Iterable
 from pathlib import Path
-
-try:  # Python 3.11+
-    import tomllib  # type: ignore[attr-defined]
-except ModuleNotFoundError:  # pragma: no cover - Py3.10 fallback
-    tomllib = None  # type: ignore[assignment]
+from typing import Any, cast
 
 from ..core.interfaces import RepoContext
 from ..core.log import get_logger
 
 log = get_logger(__name__)
+
+tomllib: Any | None = None
+try:  # Python 3.11+
+    tomllib = importlib.import_module("tomllib")
+except ModuleNotFoundError:  # pragma: no cover - Py3.10 fallback
+    try:
+        tomllib = importlib.import_module("tomli")
+    except Exception:  # pragma: no cover
+        tomllib = None
 
 LicenseMeta = dict[str, str | None]
 DetectionResult = tuple[str | None, LicenseMeta]
@@ -359,7 +365,7 @@ class _TreeReader:
         try:
             entries = list(self.root.iterdir())
         except Exception:
-            return []
+            return
         for entry in entries:
             if entry.is_file():
                 yield entry.name, entry
@@ -453,22 +459,25 @@ def _detect_with_reader(reader, *, location: str, subpath: str | None) -> Detect
     content_detection = _find_content_license(reader)
 
     detection: DetectionResult | None = _detect_spdx_header(reader)
-    if detection:
+    if detection is not None:
         detection = _attach_content_license(detection, content_detection)
-        _log_success(location, subpath, detection)
-        return detection
+        if detection is not None:
+            _log_success(location, subpath, detection)
+            return detection
 
     detection = _detect_from_manifests(reader)
-    if detection:
+    if detection is not None:
         detection = _attach_content_license(detection, content_detection)
-        _log_success(location, subpath, detection)
-        return detection
+        if detection is not None:
+            _log_success(location, subpath, detection)
+            return detection
 
     detection = _detect_from_license_files(reader)
-    if detection:
+    if detection is not None:
         detection = _attach_content_license(detection, content_detection)
-        _log_success(location, subpath, detection)
-        return detection
+        if detection is not None:
+            _log_success(location, subpath, detection)
+            return detection
 
     if content_detection:
         scope = (content_detection[1] or {}).get("content_scope")
@@ -740,12 +749,12 @@ def _handle_package_json(
             license_field, reader, root_files, lower_map
         )
         if expr:
-            meta = {
+            meta = cast(LicenseMeta, {
                 "license_path": license_path or rel_name,
                 "detect_method": "manifest",
                 "license_sha256": sha or _hash_text(expr),
                 "spdx_expression": expr,
-            }
+            })
             return expr, meta
     return None
 
@@ -811,12 +820,12 @@ def _handle_cargo_toml(
     if isinstance(license_expr, str):
         expr = _normalize_spdx_expression(license_expr)
         if expr:
-            meta = {
+            meta = cast(LicenseMeta, {
                 "license_path": rel_name,
                 "detect_method": "manifest",
                 "license_sha256": _hash_text(expr),
                 "spdx_expression": expr,
-            }
+            })
             return expr, meta
     license_file = package.get("license-file")
     if isinstance(license_file, str):
@@ -833,11 +842,11 @@ def _handle_cargo_toml(
         if not spdx:
             return None
         sha = _hash_text(_normalize_license_text(text_content))
-        meta = {
+        meta = cast(LicenseMeta, {
             "license_path": lookup_name,
             "detect_method": "manifest",
             "license_sha256": sha,
-        }
+        })
         meta["spdx_expression"] = spdx
         return spdx, meta
     return None
@@ -862,12 +871,12 @@ def _handle_pyproject_toml(
     if isinstance(license_field, str):
         expr = _normalize_spdx_expression(license_field)
         if expr:
-            meta = {
+            meta = cast(LicenseMeta, {
                 "license_path": rel_name,
                 "detect_method": "manifest_nonstandard",
                 "license_sha256": _hash_text(expr),
                 "spdx_expression": expr,
-            }
+            })
             return expr, meta
     if isinstance(license_field, dict):
         expr_text = license_field.get("text")
@@ -876,12 +885,12 @@ def _handle_pyproject_toml(
             if not spdx:
                 spdx = _normalize_spdx_expression(expr_text)
             if spdx:
-                meta = {
+                meta = cast(LicenseMeta, {
                     "license_path": rel_name,
                     "detect_method": "manifest",
                     "license_sha256": _hash_text(spdx),
                     "spdx_expression": spdx,
-                }
+                })
                 return spdx, meta
         file_ref = license_field.get("file")
         if isinstance(file_ref, str):
@@ -899,23 +908,23 @@ def _handle_pyproject_toml(
                 return None
             normalized = _normalize_license_text(text_content)
             sha = _hash_text(normalized)
-            meta = {
+            meta = cast(LicenseMeta, {
                 "license_path": lookup_name,
                 "detect_method": "manifest",
                 "license_sha256": sha,
-            }
+            })
             meta["spdx_expression"] = spdx
             return spdx, meta
     license_expr = project.get("license-expression")
     if isinstance(license_expr, str):
         expr = _normalize_spdx_expression(license_expr)
         if expr:
-            meta = {
+            meta = cast(LicenseMeta, {
                 "license_path": rel_name,
                 "detect_method": "manifest",
                 "license_sha256": _hash_text(expr),
                 "spdx_expression": expr,
-            }
+            })
             return expr, meta
     return None
 

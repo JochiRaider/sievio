@@ -26,9 +26,9 @@ from sievio.core.config import (
 from sievio.core.factories import SinkFactoryResult
 from sievio.core.interfaces import RepoContext
 from sievio.core.pipeline import PipelineEngine
-from sievio.core.runner import run_pipeline
 from sievio.core.qc_controller import InlineQCHook
 from sievio.core.registries import SinkRegistry, SourceRegistry
+from sievio.core.runner import run_pipeline
 from sievio.core.safe_http import SafeHttpClient
 
 

@@ -8,7 +8,7 @@ from __future__ import annotations
 from collections.abc import Iterable
 from datetime import datetime
 from io import BytesIO
-from typing import Any
+from typing import Any, Protocol, cast
 
 from pypdf import PdfReader
 
@@ -58,8 +58,14 @@ def handle_pdf(
     )
 
 
-handle_pdf.cpu_intensive = True
-handle_pdf.preferred_executor = "process"
+class _BytesHandlerAttrs(Protocol):
+    cpu_intensive: bool
+    preferred_executor: str
+
+
+_handler = cast(_BytesHandlerAttrs, handle_pdf)
+_handler.cpu_intensive = True
+_handler.preferred_executor = "process"
 
 
 

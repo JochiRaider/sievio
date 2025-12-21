@@ -17,11 +17,13 @@ from typing import Any
 # -----------------------------
 # Optional tiktoken integration
 # -----------------------------
+tiktoken: Any | None
 try:
-    import tiktoken  # type: ignore
+    import tiktoken as _tiktoken
+    tiktoken = _tiktoken
     _HAVE_TIKTOKEN = True
 except Exception:
-    tiktoken = None  # type: ignore
+    tiktoken = None
     _HAVE_TIKTOKEN = False
 
 _DEFAULT_TOKENIZER: Any | None = None
@@ -45,8 +47,9 @@ def _get_tokenizer(tokenizer_name: str | None = None):
             or the name cannot be resolved.
     """
     global _DEFAULT_TOKENIZER
-    if not _HAVE_TIKTOKEN:
+    if not _HAVE_TIKTOKEN or tiktoken is None:
         return None
+    tt = tiktoken
     name = tokenizer_name or "cl100k_base"
     if tokenizer_name is None and _DEFAULT_TOKENIZER is not None:
         return _DEFAULT_TOKENIZER
@@ -55,14 +58,14 @@ def _get_tokenizer(tokenizer_name: str | None = None):
     try:
         tok = None
         # Prefer encoding if given; else try model lookup.
-        if name in tiktoken.list_encoding_names():
-            tok = tiktoken.get_encoding(name)
+        if name in tt.list_encoding_names():
+            tok = tt.get_encoding(name)
         if tok is None:
             try:
-                tok = tiktoken.encoding_for_model(name)
+                tok = tt.encoding_for_model(name)
             except Exception:
                 # Fallback to a common modern encoding
-                tok = tiktoken.get_encoding("cl100k_base")
+                tok = tt.get_encoding("cl100k_base")
     except Exception:
         return None
     if tok is None:

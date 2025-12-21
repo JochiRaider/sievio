@@ -194,7 +194,7 @@ class LocalDirSourceFactory(SourceFactory):
         if root is None:
             raise ValueError("local_dir source spec requires root_dir")
         repo_ctx = ctx.repo_context
-        from .config import (  # type: ignore
+        from .config import (
             LocalDirSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,
@@ -249,7 +249,7 @@ class GitHubZipSourceFactory(SourceFactory):
             raise ValueError("github_zip source spec requires url")
         repo_ctx = ctx.repo_context
         http_client = ctx.http_client or ctx.http_config.build_client()
-        from .config import (  # type: ignore
+        from .config import (
             GitHubSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,
@@ -304,7 +304,7 @@ class WebPdfListSourceFactory(SourceFactory):
         urls = options.get("urls")
         if not urls:
             raise ValueError("web_pdf_list source spec requires urls")
-        from .config import (  # type: ignore
+        from .config import (
             PdfSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,
@@ -362,7 +362,7 @@ class WebPagePdfSourceFactory(SourceFactory):
         page_url = options.get("page_url")
         if page_url is None:
             raise ValueError("web_page_pdf source spec requires page_url")
-        from .config import (  # type: ignore
+        from .config import (
             PdfSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,
@@ -419,7 +419,7 @@ class SQLiteSourceFactory(SourceFactory):
         """
 
         from ..sources.sqlite_source import SQLiteSource
-        from .config import (  # type: ignore
+        from .config import (
             SQLiteSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,
@@ -532,7 +532,7 @@ class CsvTextSourceFactory(SourceFactory):
         """
 
         from ..sources.csv_source import CSVTextSource
-        from .config import (  # type: ignore
+        from .config import (
             CsvSourceConfig,
             build_config_from_defaults_and_options,
             validate_options_for_dataclass,

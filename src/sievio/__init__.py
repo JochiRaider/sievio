@@ -130,7 +130,6 @@ from .core.naming import (
     build_output_basename_pdf,
 )
 from .core.pipeline import PipelineEngine, PipelineStats
-from .core.runner import run_pipeline
 from .core.records import (
     QCSummaryMeta,
     RecordMeta,
@@ -141,6 +140,7 @@ from .core.records import (
     is_summary_record,
     sha256_text,
 )
+from .core.runner import run_pipeline
 from .sinks.sinks import JSONLSink, NoopSink, PromptTextSink
 from .sources.fs import (
     DEFAULT_SKIP_DIRS,

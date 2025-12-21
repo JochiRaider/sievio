@@ -163,7 +163,7 @@ def iter_parquet_records(
         for p in paths:
             try:
                 if p.is_dir():
-                    dataset = ds.dataset(p, format="parquet")  # type: ignore[arg-type]
+                    dataset = ds.dataset(p, format="parquet")
                     batches = dataset.to_batches()
                     for batch in batches:
                         table = pa.Table.from_batches([batch])

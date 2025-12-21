@@ -8,7 +8,7 @@ from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import closing
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse, urlunparse
 
 from ..sources.fs import read_file_prefix
@@ -34,10 +34,10 @@ class _LimitedRaw(io.RawIOBase):
         self._raw = raw
         self._remaining = max(0, int(limit))
 
-    def readable(self) -> bool:  # type: ignore[override]
+    def readable(self) -> bool:
         return True
 
-    def read(self, size: int = -1) -> bytes:  # type: ignore[override]
+    def read(self, size: int = -1) -> bytes:
         if self._remaining <= 0:
             return b""
         if size is None or size < 0 or size > self._remaining:
@@ -46,7 +46,7 @@ class _LimitedRaw(io.RawIOBase):
         self._remaining -= len(data)
         return data
 
-    def readinto(self, b: bytearray | memoryview) -> int | None:  # type: ignore[override]
+    def readinto(self, b: Any) -> int | None:
         if self._remaining <= 0:
             return 0
         view = memoryview(b)
@@ -63,7 +63,7 @@ class _LimitedRaw(io.RawIOBase):
         self._remaining -= int(wrote)
         return int(wrote)
 
-    def readinto1(self, b: bytearray | memoryview) -> int | None:  # type: ignore[override]
+    def readinto1(self, b: Any) -> int | None:
         fn = getattr(self._raw, "readinto1", None)
         if callable(fn):
             if self._remaining <= 0:
@@ -77,7 +77,7 @@ class _LimitedRaw(io.RawIOBase):
             return int(wrote)
         return self.readinto(b)
 
-    def read1(self, size: int = -1) -> bytes:  # type: ignore[override]
+    def read1(self, size: int = -1) -> bytes:
         fn = getattr(self._raw, "read1", None)
         if callable(fn):
             if self._remaining <= 0:
@@ -89,7 +89,7 @@ class _LimitedRaw(io.RawIOBase):
             return data
         return self.read(size)
 
-    def readline(self, size: int = -1) -> bytes:  # type: ignore[override]
+    def readline(self, size: int | None = -1) -> bytes:
         if self._remaining <= 0:
             return b""
         limit = self._remaining if size is None or size < 0 else min(size, self._remaining)
@@ -97,13 +97,13 @@ class _LimitedRaw(io.RawIOBase):
         self._remaining -= len(data)
         return data
 
-    def seekable(self) -> bool:  # type: ignore[override]
+    def seekable(self) -> bool:
         return False
 
-    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:  # type: ignore[override]
+    def seek(self, offset: int, whence: int = io.SEEK_SET) -> int:
         raise io.UnsupportedOperation("seek not supported on limited stream")
 
-    def close(self) -> None:  # type: ignore[override]
+    def close(self) -> None:
         try:
             self._raw.close()
         finally:
@@ -344,7 +344,7 @@ def resolve_bytes_from_file_item(item: FileItem, decode_cfg: DecodeConfig) -> By
                 limit = decode_cfg.max_bytes_per_file
                 if limit is None:
                     limit = _OPEN_STREAM_DEFAULT_MAX_BYTES
-                limited = make_limited_stream(raw, limit)
+                limited = make_limited_stream(cast(io.BufferedIOBase, raw), limit)
                 try:
                     read = limited.read()
                 finally:
@@ -383,7 +383,7 @@ def list_records_for_file(
     truncated_bytes: int | None = None,
     source_url: str | None = None,
     source_domain: str | None = None,
-) -> list[dict[str, object]]:
+) -> list[Record]:
     """Materialize records for a decoded file using configured extractors.
 
     Args:
@@ -435,7 +435,7 @@ def iter_records_for_file(
     source_url: str | None = None,
     source_domain: str | None = None,
     extractors: Sequence[Any] = (),
-) -> Iterator[dict[str, object]]:
+) -> Iterator[Record]:
     """Yield chunk records followed by extractor records for decoded text.
 
     Args:
@@ -456,6 +456,7 @@ def iter_records_for_file(
     """
     extractor_recs: list[dict[str, object]] = []
     context_meta = record_ctx.metadata_seed
+    extra_meta = dict(context_meta) if context_meta else None
     file_nlines = 0 if text == "" else text.count("\n") + 1
     if extractors:
         for extractor in extractors:
@@ -515,7 +516,7 @@ def iter_records_for_file(
             n_chunks=total_chunks,
             lang=chunk.get("lang") if attach_lang else None,
             tokens=chunk.get("n_tokens"),
-            extra_meta=context_meta,
+            extra_meta=extra_meta,
             file_bytes=file_bytes,
             truncated_bytes=truncated_bytes,
             file_nlines=file_nlines,
@@ -543,7 +544,7 @@ def iter_records_from_bytes(
     file_size: int | None = None,
     source_url: str | None = None,
     source_domain: str | None = None,
-) -> Iterator[dict[str, object]]:
+) -> Iterator[Record]:
     """Decode bytes for a file and yield chunk and extractor records.
 
     Args:
@@ -586,7 +587,7 @@ def iter_records_from_bytes_with_plan(
     file_size: int | None = None,
     source_url: str | None = None,
     source_domain: str | None = None,
-) -> Iterator[dict[str, object]]:
+) -> Iterator[Record]:
     """Build records from bytes using handlers from a pipeline plan.
 
     Args:
@@ -622,7 +623,7 @@ def list_records_from_bytes(
     *,
     config: ConfigForRecords,
     context: RepoContext | None,
-) -> list[dict[str, object]]:
+) -> list[Record]:
     """Materialize records from raw bytes for a single file.
 
     Args:
@@ -660,7 +661,7 @@ def build_records_from_bytes(
     file_size: int | None = None,
     source_url: str | None = None,
     source_domain: str | None = None,
-) -> Iterator[dict[str, object]]:
+) -> Iterator[Record]:
     """Build records from bytes by applying sniffers, decoding, and chunking.
 
     The caller is responsible for deciding streaming versus buffered handling
@@ -763,7 +764,7 @@ def iter_records_from_file_item(
     config: ConfigForRecords,
     context: RepoContext | None,
     streaming_extractor: StreamingExtractor | None = None,
-) -> Iterator[dict[str, object]]:
+) -> Iterator[Record]:
     """Yield records for a FileItem using streaming or buffered decoding.
 
     Args:
@@ -861,7 +862,7 @@ class DefaultExtractor(FileExtractor):
         *,
         config: ConfigForRecords,
         context: RepoContext | None = None,
-    ) -> Iterable[dict[str, object]]:
+    ) -> Iterable[Record]:
         """Extract records for a file item using the configured pipeline.
 
         Args:
@@ -870,7 +871,7 @@ class DefaultExtractor(FileExtractor):
             context (RepoContext | None): Repository context for metadata.
 
         Returns:
-            Iterable[Dict[str, object]]: Iterator over record dictionaries.
+            Iterable[Record]: Iterator over record mappings.
         """
         return iter_records_from_file_item(
             item,

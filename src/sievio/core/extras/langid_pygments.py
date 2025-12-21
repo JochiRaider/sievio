@@ -14,7 +14,7 @@ class PygmentsCodeLanguageDetector:
 
     def __init__(self, cfg: LanguageConfig | None = None) -> None:
         try:
-            from pygments.lexers import (  # type: ignore
+            from pygments.lexers import (
                 guess_lexer,
                 guess_lexer_for_filename,
             )

@@ -6,10 +6,11 @@ from __future__ import annotations
 
 import pickle
 from collections.abc import Callable, Iterable, Sequence
-from contextlib import ExitStack
+from contextlib import AbstractContextManager, ExitStack
 from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
+
 from .concurrency import (
     Executor,
     process_items_parallel,
@@ -98,27 +99,33 @@ def apply_overrides_to_engine(
     if overrides is None:
         return engine
 
-    if getattr(overrides, "record_middlewares", None):
-        for mw in overrides.record_middlewares:  # type: ignore[attr-defined]
+    record_middlewares = getattr(overrides, "record_middlewares", None)
+    if record_middlewares:
+        for mw in record_middlewares:
             engine.add_record_middleware(mw)
 
-    if getattr(overrides, "file_middlewares", None):
-        for mw in overrides.file_middlewares:  # type: ignore[attr-defined]
+    file_middlewares = getattr(overrides, "file_middlewares", None)
+    if file_middlewares:
+        for mw in file_middlewares:
             engine.add_file_middleware(mw)
 
     return engine
 
 
-def _coerce_record_middleware(mw: RecordMiddleware | Callable[[Record], Any]) -> RecordMiddleware:
+def _coerce_record_middleware(
+    mw: RecordMiddleware | Callable[[Record], Record | None]
+) -> RecordMiddleware:
     """Wrap a bare callable as RecordMiddleware when needed."""
-    return mw if hasattr(mw, "process") else _FuncRecordMiddleware(mw)  # type: ignore[arg-type]
+    if isinstance(mw, RecordMiddleware):
+        return mw
+    return _FuncRecordMiddleware(mw)
 
 
 def _coerce_file_middleware(
-    mw: FileMiddleware | Callable[[Any, Iterable[Record]], Any],
+    mw: FileMiddleware | Callable[[Any, Iterable[Record]], Iterable[Record] | None],
 ) -> FileMiddleware:
     """Wrap a bare callable as FileMiddleware when needed."""
-    return mw if hasattr(mw, "process") else _FuncFileMiddleware(mw)  # type: ignore[arg-type]
+    return mw if hasattr(mw, "process") else _FuncFileMiddleware(mw)
 
 
 @dataclass
@@ -159,7 +166,8 @@ class _ProcessFileCallable:
         if stream_opener is None:
             reopenable = maybe_reopenable_local_path(item)
             if reopenable is not None:
-                stream_opener = lambda: reopenable.open("rb")
+                def stream_opener() -> Any:
+                    return reopenable.open("rb")
         can_stream = (
             self.executor_kind == "thread"
             and callable(extract_stream)
@@ -295,7 +303,7 @@ def _open_source_with_stack(stack: ExitStack, src: Source) -> Source:
     """
     enter = getattr(src, "__enter__", None)
     if callable(enter):
-        return stack.enter_context(src)  
+        return stack.enter_context(cast(AbstractContextManager[Source], src))
     close = getattr(src, "close", None)
     if callable(close):
         stack.callback(close)  
@@ -445,13 +453,18 @@ class PipelineEngine:
 
     def _apply_middlewares(self, record: Record) -> Record | None:
         """Run a record through all registered record middlewares."""
-        current = record
+        current: Record | None = record
         for middleware in self.record_middlewares:
+            if current is None:
+                return None
             middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
             record_label = best_effort_record_path(current)
             try:
                 process = getattr(middleware, "process", None)
-                callable_mw = process if callable(process) else middleware  # type: ignore[assignment]
+                callable_mw = cast(
+                    Callable[[Record], Record | None],
+                    process if callable(process) else middleware,
+                )
                 current = callable_mw(current)
             except Exception:  # noqa: BLE001
                 self.log.exception(
@@ -565,7 +578,7 @@ class PipelineEngine:
         records: Iterable[Record],
     ) -> Iterable[Record] | None:
         """Run a file's records through registered file middlewares."""
-        current = records
+        current: Iterable[Record] | None = records
         for middleware in self.file_middlewares:
             middleware_name = getattr(middleware, "__name__", middleware.__class__.__name__)
             item_label = (
@@ -578,6 +591,8 @@ class PipelineEngine:
             except Exception:
                 item_label = "<unknown>"
             try:
+                if current is None:
+                    return None
                 current = middleware.process(item, current)
             except Exception as exc:  # noqa: BLE001
                 self.stats.middleware_errors += 1
@@ -677,7 +692,7 @@ class PipelineEngine:
             wrote_any = False
             for sink in sinks:
                 try:
-                    sink.write(record)  # type: ignore[attr-defined]
+                    sink.write(record)
                     wrote_any = True
                 except Exception as exc:
                     self.log.warning(
@@ -763,8 +778,8 @@ class PipelineEngine:
         """
         self.stats.attempted_files += 1
         try:
-            _, recs = processor(work)
-            recs = self._apply_file_middlewares(work.item, recs)
+            _, raw_recs = processor(work)
+            recs = self._apply_file_middlewares(work.item, raw_recs)
             if recs is not None:
                 self._write_records(work.item, recs, sinks=sinks)
             # Count only after successful processing (even if recs is None)
@@ -828,8 +843,8 @@ class PipelineEngine:
             self._maybe_abort_for_error_rate(exc)
 
         def _on_result(result: tuple[Any, Iterable[Record]]) -> None:
-            item, recs = result
-            recs = self._apply_file_middlewares(item, recs)
+            item, raw_recs = result
+            recs = self._apply_file_middlewares(item, raw_recs)
             if recs is not None:
                 self._write_records(item, recs, sinks=sinks)
             # Count only after successful processing/writes (even if recs is None)

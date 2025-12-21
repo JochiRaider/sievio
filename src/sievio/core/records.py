@@ -243,8 +243,8 @@ def check_record_schema(record: Mapping[str, Any], logger: Any | None = None) ->
     logger_obj = logger or log
 
     def _propagates_to_root(lgr: logging.Logger) -> bool:
-        current = lgr
-        while current:
+        current: logging.Logger | None = lgr
+        while current is not None:
             if current.propagate is False and current.parent is not None:
                 return False
             current = current.parent
@@ -621,7 +621,7 @@ def build_record(
                 continue
             meta_obj.extra.setdefault(key, value)
 
-    record = {
+    record: dict[str, object] = {
         "text": text,
         "meta": meta_obj.to_dict(),
     }

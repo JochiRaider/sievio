@@ -8,15 +8,8 @@ for serializing and loading configurations from JSON and TOML.
 """
 from __future__ import annotations
 
+import importlib
 import json
-
-try:  # pragma: no cover - optional dependency
-    import tomllib  # Python 3.11+
-except ModuleNotFoundError:  # pragma: no cover
-    try:
-        import tomli as tomllib  # type: ignore[assignment]
-    except Exception:  # pragma: no cover
-        tomllib = None  # type: ignore[assignment]
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from collections.abc import Sequence as ABCSequence
 from dataclasses import dataclass, field, fields, is_dataclass, replace
@@ -26,20 +19,33 @@ from typing import (
     Literal,
     TypeVar,
     Union,
+    cast,
     get_args,
     get_origin,
     get_type_hints,
 )
-try:  # pragma: no cover - Python 3.10+ UnionType
-    from types import UnionType
-except Exception:  # pragma: no cover
-    UnionType = None  # type: ignore[assignment]
 
 from .chunk import ChunkPolicy
 from .interfaces import Extractor, FileExtractor, Record, RepoContext, Sink, Source
 from .language_id import LanguageConfig
 from .log import PACKAGE_LOGGER_NAME, configure_logging
 from .safe_http import SafeHttpClient
+
+try:  # pragma: no cover - Python 3.10+ UnionType
+    from types import UnionType as _UnionType
+except Exception:  # pragma: no cover
+    UnionType: type | None = None
+else:
+    UnionType = _UnionType
+
+tomllib: Any | None = None
+try:  # pragma: no cover - optional dependency
+    tomllib = importlib.import_module("tomllib")  # Python 3.11+
+except ModuleNotFoundError:  # pragma: no cover
+    try:
+        tomllib = importlib.import_module("tomli")
+    except Exception:  # pragma: no cover
+        tomllib = None
 
 # Local copies of the bytes-handler type aliases to avoid circular imports at runtime.
 Sniff = Callable[[bytes, str], bool]
@@ -255,7 +261,7 @@ class DecodeConfig:
         max_bytes_per_file (int | None): Soft cap on bytes passed to the
             decoder per file.
     """
-    normalize: str | None = "NFC"
+    normalize: Literal["NFC", "NFD", "NFKC", "NFKD"] | None = "NFC"
     strip_controls: bool = True
     fix_mojibake: bool = True
     max_bytes_per_file: int | None = None  # Bytes passed to the decoder per file (soft cap).
@@ -525,9 +531,11 @@ class QCHeuristics:
             ("code_punct_weight", self.code_punct_weight),
             ("code_short_line_weight", self.code_short_line_weight),
         ]
-        for name, value in weight_fields:
-            if value is not None and not (0.0 <= value <= 1.0):
-                raise ValueError(f"QCHeuristics.{name} must be between 0 and 1; got {value!r}.")
+        for name, weight in weight_fields:
+            if weight is not None and not (0.0 <= weight <= 1.0):
+                raise ValueError(
+                    f"QCHeuristics.{name} must be between 0 and 1; got {weight!r}."
+                )
 
 
 @dataclass(slots=True)
@@ -711,7 +719,7 @@ class LoggingConfig:
 # Master config
 # ---------------------------------------------------------------------------
 
-T = TypeVar("T")
+T = TypeVar("T", bound="SievioConfig")
 
 
 @dataclass(slots=True)
@@ -782,13 +790,13 @@ class RunMetadata:
         for key, value in mapping.items():
             if key == "primary_jsonl":
                 if not updated.primary_jsonl and value:
-                    updated.primary_jsonl = value  # type: ignore[assignment]
+                    updated.primary_jsonl = value
             elif key == "prompt_path":
                 if not updated.prompt_path and value:
-                    updated.prompt_path = value  # type: ignore[assignment]
+                    updated.prompt_path = value
             elif key == "repo_url":
                 if not updated.repo_url and value:
-                    updated.repo_url = value  # type: ignore[assignment]
+                    updated.repo_url = value
             else:
                 updated.extra.setdefault(key, value)
         return updated
@@ -1042,6 +1050,7 @@ _SKIP_FIELDS: dict[type[Any], set[str]] = {
 }
 
 C = TypeVar("C")
+DC = TypeVar("DC")
 
 
 def validate_options_for_dataclass(
@@ -1060,7 +1069,7 @@ def validate_options_for_dataclass(
     if not options:
         return
 
-    field_names = {f.name for f in fields(cfg_type)}
+    field_names = {f.name for f in fields(cast(Any, cfg_type))}
     allowed = field_names | set(ignore_keys)
     unknown = sorted(k for k in options.keys() if k not in allowed)
 
@@ -1100,7 +1109,7 @@ def build_config_from_defaults_and_options(
     """
     merged: dict[str, Any] = dict(defaults or {})
 
-    field_names = {f.name for f in fields(cfg_type)}
+    field_names = {f.name for f in fields(cast(Any, cfg_type))}
 
     if options:
         ignore = set(ignore_keys)
@@ -1110,7 +1119,7 @@ def build_config_from_defaults_and_options(
             if key in field_names:
                 merged[key] = value
 
-    return cfg_type(**merged)  # type: ignore[arg-type]
+    return cfg_type(**merged)
 
 
 def _dataclass_to_dict(obj: Any) -> dict[str, Any]:
@@ -1158,7 +1167,7 @@ def _serialize_value(value: Any) -> Any:
     return value if isinstance(value, (dict, list)) else None
 
 
-def _dataclass_from_dict(cls: type[T], data: Mapping[str, Any] | None) -> T:
+def _dataclass_from_dict(cls: type[DC], data: Mapping[str, Any] | None) -> DC:
     """Instantiate a dataclass of type `cls` from a mapping.
 
     Args:
@@ -1170,16 +1179,16 @@ def _dataclass_from_dict(cls: type[T], data: Mapping[str, Any] | None) -> T:
         T: New dataclass instance.
     """    
     if data is None:
-        return cls()  # type: ignore[call-arg]
+        return cast(DC, cls())
     type_hints = get_type_hints(cls)
 
     kwargs: dict[str, Any] = {}
-    for f in fields(cls):
+    for f in fields(cast(Any, cls)):
         if f.name not in data:
             continue
         field_type = type_hints.get(f.name, f.type)
         kwargs[f.name] = _coerce_value(field_type, data[f.name])
-    return cls(**kwargs)  # type: ignore[arg-type]
+    return cast(DC, cls(**kwargs))
 
 
 def _coerce_value(expected_type: Any, value: Any) -> Any:

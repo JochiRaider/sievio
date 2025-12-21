@@ -140,11 +140,8 @@ class _RootPathPolicy:
             if normalized is None:
                 raise FileNotFoundError(f"refused to open path outside root: {rel_posix}")
             _, resolved = normalized
-            stat_kwargs: dict[str, object] = {}
-            if not self.follow_symlinks:
-                stat_kwargs["follow_symlinks"] = False
             try:
-                base_expected = os.stat(resolved, **stat_kwargs)
+                base_expected = os.stat(resolved, follow_symlinks=self.follow_symlinks)
             except OSError as exc:
                 raise FileNotFoundError(f"refused to open path outside root: {rel_posix}") from exc
             if not stat.S_ISREG(base_expected.st_mode):

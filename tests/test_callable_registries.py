@@ -35,7 +35,7 @@ def test_source_registry_register_callable_merges_defaults():
     source_reg = SourceRegistry()
 
     def make_source(options, *, ctx, spec):
-        data = f"{options['prefix']}:{options['payload']}".encode("utf-8")
+        data = f"{options['prefix']}:{options['payload']}".encode()
         return [FileItem(path=options["path"], data=data)]
 
     source_reg.register_callable("callable_source", make_source, options_model=DummySourceOptions)

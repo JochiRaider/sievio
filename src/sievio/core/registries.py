@@ -24,13 +24,13 @@ from .interfaces import (
     SourceFactory,
     SourceFactoryContext,
 )
+from .log import get_logger
 from .registry_callables import (
     CallableQualityScorerFactory,
     CallableSafetyScorerFactory,
     CallableSinkFactory,
     CallableSourceFactory,
 )
-from .log import get_logger
 
 if TYPE_CHECKING:  # pragma: no cover - type-only deps
     from .builder import PipelineRuntime
@@ -73,9 +73,14 @@ class SourceRegistry:
         options_model: type[Any] | None = None,
         replace: bool = False,
         name: str | None = None,
-    ) -> Callable[[Callable[..., Iterable[Any] | None]], Callable[..., Iterable[Any] | None]]:
+    ) -> Callable[
+        [Callable[..., Iterable[Any] | None]],
+        Callable[..., Iterable[Any] | None],
+    ]:
         """Decorator to register a callable source for ``kind``."""
-        def decorator(fn: Callable[..., Iterable[Any] | None]) -> Callable[..., Iterable[Any] | None]:
+        def decorator(
+            fn: Callable[..., Iterable[Any] | None],
+        ) -> Callable[..., Iterable[Any] | None]:
             self.register_callable(
                 kind,
                 fn,

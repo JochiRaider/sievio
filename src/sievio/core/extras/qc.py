@@ -134,7 +134,7 @@ class JSONLQualityScorer:
         minhash_jaccard_thresh: float = _DEFAULT_MINHASH_JACCARD,
         enable_gopher: bool = True,
         gopher_weight: float = 0.10,
-        heuristics: object | None = None,
+        heuristics: QCHeuristics | None = None,
         global_dedup_path: str | None = None,
         global_dedup_read_only: bool = False,
         exact_dedup: bool = True,
@@ -233,7 +233,7 @@ class JSONLQualityScorer:
                 jaccard_threshold=self.lsh.jaccard_threshold,
             )
 
-        self._init_kwargs = {
+        self._init_kwargs: dict[str, Any] = {
             "lm_model_id": lm_model_id,
             "device": device,
             "dtype": dtype,
@@ -265,7 +265,7 @@ class JSONLQualityScorer:
         """
         return JSONLQualityScorer(**self._init_kwargs)
 
-    def score_record(self, rec: dict[str, Any]) -> dict[str, Any]:
+    def score_record(self, rec: Mapping[str, Any]) -> dict[str, Any]:
         """Compute QC metrics for a single record and return the enriched dict.
 
         SimHash computes a 64-bit hash and compares against a recent window using

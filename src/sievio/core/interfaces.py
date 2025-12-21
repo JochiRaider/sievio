@@ -277,7 +277,7 @@ class Extractor(Protocol):
         name (str | None): Short identifier for logging or registry display.
     """
 
-    name: str | None  # type: ignore[assignment]
+    name: str | None
 
     def extract(
         self,
@@ -341,7 +341,7 @@ class StreamingExtractor(Protocol):
     a valid origin_path.
     """
 
-    name: str | None  # type: ignore[assignment]
+    name: str | None
 
     def extract_stream(
         self,

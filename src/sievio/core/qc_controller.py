@@ -6,7 +6,7 @@ from __future__ import annotations
 import os
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 from .config import QCConfig, QCMode, SafetyConfig
 from .interfaces import (
@@ -457,6 +457,7 @@ class QCSummaryTracker:
             screener_id,
             mode=self.mode if screener_id == "quality" else None,
         )
+        assert screener is not None
         screener.enabled = True
         screener.scored += 1
         family_id = qc_result.get("dup_family_id") or qc_result.get("doc_id")
@@ -773,6 +774,10 @@ class InlineScreeningController:
         self._qc_cfg = value
 
     @property
+    def safety_cfg(self) -> SafetyConfig | None:
+        return self._safety_cfg
+
+    @property
     def tracker(self) -> QCSummaryTracker:
         return self.summary
 
@@ -882,14 +887,14 @@ class InlineScreeningController:
         if enforce is None:
             return
         try:
-            screener.enforce_drops = enforce
+            cast(Any, screener).enforce_drops = enforce
         except Exception:
             return
 
     def _sync_screeners(self) -> None:
         for screener in self.screeners:
             try:
-                screener.summary = self.summary
+                cast(Any, screener).summary = self.summary
             except Exception:
                 continue
 
@@ -943,6 +948,8 @@ class QualityInlineScreener:
     def _merge_qc_meta(self, record: Record, qc_result: dict[str, Any]) -> Record:
         """Attach QC-derived metadata to the record meta dictionary."""
 
+        if not isinstance(record, dict):
+            return record
         if not isinstance(record, dict):
             return record
         meta = ensure_meta_dict(record)
@@ -1013,6 +1020,8 @@ class SafetyInlineScreener:
         if did_drop:
             return None
 
+        if not isinstance(record, dict):
+            return record
         meta = ensure_meta_dict(record)
         _, safety_meta = filter_safety_meta(result)
         extra = meta.get("extra")
@@ -1146,6 +1155,7 @@ class InlineQCHook(RunLifecycleHook):
         safety_scorer: SafetyScorer | None = None,
         controller: InlineScreeningController | None = None,
     ) -> None:
+        self._controller: InlineScreeningController | InlineQCController
         self._qc_cfg = qc_cfg
         self._safety_cfg = safety_cfg
         self._scorer = scorer
@@ -1223,7 +1233,7 @@ class InlineQCHook(RunLifecycleHook):
 
         rows = collect_qc_rows_from_jsonl(
             str(jsonl_path),
-            qc_cfg=self._controller.cfg,
+            qc_cfg=cfg,
             config=ctx.cfg,
             scorer=scorer,
             runtime=getattr(ctx, "runtime", None),
@@ -1237,7 +1247,9 @@ class InlineQCHook(RunLifecycleHook):
         if err_count and hasattr(ctx, "stats"):
             try:
                 target_stats = getattr(ctx.stats, "qc", None)
-                target_quality = target_stats.get_screener("quality") if target_stats else None  # type: ignore[attr-defined]
+                target_quality = None
+                if isinstance(target_stats, QCSummaryTracker):
+                    target_quality = target_stats.get_screener("quality")
                 if target_quality is not None:
                     target_quality.errors += err_count
             except Exception:

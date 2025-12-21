@@ -454,7 +454,7 @@ class GlobalDedupStore:
         if batch:
             self._bulk_insert(batch)
 
-    def _bulk_insert(self, batch: list[tuple[str, tuple[int, ...]]]) -> None:
+    def _bulk_insert(self, batch: list[tuple[str, tuple[int, ...], str | None]]) -> None:
         if not batch:
             return
         conn = self._get_conn()

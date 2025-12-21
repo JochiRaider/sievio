@@ -8,6 +8,7 @@ import re
 import unicodedata as _ud
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Literal
 
 from .log import get_logger
 
@@ -102,7 +103,10 @@ def _strip_unsafe_controls(s: str) -> str:
     )
 
 
-def _unicode_normalize(s: str, *, form: str = "NFC") -> str:
+NormalizeForm = Literal["NFC", "NFD", "NFKC", "NFKD"]
+
+
+def _unicode_normalize(s: str, *, form: NormalizeForm = "NFC") -> str:
     """Apply Unicode normalization, falling back to the original string."""
     try:
         return _ud.normalize(form, s)
@@ -152,7 +156,7 @@ def _maybe_repair_cp1252_utf8(text_cp1252: str) -> str:
 def decode_bytes(
     data: bytes,
     *,
-    normalize: str | None = "NFC",
+    normalize: NormalizeForm | None = "NFC",
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> DecodedText:
@@ -221,7 +225,7 @@ def decode_bytes(
     return DecodedText(text, enc_used, "\ufffd" in text)
 
 
-def _postprocess(s: str, *, normalize: str | None, strip_controls: bool) -> str:
+def _postprocess(s: str, *, normalize: NormalizeForm | None, strip_controls: bool) -> str:
     """Normalize newlines, strip controls, and apply Unicode normalization."""
     s = _normalize_newlines(s)
     if strip_controls:
@@ -235,7 +239,7 @@ def read_text(
     path: str | bytes | Path,
     *,
     max_bytes: int | None = None,
-    normalize: str | None = "NFC",
+    normalize: NormalizeForm | None = "NFC",
     strip_controls: bool = True,
     fix_mojibake: bool = True,
 ) -> str:
@@ -251,6 +255,8 @@ def read_text(
     Returns:
         str: Decoded text content; empty on read failure.
     """
+    if isinstance(path, bytes):
+        path = path.decode(errors="replace")
     p = Path(path)
     try:
         with p.open("rb") as f:

@@ -3,13 +3,20 @@
 """Callable adapters for registry-based extension points."""
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, fields, is_dataclass
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 
 from .config import build_config_from_defaults_and_options, validate_options_for_dataclass
 from .factories_sinks import SinkFactoryResult
-from .interfaces import SinkFactory, SinkFactoryContext, Source, SourceFactory, SourceFactoryContext
+from .interfaces import (
+    Sink,
+    SinkFactory,
+    SinkFactoryContext,
+    Source,
+    SourceFactory,
+    SourceFactoryContext,
+)
 
 if TYPE_CHECKING:  # pragma: no cover - typing-only import guard for forward references
     from .config import SinkSpec, SourceSpec
@@ -126,18 +133,20 @@ class CallableSinkFactory(SinkFactory):
         if isinstance(result, SinkFactoryResult):
             return result
         if _is_sinkish(result):
-            sinks = [result]
+            sinks = [cast(Sink, result)]
         else:
             try:
-                sinks = list(result)  # type: ignore[arg-type]
+                sinks = list(cast(Iterable[Sink], result))
             except TypeError as exc:
-                raise TypeError("Callable sink factory must return a Sink or iterable of Sink") from exc
+                raise TypeError(
+                    "Callable sink factory must return a Sink or iterable of Sink"
+                ) from exc
         if not all(_is_sinkish(sink) for sink in sinks):
             raise TypeError("Callable sink factory returned non-Sink entries")
         jsonl_path = ctx.sink_config.primary_jsonl_name or ""
         return SinkFactoryResult(
             jsonl_path=str(jsonl_path),
-            sinks=sinks,
+            sinks=cast(Sequence[Sink], sinks),
             sink_config=ctx.sink_config,
             metadata={},
         )

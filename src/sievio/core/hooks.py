@@ -103,10 +103,13 @@ class RunSummaryHook(RunLifecycleHook):
                         exc,
                     )
 
+    def on_artifacts(self, artifacts: RunArtifacts, ctx: RunContext) -> None:
+        return None
+
 
 def _dispatch_finalizers(
     sinks: Sequence[Sink],
-    summary_record: dict[str, Any],
+    summary_record: Mapping[str, Any],
     primary_jsonl: str | None,
     context: Any = None,
 ) -> None:
@@ -149,6 +152,8 @@ class LanguageTaggingMiddleware:
         self._code_det = code_det
 
     def process(self, record: Record) -> Record | None:
+        if not isinstance(record, dict):
+            record = dict(record)
         meta = ensure_meta_dict(record)
         text = record.get("text") or ""
         path_hint = meta.get("path")
@@ -188,6 +193,9 @@ class LanguageTaggingMiddleware:
                     meta.setdefault("lang_score", pred_code.score)
 
         return record
+
+    def __call__(self, record: Record) -> Record | None:
+        return self.process(record)
 
 
 __all__ = ["RunSummaryHook", "RunSummary", "LanguageTaggingMiddleware"]

@@ -51,7 +51,7 @@ class GitHubRepoProfile:
 
 
 
-def run_engine(engine: PipelineEngine) -> dict[str, int]:
+def run_engine(engine: PipelineEngine) -> dict[str, object]:
     """Run a prepared pipeline engine and return primitive stats."""
 
     stats_obj = engine.run()
@@ -64,7 +64,7 @@ def convert(
     config: SievioConfig | PipelineEngine,
     *,
     overrides: PipelineOverrides | None = None,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Convert sources to datasets using a config or prepared engine.
 
     This is the main programmatic entry point for Sievio. When
@@ -84,7 +84,7 @@ def convert(
             applied during plan construction when a config is provided.
 
     Returns:
-        Dict[str, int]: Aggregate statistics for the completed run.
+        Dict[str, object]: Aggregate statistics for the completed run.
     """
     if isinstance(config, PipelineEngine):
         return run_engine(config)
@@ -246,7 +246,7 @@ def convert_local_dir(
     *,
     out_prompt: str | Path | None = None,
     base_config: SievioConfig | None = None,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Convert a local directory into a dataset.
 
     Builds a ``SievioConfig`` for a local directory via
@@ -262,7 +262,7 @@ def convert_local_dir(
             clone and extend.
 
     Returns:
-        Dict[str, int]: Aggregate statistics for the completed run.
+        Dict[str, object]: Aggregate statistics for the completed run.
     """
     cfg = make_local_profile(
         root_dir,
@@ -279,7 +279,7 @@ def convert_github(
     *,
     out_prompt: str | Path | None = None,
     base_config: SievioConfig | None = None,
-) -> dict[str, int]:
+) -> dict[str, object]:
     """Convert a GitHub repository into a dataset.
 
     Builds a ``SievioConfig`` for a GitHub repository via
@@ -294,7 +294,7 @@ def convert_github(
             clone and extend.
 
     Returns:
-        Dict[str, int]: Aggregate statistics for the completed run.
+        Dict[str, object]: Aggregate statistics for the completed run.
     """
     cfg = make_github_profile(
         url,

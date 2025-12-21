@@ -15,7 +15,7 @@ class LinguaLanguageDetector:
 
     def __init__(self, languages: Sequence[str] | None = None) -> None:
         try:
-            from lingua import Language, LanguageDetectorBuilder  # type: ignore
+            from lingua import IsoCode639_1, Language, LanguageDetectorBuilder
         except Exception as exc:  # pragma: no cover - optional dependency
             raise ImportError(
                 "Lingua backend requires the 'lingua-language-detector' package."
@@ -25,9 +25,10 @@ class LinguaLanguageDetector:
             lang_objs = []
             for code in languages:
                 try:
-                    lang_objs.append(Language.from_iso_code_639_1(code))  # type: ignore[attr-defined]
+                    iso = IsoCode639_1[code.upper()]
                 except Exception:
                     continue
+                lang_objs.append(Language.from_iso_code_639_1(iso))
             if lang_objs:
                 builder = LanguageDetectorBuilder.from_languages(*lang_objs)
             else:

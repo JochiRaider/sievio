@@ -9,7 +9,7 @@ import os
 import xml.etree.ElementTree as ET
 from collections.abc import Iterable
 from io import BytesIO
-from typing import Any
+from typing import Any, Protocol, cast
 
 from Evtx.Evtx import Evtx  # python-evtx
 
@@ -319,8 +319,14 @@ def handle_evtx(
             )
 
 
-handle_evtx.cpu_intensive = True
-handle_evtx.preferred_executor = "process"
+class _BytesHandlerAttrs(Protocol):
+    cpu_intensive: bool
+    preferred_executor: str
+
+
+_handler = cast(_BytesHandlerAttrs, handle_evtx)
+_handler.cpu_intensive = True
+_handler.preferred_executor = "process"
 
 # Register default bytes handler
 try:

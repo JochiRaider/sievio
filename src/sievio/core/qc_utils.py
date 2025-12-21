@@ -19,7 +19,7 @@ import zlib
 from collections import defaultdict, deque
 from collections.abc import Iterable
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, TextIO
+from typing import TYPE_CHECKING, Any, TextIO, cast
 
 if TYPE_CHECKING:  # pragma: no cover
     from .config import QCHeuristics
@@ -52,23 +52,26 @@ __all__ = [
 
 
 # ---------- Optional deps (silently degrade if missing) ----------
+tiktoken: Any | None
+_ENC: Any | None
 try:
-    import tiktoken
+    import tiktoken as _tiktoken
 
+    tiktoken = _tiktoken
     _ENC = tiktoken.get_encoding("cl100k_base")
 except Exception:
     tiktoken = None
     _ENC = None
 
 try:
-    import yaml  # for YAML parse check
+    import yaml  # type: ignore[import-untyped]  # for YAML parse check
 except Exception:
     yaml = None
 
 _HF_OK = False
 try:
-    import torch  # type: ignore
-    from transformers import AutoModelForCausalLM, AutoTokenizer  # type: ignore
+    import torch
+    from transformers import AutoModelForCausalLM, AutoTokenizer
 
     _HF_OK = True
 except Exception:
@@ -111,8 +114,8 @@ def open_jsonl_maybe_gz(path: str | os.PathLike[str]) -> TextIO:
     """
     p = Path(path)
     if p.suffix.lower() == ".gz":
-        return gzip.open(p, "rt", encoding="utf-8")
-    return open(p, encoding="utf-8")
+        return cast(TextIO, gzip.open(p, "rt", encoding="utf-8"))
+    return cast(TextIO, open(p, encoding="utf-8"))
 
 
 def open_jsonl_output_maybe_gz(path: str | os.PathLike[str], mode: str = "a") -> TextIO:
@@ -128,8 +131,8 @@ def open_jsonl_output_maybe_gz(path: str | os.PathLike[str], mode: str = "a") ->
     """
     p = Path(path)
     if p.suffix.lower() == ".gz":
-        return gzip.open(p, f"{mode}t", encoding="utf-8")
-    return open(p, mode, encoding="utf-8")
+        return cast(TextIO, gzip.open(p, f"{mode}t", encoding="utf-8"))
+    return cast(TextIO, open(p, mode, encoding="utf-8"))
 
 
 def target_band(lang: str, *, heuristics: QCHeuristics | None = None) -> tuple[int, int]:
@@ -751,9 +754,9 @@ class PerplexityModel:
             max_len (int): Maximum context length for sliding-window scoring.
             stride (int): Overlap stride for perplexity computation.
         """
+        self.model: Any | None = None
+        self.tok: Any | None = None
         if not _HF_OK:
-            self.model = None
-            self.tok = None
             return
         self.tok = AutoTokenizer.from_pretrained(
             model_id,
@@ -765,7 +768,6 @@ class PerplexityModel:
             if hasattr(torch, dtype)
             else None
         )
-        # type: ignore[name-defined]
         model_kwargs = {"local_files_only": local_files_only}
         if dtype_value is not None:
             model_kwargs["dtype"] = dtype_value
@@ -778,8 +780,9 @@ class PerplexityModel:
             model_kwargs["torch_dtype"] = dtype_value
             self.model = AutoModelForCausalLM.from_pretrained(model_id, **model_kwargs)
         dev = device if device in ("cuda", "cpu") else "cpu"
-        self.model.to(dev)
-        self.model.eval()
+        model = cast(Any, self.model)
+        model.to(dev)
+        model.eval()
         self.max_len = max_len
         self.stride = stride
 
@@ -787,7 +790,7 @@ class PerplexityModel:
         """Compute perplexity for text, returning inf if unavailable."""
         if self.model is None or self.tok is None:
             return float("inf")
-        import torch  # type: ignore
+        import torch
 
         ids = self.tok.encode(text, add_special_tokens=False)
         if not ids:

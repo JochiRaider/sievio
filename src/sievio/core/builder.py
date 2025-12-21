@@ -13,11 +13,11 @@ from collections.abc import Callable, Iterable, Sequence
 from copy import deepcopy
 from dataclasses import dataclass, replace
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from .chunk import ChunkPolicy
 from .concurrency import resolve_pipeline_executor_config
-from .config import QCConfig, QCMode, RunMetadata, SievioConfig, SinkConfig
+from .config import QCConfig, QCMode, RunMetadata, SafetyConfig, SievioConfig, SinkConfig
 from .convert import DefaultExtractor
 from .dataset_card import DatasetCardHook
 from .factories_qc import make_qc_scorer, make_safety_scorer
@@ -25,6 +25,7 @@ from .factories_sources import make_bytes_handlers
 from .hooks import LanguageTaggingMiddleware, RunSummaryHook
 from .interfaces import (
     FileExtractor,
+    FileMiddleware,
     InlineScreener,
     QualityScorer,
     Record,
@@ -47,13 +48,13 @@ from .language_id import (
 )
 from .log import get_logger
 from .qc_controller import (
-    gate_policy_for_quality,
-    gate_policy_for_safety,
     InlineQCHook,
     InlineScreeningController,
     QCSummaryTracker,
     QualityInlineScreener,
     SafetyInlineScreener,
+    gate_policy_for_quality,
+    gate_policy_for_safety,
 )
 from .qc_post import PostQCHook, PostSafetyHook
 from .records import build_run_header_record
@@ -132,9 +133,9 @@ class PipelineOverrides:
 
 # Public type aliases kept here to avoid importing middleware protocols
 # at runtime in hot paths while still giving callers precise signatures.
-RecordMiddlewareLike = "RecordMiddleware | Callable[[Record], Optional[Record]]"
-FileMiddlewareLike = (
-    "FileMiddleware | Callable[[Any, Iterable[Record]], Optional[Iterable[Record]]]"
+RecordMiddlewareLike: TypeAlias = RecordMiddleware | Callable[[Record], Record | None]
+FileMiddlewareLike: TypeAlias = (
+    FileMiddleware | Callable[[Any, Iterable[Record]], Iterable[Record] | None]
 )
 
 
@@ -667,7 +668,7 @@ def _prepare_qc(
     scorer_for_csv: QualityScorer | None = None
     post_qc_scorer: QualityScorer | None = None
     post_safety_scorer: SafetyScorer | None = None
-    safety_cfg = getattr(qc_cfg, "safety", None)
+    safety_cfg: SafetyConfig | None = qc_cfg.safety
     if safety_cfg is not None:
         try:
             safety_cfg.normalize_mode()
@@ -683,7 +684,7 @@ def _prepare_qc(
         qc_cfg.mode = QCMode.OFF
         qc_cfg.scorer = None
         if safety_cfg is not None:
-            safety_cfg.scorer = None  # type: ignore[attr-defined]
+            safety_cfg.scorer = None
         return QCPreparationResult(
             qc_cfg=qc_cfg,
             hooks=tuple(),
@@ -706,18 +707,19 @@ def _prepare_qc(
     )
 
     if safety_requested:
+        assert safety_cfg is not None
         safety_scorer = (
             overrides.safety_scorer
             if overrides and overrides.safety_scorer is not None
-            else make_safety_scorer(safety_cfg, registry=safety_scorer_registry)  # type: ignore[arg-type]
+            else make_safety_scorer(safety_cfg, registry=safety_scorer_registry)
         )
         if safety_scorer is None:
             log.warning(
                 "Safety requested but safety scorer unavailable; disabling safety for this run."
             )
             try:
-                safety_cfg.enabled = False  # type: ignore[assignment]
-                safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]
+                safety_cfg.enabled = False
+                safety_cfg.mode = QCMode.OFF
             except Exception:
                 pass
 
@@ -751,7 +753,7 @@ def _prepare_qc(
         screeners.append(
             QualityInlineScreener(
                 cfg=qc_cfg,
-                scorer=qc_scorer,  # type: ignore[arg-type]
+                scorer=qc_scorer,
                 summary=tracker,
                 logger=log,
                 enforce_drops=qc_gate_policy.enforce_drops,
@@ -768,10 +770,15 @@ def _prepare_qc(
     )
     safety_post = safety_cfg and safety_cfg.enabled and safety_cfg.mode == QCMode.POST
     if safety_inline and safety_scorer is not None:
-        enforce_drops = safety_gate_policy.enforce_drops if safety_gate_policy is not None else False
+        assert safety_cfg is not None
+        enforce_drops = (
+            safety_gate_policy.enforce_drops
+            if safety_gate_policy is not None
+            else False
+        )
         screeners.append(
             SafetyInlineScreener(
-                cfg=safety_cfg,  # type: ignore[arg-type]
+                cfg=safety_cfg,
                 scorer=safety_scorer,
                 summary=tracker,
                 logger=log,
@@ -818,12 +825,13 @@ def _prepare_qc(
             hooks.append(PostQCHook(qc_cfg, post_qc_scorer, executor_hint=None))
 
     if safety_post:
+        assert safety_cfg is not None
         post_safety_scorer = (
             safety_scorer
             or make_safety_scorer(
                 safety_cfg,
                 new_instance=True,
-                registry=safety_scorer_registry,  # type: ignore[arg-type]
+                registry=safety_scorer_registry,
             )
         )
         if post_safety_scorer is None:
@@ -832,16 +840,16 @@ def _prepare_qc(
                 "skipping safety for this run."
             )
             try:
-                safety_cfg.enabled = False  # type: ignore[assignment]
-                safety_cfg.mode = QCMode.OFF  # type: ignore[assignment]
+                safety_cfg.enabled = False
+                safety_cfg.mode = QCMode.OFF
             except Exception:
                 pass
         else:
-            hooks.append(PostSafetyHook(safety_cfg, post_safety_scorer, executor_hint=None))  # type: ignore[arg-type]
+            hooks.append(PostSafetyHook(safety_cfg, post_safety_scorer, executor_hint=None))
 
     qc_cfg.scorer = qc_scorer
     if safety_cfg is not None:
-        safety_cfg.scorer = safety_scorer  # type: ignore[attr-defined]
+        safety_cfg.scorer = safety_scorer
     return QCPreparationResult(
         qc_cfg=qc_cfg,
         hooks=tuple(hooks),
@@ -885,10 +893,7 @@ def _strip_runtime_from_spec(cfg: SievioConfig) -> None:
     cfg.pipeline.file_extractor = None
     cfg.pipeline.extractors = ()
     cfg.qc.scorer = None
-    try:
-        cfg.qc.safety.scorer = None  # type: ignore[attr-defined]
-    except Exception:
-        pass
+    cfg.qc.safety.scorer = None
 
 
 def build_engine(

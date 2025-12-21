@@ -14,6 +14,7 @@ import urllib.parse
 import urllib.request
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from typing import Any, Protocol, cast
 
 from .log import get_logger
 
@@ -25,6 +26,18 @@ from .log import get_logger
 log = get_logger(__name__)
 
 RequestLike = str | urllib.request.Request
+IPAddress = ipaddress.IPv4Address | ipaddress.IPv6Address
+
+
+class _HTTPConnectionAttrs(Protocol):
+    _create_connection: Callable[..., socket.socket]
+    source_address: Any
+
+
+class _HTTPSConnectionAttrs(_HTTPConnectionAttrs, Protocol):
+    _tunnel_host: Any | None
+    _tunnel: Callable[[], None] | None
+    _context: ssl.SSLContext | None
 
 
 class PrivateAddressBlocked(RuntimeError):
@@ -43,9 +56,10 @@ class _SafeHTTPConnection(http.client.HTTPConnection):
         self._resolved_ip = resolved_ip
 
     def connect(self) -> None:
-        self.sock = self._create_connection(
-            (self._resolved_ip, self.port), self.timeout, self.source_address
-        )
+        conn = cast(_HTTPConnectionAttrs, self)
+        create_conn = conn._create_connection
+        source_address = conn.source_address
+        self.sock = create_conn((self._resolved_ip, self.port), self.timeout, source_address)
 
 
 class _SafeHTTPSConnection(http.client.HTTPSConnection):
@@ -57,12 +71,28 @@ class _SafeHTTPSConnection(http.client.HTTPSConnection):
         self._sni_host = host
 
     def connect(self) -> None:
-        self.sock = self._create_connection(
-            (self._resolved_ip, self.port), self.timeout, self.source_address
-        )
-        if self._tunnel_host:
-            self._tunnel()
-        self.sock = self._context.wrap_socket(self.sock, server_hostname=self._sni_host)
+        conn = cast(_HTTPSConnectionAttrs, self)
+        create_conn = conn._create_connection
+        source_address = conn.source_address
+        self.sock = create_conn((self._resolved_ip, self.port), self.timeout, source_address)
+        try:
+            tunnel_host = conn._tunnel_host
+        except AttributeError:
+            tunnel_host = None
+        if tunnel_host:
+            try:
+                tunnel = conn._tunnel
+            except AttributeError:
+                tunnel = None
+            if callable(tunnel):
+                tunnel()
+        try:
+            context = conn._context
+        except AttributeError:
+            context = None
+        if context is None:
+            raise RuntimeError("HTTPS connection missing SSL context")
+        self.sock = context.wrap_socket(self.sock, server_hostname=self._sni_host)
 
 
 @dataclass(frozen=True)
@@ -124,7 +154,7 @@ class SafeHttpResponse:
 class SafeHttpPolicy:
     """Policy hooks for SafeHttpClient decisions."""
 
-    allow_ip: Callable[[ipaddress._BaseAddress], bool]
+    allow_ip: Callable[[IPAddress], bool]
     allow_redirect: Callable[[str | None, str | None], bool]
     allow_redirect_scheme: Callable[[str, str], bool]
     redirect_headers: Callable[
@@ -133,7 +163,7 @@ class SafeHttpPolicy:
     ]
 
 
-def _default_allow_ip(addr: ipaddress._BaseAddress) -> bool:
+def _default_allow_ip(addr: IPAddress) -> bool:
     """Allow only globally routable unicast addresses."""
     if not addr.is_global:
         return False
@@ -256,12 +286,13 @@ class SafeHttpClient:
         seen: set[str] = set()
         for _family, _stype, _proto, _canon, sockaddr in infos:
             ip = sockaddr[0]
-            addr = ipaddress.ip_address(ip)
+            ip_str = str(ip)
+            addr = cast(IPAddress, ipaddress.ip_address(ip_str))
             if not self._policy.allow_ip(addr):
                 continue
-            if ip not in seen:
-                seen.add(ip)
-                ips.append(ip)
+            if ip_str not in seen:
+                seen.add(ip_str)
+                ips.append(ip_str)
         if not ips:
             target = f" for {url}" if url else ""
             raise PrivateAddressBlocked(
@@ -351,9 +382,10 @@ class SafeHttpClient:
         Returns:
             SafeHttpResponse: Response wrapper owning the connection.
         """
-        req_obj = request
         if isinstance(request, str):
-            req_obj = urllib.request.Request(request)
+            req_obj: urllib.request.Request = urllib.request.Request(request)
+        else:
+            req_obj = request
         explicit_method = getattr(req_obj, "method", None)
         orig_data = getattr(req_obj, "data", None)
         payload = data if data is not None else orig_data
@@ -407,9 +439,10 @@ class SafeHttpClient:
         Raises:
             urllib.error.URLError: If all attempts fail.
         """
-        req_obj = request
         if isinstance(request, str):
-            req_obj = urllib.request.Request(request)
+            req_obj: urllib.request.Request = urllib.request.Request(request)
+        else:
+            req_obj = request
         explicit_method = getattr(req_obj, "method", None)
         orig_data = getattr(req_obj, "data", None)
         payload = data if data is not None else orig_data

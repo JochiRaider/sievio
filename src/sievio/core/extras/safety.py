@@ -5,7 +5,7 @@ from __future__ import annotations
 import ipaddress
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any
+from typing import Any, cast
 
 from ..interfaces import SafetyScorer
 from ..log import get_logger
@@ -127,10 +127,20 @@ class RegexSafetyScorer(SafetyScorer):
                     yield self.score_record({"text": line})
         except Exception as exc:  # pragma: no cover - defensive fallback
             log.warning("Safety scorer could not read %s: %s", path, exc)
-            return []
+            return
 
     def clone_for_parallel(self) -> RegexSafetyScorer:
-        return RegexSafetyScorer(**self._init_kwargs)
+        return RegexSafetyScorer(
+            allowed_licenses=cast(
+                Sequence[str] | None, self._init_kwargs.get("allowed_licenses")
+            ),
+            toxicity_terms=cast(
+                Sequence[str] | None, self._init_kwargs.get("toxicity_terms")
+            ),
+            toxicity_threshold=cast(
+                float | None, self._init_kwargs.get("toxicity_threshold")
+            ),
+        )
 
     def reset_state(self) -> None:
         return None
@@ -166,7 +176,14 @@ class DefaultSafetyScorerFactory:
     id = "default_safety"
 
     def build(self, options: Mapping[str, Any]) -> SafetyScorer:
-        return RegexSafetyScorer(**dict(options or {}))
+        allowed_licenses = options.get("allowed_licenses")
+        toxicity_terms = options.get("toxicity_terms")
+        toxicity_threshold = options.get("toxicity_threshold")
+        return RegexSafetyScorer(
+            allowed_licenses=cast(Sequence[str] | None, allowed_licenses),
+            toxicity_terms=cast(Sequence[str] | None, toxicity_terms),
+            toxicity_threshold=cast(float | None, toxicity_threshold),
+        )
 
 
 try:

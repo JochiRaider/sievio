@@ -82,7 +82,7 @@ class DatasetCardHook(RunLifecycleHook):
 def _package_version() -> str:
     """Return the installed sievio version string."""
     try:
-        from importlib.metadata import version  # type: ignore
+        from importlib.metadata import version
 
         return version("sievio")
     except Exception:
@@ -635,7 +635,7 @@ def build_card_fragment_for_run(
 ) -> CardFragment:
     """Build a fragment describing one processed JSONL output file."""
     primary_jsonl_override: str | None = None
-    if isinstance(stats, RunSummaryView) or is_dataclass(stats):
+    if isinstance(stats, RunSummaryView) or (is_dataclass(stats) and not isinstance(stats, type)):
         stats_dict = asdict(stats)
         primary_jsonl_override = stats_dict.get("primary_jsonl_path")
     else:
@@ -718,7 +718,7 @@ def build_card_fragment_for_run(
 
 def write_card_fragment_for_run(
     cfg: SievioConfig,
-    stats: PipelineStats | Mapping[str, Any],
+    stats: PipelineStats | RunSummaryView | Mapping[str, Any],
     *,
     split: str | None = None,
 ) -> Path:

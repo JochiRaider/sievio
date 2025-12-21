@@ -7,8 +7,9 @@ import argparse
 import glob
 import json
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
+from typing import Any
 
 from ..core.config import SievioConfig, load_config_from_path
 from ..core.dataset_card import build_dataset_card_from_fragments
@@ -22,11 +23,17 @@ from .runner import (
     convert_local_dir,
 )
 
+JSONLQualityScorer: type | None
+score_jsonl_to_csv: Callable[..., Any] | None
 try:  # pragma: no cover - optional dependency
-    from ..core.extras.qc import JSONLQualityScorer, score_jsonl_to_csv
+    from ..core.extras.qc import JSONLQualityScorer as _JSONLQualityScorer
+    from ..core.extras.qc import score_jsonl_to_csv as _score_jsonl_to_csv
 except Exception:  # pragma: no cover
-    JSONLQualityScorer = None  # type: ignore[assignment]
-    score_jsonl_to_csv = None  # type: ignore[assignment]
+    JSONLQualityScorer = None
+    score_jsonl_to_csv = None
+else:
+    JSONLQualityScorer = _JSONLQualityScorer
+    score_jsonl_to_csv = _score_jsonl_to_csv
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -270,7 +277,7 @@ def _dispatch(args: argparse.Namespace) -> int:
         cfg.qc.parallel_post = bool(args.parallel)
         cfg.qc.write_csv = False  # handled separately for explicit --csv
         try:
-            summary = _run_post_qc(str(jsonl_path), cfg)
+            summary = _run_post_qc(str(jsonl_path), cfg, scorer=None)
         except Exception as exc:  # noqa: BLE001
             msg = (
                 "QC extras are required for this command."
