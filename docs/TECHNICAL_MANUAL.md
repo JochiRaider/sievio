@@ -211,7 +211,7 @@ This section explains the *operator meaning* of major config groups and when to 
 ### Most common knobs
 | Option | Effect | Use when |
 | --- | --- | --- |
-| `pipeline.executor_kind` (`auto|thread|process`) | Concurrency strategy | Runs are CPU-heavy (bias to `process`) or I/O-heavy (bias to `thread`) |
+| `pipeline.executor_kind` (`auto\|thread\|process`) | Concurrency strategy | Runs are CPU-heavy (bias to `process`) or I/O-heavy (bias to `thread`) |
 | `pipeline.max_workers` | Parallelism | Throughput tuning / resource caps |
 | `pipeline.submit_window` | In-flight work bound | Memory pressure / large-file workloads |
 | `chunk.policy.target_tokens` / `overlap_tokens` | Chunk size / redundancy | Match model context window / dataset sizing |
