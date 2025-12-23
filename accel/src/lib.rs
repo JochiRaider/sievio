@@ -1,11 +1,27 @@
 use blake2::digest::{Update, VariableOutput};
 use blake2::Blake2bVar;
 use pyo3::prelude::*;
+use pyo3::exceptions::PyRuntimeError;
 
 const DEFAULT_SIMHASH_MAX_TOKENS: usize = 20000;
 const DEFAULT_MINHASH_MAX_SHINGLES: usize = 20000;
 const PRIME32: u64 = 4294967311;
 const ADLER_MOD: u32 = 65521;
+
+#[derive(Debug)]
+enum HashError {
+    Init,
+    Finalize,
+}
+
+impl std::fmt::Display for HashError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            HashError::Init => write!(f, "blake2b init failed"),
+            HashError::Finalize => write!(f, "blake2b finalize failed"),
+        }
+    }
+}
 
 fn is_ascii_alpha(b: u8) -> bool {
     (b'A'..=b'Z').contains(&b) || (b'a'..=b'z').contains(&b)
@@ -70,17 +86,33 @@ fn is_stopword(token: &[u8]) -> bool {
     )
 }
 
-fn token_hash64(token: &[u8]) -> u64 {
-    let mut hasher = Blake2bVar::new(8).expect("blake2b init");
+fn token_hash64(token: &[u8]) -> Result<u64, HashError> {
+    let mut hasher = Blake2bVar::new(8).map_err(|_| HashError::Init)?;
     hasher.update(token);
     let mut out = [0u8; 8];
-    hasher.finalize_variable(&mut out).expect("blake2b finalize");
-    u64::from_le_bytes(out)
+    hasher
+        .finalize_variable(&mut out)
+        .map_err(|_| HashError::Finalize)?;
+    Ok(u64::from_le_bytes(out))
 }
 
-#[pyfunction]
-#[pyo3(signature = (text, max_tokens=None))]
-fn simhash64(text: &str, max_tokens: Option<usize>) -> PyResult<u64> {
+fn normalize_max_tokens(max_tokens: Option<i64>) -> Option<usize> {
+    match max_tokens {
+        None => Some(DEFAULT_SIMHASH_MAX_TOKENS),
+        Some(val) if val <= 0 => Some(0),
+        Some(val) => Some(usize::try_from(val).unwrap_or(usize::MAX)),
+    }
+}
+
+fn normalize_max_shingles(max_shingles: Option<i64>) -> Option<usize> {
+    match max_shingles {
+        None => Some(DEFAULT_MINHASH_MAX_SHINGLES),
+        Some(val) if val <= 0 => None,
+        Some(val) => Some(usize::try_from(val).unwrap_or(usize::MAX)),
+    }
+}
+
+fn simhash64_impl(text: &str, max_tokens: Option<usize>) -> Result<u64, HashError> {
     let limit = max_tokens.unwrap_or(DEFAULT_SIMHASH_MAX_TOKENS);
     if limit == 0 {
         return Ok(0);
@@ -107,7 +139,7 @@ fn simhash64(text: &str, max_tokens: Option<usize>) -> PyResult<u64> {
                 }
             }
             if token.len() >= 4 && !is_stopword(&token) {
-                let h = token_hash64(&token);
+                let h = token_hash64(&token)?;
                 for bit in 0..64 {
                     if (h >> bit) & 1 == 1 {
                         v[bit] += 1;
@@ -134,6 +166,15 @@ fn simhash64(text: &str, max_tokens: Option<usize>) -> PyResult<u64> {
     Ok(out)
 }
 
+#[pyfunction]
+#[pyo3(signature = (text, max_tokens=None))]
+fn simhash64(py: Python, text: &str, max_tokens: Option<i64>) -> PyResult<u64> {
+    let text_owned = text.to_owned();
+    let limit = normalize_max_tokens(max_tokens);
+    let result = py.allow_threads(|| simhash64_impl(&text_owned, limit));
+    result.map_err(|err| PyRuntimeError::new_err(err.to_string()))
+}
+
 fn adler32(data: &[u8]) -> u32 {
     let mut s1: u32 = 1;
     let mut s2: u32 = 0;
@@ -147,77 +188,79 @@ fn adler32(data: &[u8]) -> u32 {
 #[pyfunction]
 #[pyo3(signature = (text, k, coeffs, max_shingles=None))]
 fn minhash_signature_with_coeffs(
+    py: Python,
     text: &str,
     k: usize,
     coeffs: Vec<(u64, u64)>,
-    max_shingles: Option<usize>,
+    max_shingles: Option<i64>,
 ) -> PyResult<Vec<u64>> {
-    if k == 0 {
-        return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
-    }
-
-    let max_shingles = match max_shingles {
-        None => Some(DEFAULT_MINHASH_MAX_SHINGLES),
-        Some(0) => None,
-        Some(val) => Some(val),
-    };
-
-    let text_char_len = text.chars().count();
-    if text_char_len < k {
-        return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
-    }
-
-    let mut truncated: Option<String> = None;
-    if let Some(limit) = max_shingles {
-        let char_limit = limit.saturating_add(k.saturating_sub(1));
-        if text_char_len > char_limit {
-            truncated = Some(text.chars().take(char_limit).collect::<String>());
+    let text_owned = text.to_owned();
+    let max_shingles = normalize_max_shingles(max_shingles);
+    let result = py.allow_threads(|| {
+        if k == 0 {
+            return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
         }
-    }
 
-    let text_ref = truncated.as_deref().unwrap_or(text);
-    let mut bytes = text_ref.as_bytes();
-    if bytes.len() < k {
-        return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
-    }
+        let text_char_len = text_owned.chars().count();
+        if text_char_len < k {
+            return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
+        }
 
-    if let Some(limit) = max_shingles {
-        let total = bytes.len().saturating_sub(k).saturating_add(1);
-        if total > limit {
-            let byte_limit = limit.saturating_add(k.saturating_sub(1));
-            if bytes.len() > byte_limit {
-                bytes = &bytes[..byte_limit];
+        let mut truncated: Option<String> = None;
+        if let Some(limit) = max_shingles {
+            let char_limit = limit.saturating_add(k.saturating_sub(1));
+            if text_char_len > char_limit {
+                truncated = Some(text_owned.chars().take(char_limit).collect::<String>());
             }
         }
-    }
 
-    let mut shingles = std::collections::HashSet::new();
-    if bytes.len() >= k {
-        for i in 0..=bytes.len() - k {
-            let gram = &bytes[i..i + k];
-            if !gram.iter().any(|&c| c > 32) {
-                continue;
-            }
-            shingles.insert(adler32(gram));
+        let text_ref = truncated.as_deref().unwrap_or(&text_owned);
+        let mut bytes = text_ref.as_bytes();
+        if bytes.len() < k {
+            return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
         }
-    }
 
-    if shingles.is_empty() {
-        return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
-    }
-
-    let mut sig = vec![0xFFFF_FFFFu64; coeffs.len()];
-    for x in shingles {
-        let x64 = x as u64;
-        for (idx, (a, b)) in coeffs.iter().enumerate() {
-            let v = (a.wrapping_mul(x64).wrapping_add(*b)) % PRIME32;
-            if v < sig[idx] {
-                sig[idx] = v;
+        if let Some(limit) = max_shingles {
+            let total = bytes.len().saturating_sub(k).saturating_add(1);
+            if total > limit {
+                let byte_limit = limit.saturating_add(k.saturating_sub(1));
+                if bytes.len() > byte_limit {
+                    bytes = &bytes[..byte_limit];
+                }
             }
         }
-    }
 
-    Ok(sig)
+        let mut shingles = std::collections::HashSet::new();
+        if bytes.len() >= k {
+            for i in 0..=bytes.len() - k {
+                let gram = &bytes[i..i + k];
+                if !gram.iter().any(|&c| c > 32) {
+                    continue;
+                }
+                shingles.insert(adler32(gram));
+            }
+        }
+
+        if shingles.is_empty() {
+            return Ok(vec![0xFFFF_FFFF; coeffs.len()]);
+        }
+
+        let mut sig = vec![0xFFFF_FFFFu64; coeffs.len()];
+        for x in shingles {
+            let x64 = x as u64;
+            for (idx, (a, b)) in coeffs.iter().enumerate() {
+                let v = ((u128::from(*a) * u128::from(x64)) + u128::from(*b))
+                    % u128::from(PRIME32);
+                let v = v as u64;
+                if v < sig[idx] {
+                    sig[idx] = v;
+                }
+            }
+        }
+
+        Ok(sig)
+    });
+    result.map_err(|err: HashError| PyRuntimeError::new_err(err.to_string()))
 }
 
 #[pymodule]

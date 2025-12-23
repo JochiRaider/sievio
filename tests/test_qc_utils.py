@@ -44,6 +44,12 @@ def test_simhash64_single_token_matches_hash():
     assert simhash64(text) == expected
 
 
+def test_simhash64_non_positive_max_tokens_returns_zero():
+    text = "Token"
+    assert simhash64(text, max_tokens=0) == 0
+    assert simhash64(text, max_tokens=-5) == 0
+
+
 def test_open_jsonl_output_maybe_gz_normalizes_mode_and_rejects_binary(tmp_path):
     path = tmp_path / "out.jsonl.gz"
     with qc_utils.open_jsonl_output_maybe_gz(path, "a") as fp:
@@ -102,6 +108,18 @@ def test_minhash_signature_caps_shingles_consistently():
         n_perm=32,
         max_shingles=max_shingles,
     ) == minhash_signature_for_text(truncated, k=k, n_perm=32, max_shingles=None)
+
+
+def test_minhash_signature_treats_non_positive_max_shingles_as_none():
+    text = "abcd " * 200
+    k = 4
+    n_perm = 32
+    assert minhash_signature_for_text(
+        text,
+        k=k,
+        n_perm=n_perm,
+        max_shingles=-1,
+    ) == minhash_signature_for_text(text, k=k, n_perm=n_perm, max_shingles=None)
 
 
 def test_minhash_signature_is_deterministic_under_threads(monkeypatch):
