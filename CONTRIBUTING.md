@@ -17,7 +17,7 @@ Use this guide for day-to-day development. For architecture rules, read `AGENTS.
 - **Tests/style:** Add tests under `tests/` with `pytest`; keep typing/style via `mypy` and `ruff`.
 
 ## Extending Sievio
-- **New Source/Sink:** Implement the `Source`/`Sink` protocol, register a factory with `SourceRegistry`/`SinkRegistry` (core or plugin), and add a `[[sources.specs]]` / `[[sinks.specs]]` example.
+- **New Source/Sink:** Implement the `Source`/`Sink` protocol, register a factory with `SourceRegistry`/`SinkRegistry` (core or plugin), and add a `[[sources.specs]]` / `[[sinks.specs]]` example. For lightweight extensions, use `SourceRegistry.register_callable` / `SinkRegistry.register_callable` or the `@registry.source` / `@registry.sink` decorators to adapt a callable into a factory.
 - **New bytes handler:** Register `(sniff, handler)` with `BytesHandlerRegistry` for binary formats. Handlers return iterable records given bytes, relative path, optional `RepoContext`, and optional `ChunkPolicy`.
 - **Custom QC scorer:** Implement `QualityScorer` or a factory (`id`, `build(cfg: QCConfig)`), register with `quality_scorer_registry` or via a plugin. Leave `qc.scorer` unset in declarative configs; use registries instead.
 - **Plugins:** Publish an entry point under `sievio.plugins` that receives registries and performs registrations. For finer control, pass a `RegistryBundle` to `build_pipeline_plan`.

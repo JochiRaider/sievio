@@ -1,6 +1,6 @@
 # Deployment & Sharding
 
-Operational guidance for running Sievio at scale. For API details, see `docs/TECHNICAL_MANUAL.md`; for QC specifics, see `docs/QUALITY_CONTROL.md`.
+Operational guidance for running Sievio at scale. For API details, see `TECHNICAL_MANUAL.md`; for QC specifics, see `QUALITY_CONTROL.md`.
 
 ## Sharded runs
 1. **Generate shard configs**  
@@ -36,7 +36,7 @@ Operational guidance for running Sievio at scale. For API details, see `docs/TEC
 ## Observability
 - CLI emits JSON stats to stdout; redirect per shard if you plan to merge stats.
 - Run summary records are appended to the primary JSONL; the last record carries config/stats/QC summary.
-- QC/safety post passes can emit CSV/Parquet sidecars (see `docs/QUALITY_CONTROL.md`).
+- QC/safety post passes can emit CSV/Parquet sidecars (see `QUALITY_CONTROL.md`).
 
 ## Runtime knobs
 - Concurrency: `pipeline.executor_kind` (`auto|thread|process`), `max_workers`, and `submit_window`.

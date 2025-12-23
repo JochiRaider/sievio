@@ -52,7 +52,7 @@ Architecture overview (the “stable spine”):
 
 **Config (`SievioConfig`) → Builder (plan/runtime) → Pipeline engine (sources → decode → chunk → records → sinks)**
 
-If you want the full architecture and module map, start with `docs/TECHNICAL_MANUAL.md`.
+If you want the full architecture and module map, start with `LLMS.md`. For an operator runbook (run/tune/debug), see `docs/TECHNICAL_MANUAL.md`.
 
 ## Getting started
 

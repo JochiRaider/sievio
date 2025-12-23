@@ -14,7 +14,7 @@ Sievio’s screening layer evaluates records for quality and safety. It can anno
 - Default signals from `JSONLQualityScorer` (when `[qc]` extras installed): token counts (`len_tok`), ascii ratio, repetition, gopher_quality, perplexity (when a model is configured), near-duplicate hashes/ids, language hints.
 - Safety scorer (`default_safety`) flags regex-based PII/toxicity/license issues; flags are reported in QC summaries and optional `_safety.csv`/`_safety_signals.*` sidecars when safety post mode is used.
 
-## Configuration knobs (see `docs/CONFIGURATION.md` for full list)
+## Configuration knobs (see `CONFIGURATION.md` for full list)
 - `qc.min_score`, `qc.drop_near_dups`, `qc.exact_dedup`, `qc.fail_on_error`.
 - `qc.scorer_id` (None → registry default `jsonl_default`), `qc.scorer_options.heuristics` (tune thresholds), `qc.scorer_options.global_dedup` (MinHash store path/read_only).
 - `qc.write_csv`, `qc.csv_suffix`, `qc.write_signals_sidecar`, `qc.signals_format` (`csv|parquet`), `qc.signals_suffix`.
