@@ -40,28 +40,28 @@ Why Sievio?
 At a glance:
 
 ```text
-Configuration & Plan                    Pipeline Engine (The Loop)                         Outputs
-    (Declarative -> Runtime)            (Iterate -> Process -> Filter -> Write)
-┌─────────────────────────────┐       ┌────────────────────────────────────────┐      ┌─────────────────┐
-│ SievioConfig (TOML/Py)      │       │                                        │      │                 │
-│  + Registries (Src/Sink/QC) │────┐  │  1. Source (Iterate Items/Bytes)       │      │ Normalized Data │
-│                             │    │  │     ↓                                  │   ┌─>│ [ .jsonl.gz   ] │
-│ [ Builder ] -> PipelinePlan │    │  │  2. Decode (Mojibake/Charset)          │   │  │ [ .parquet    ] │
-└──────────────┬──────────────┘    │  │     ↓                                  │   │  │                 │
-               │                   │  │  3. Chunk (Tokenize/Split)             │   │  └─────────────────┘
-               │                   │  │     ↓                                  │   │
-  Inputs (Source Types)            │  │  4. Record Builder (Metadata/ID)       │   │
-┌──────────────────────────┐       │  │     ↓                                  │   │
-│ • Local Dir / Git Repo   │───────┼─>│  5. Inline QC (Safety/Gating) ─────────┼───┘
-│ • GitHub Zipball         │       │  │     (Drop or Annotate)                 │
-│ • Web PDFs / URLs        │       │  │     ↓                                  │      ┌─────────────────┐
-│ • SQL / CSV / JSONL      │       │  │  6. Sinks (Write to Disk)              │      │ Artifacts       │
-│ • Bytes (PDF/EVTX)       │       │  │     ↓                                  │      │                 │
-└──────────────────────────┘       │  │  7. Stats Aggregation                  │─────>│ [ Dataset Card] │
-                                   │  └────────────────────────────────────────┘      │ [ QC Summary  ] │
-                                   │                                                  │                 │
-                                   │             Post-Run Hooks                       └─────────────────┘
-                                   └───────────────────────────────────────────> (Optional Post-QC/Safety)
+Configuration & Plan                Pipeline Engine (The Loop)                        Outputs
+    (Declarative -> Runtime)        (Iterate -> Process -> Filter -> Write)
+┌─────────────────────────────┐    ┌────────────────────────────────────────┐    ┌─────────────────┐
+│ SievioConfig (TOML/Py)      │    │                                        │    │                 │
+│  + Registries (Src/Sink/QC) │─┐  │  1. Source (Iterate Items/Bytes)       │    │ Normalized Data │
+│                             │ │  │     ↓                                  │ ┌─>│ [ .jsonl.gz   ] │
+│ [ Builder ] -> PipelinePlan │ │  │  2. Decode (Mojibake/Charset)          │ │  │ [ .parquet    ] │
+└──────────────┬──────────────┘ │  │     ↓                                  │ │  │                 │
+               │                │  │  3. Chunk (Tokenize/Split)             │ │  └─────────────────┘
+               │                │  │     ↓                                  │ │
+  Inputs (Source Types)         │  │  4. Record Builder (Metadata/ID)       │ │
+┌──────────────────────────┐    │  │     ↓                                  │ │
+│ • Local Dir / Git Repo   │────┼─>│  5. Inline QC (Safety/Gating) ─────────┼─┘
+│ • GitHub Zipball         │    │  │     (Drop or Annotate)                 │  
+│ • Web PDFs / URLs        │    │  │     ↓                                  │    ┌─────────────────┐
+│ • SQL / CSV / JSONL      │    │  │  6. Sinks (Write to Disk)              │    │ Artifacts       │
+│ • Bytes (PDF/EVTX)       │    │  │     ↓                                  │    │                 │
+└──────────────────────────┘    │  │  7. Stats Aggregation                  │───>│ [ Dataset Card] │
+                                │  └────────────────────────────────────────┘    │ [ QC Summary  ] │
+                                │                                                │                 │
+                                │             Post-Run Hooks                     └─────────────────┘
+                                └─────────────────────────────────────────> (Optional Post-QC/Safety)
 ```
 
 Architecture overview (the “stable spine”):
