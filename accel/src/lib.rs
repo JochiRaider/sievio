@@ -84,6 +84,9 @@ fn is_stopword(token: &[u8]) -> bool {
             | b"based"
             | b"within"
             | b"across"
+            | b"say"
+            | b"her"
+            | b"she"
     )
 }
 
