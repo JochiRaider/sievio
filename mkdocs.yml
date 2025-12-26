@@ -1,0 +1,15 @@
+site_name: sievio
+theme:
+  name: mkdocs
+nav:
+  - Home: index.md
+  - Configuration: CONFIGURATION.md
+  - Contributing: CONTRIBUTING.md
+  - Deployment: DEPLOYMENT.md
+  - Quality Control: QUALITY_CONTROL.md
+  - Technical Manual: TECHNICAL_MANUAL.md
+  - Cookbook:
+      - Overview: cookbook/README.md
+      - Custom PII Scrubbing: cookbook/custom_pii_scrubbing.md
+      - Dedup Post QC: cookbook/dedup_post_qc.md
+      - PDF Ingestion: cookbook/pdf_ingestion.md

@@ -36,15 +36,14 @@ dev = [
   "mypy>=1.10",
   "build>=1.2",
   "twine>=5.1",
+  "mkdocs>=1.6",
+  "maturin>=1.10.2", # Rust add-on toolchain (build-time tooling for PyO3/maturin workflows).
 ]
 
-# Rust add-on toolchain (build-time tooling for PyO3/maturin workflows).
-rust = [
-  "maturin>=1.10.2",
-]
-accel = [
-  "sievio-accel>=0.1.0",
-]
+# Still prototype 
+#accel = [ 
+#  "sievio-accel>=0.1.0",
+#]
 
 tok = ["tiktoken>=0.6"]
 pdf = ["pypdf>=4"]
@@ -72,6 +71,9 @@ sievio-qc = "sievio.cli.main:main"
 
 [tool.setuptools]
 package-dir = {"" = "src"}
+
+[tool.setuptools.package-data]
+sievio = ["py.typed"]
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -108,4 +110,5 @@ dev = [
   "mypy>=1.19.1",
   "pytest>=9.0.2",
   "ruff>=0.14.10",
+  "mkdocs>=1.6",
 ]
