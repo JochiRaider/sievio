@@ -40,10 +40,10 @@ dev = [
   "maturin>=1.10.2", # Rust add-on toolchain (build-time tooling for PyO3/maturin workflows).
 ]
 
-# Still prototype 
-#accel = [ 
-#  "sievio-accel>=0.1.0",
-#]
+# in-development 
+accel = [ 
+  "sievio-accel>=0.1.0",
+]
 
 tok = ["tiktoken>=0.6"]
 pdf = ["pypdf>=4"]

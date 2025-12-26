@@ -44,7 +44,7 @@ Optional install contract:
 Public API contract:
 - Expose a small, stable Python-facing API. Prefer functions mirroring existing Python helpers
   rather than exporting Rust types.
-- Keep the public surface domain-oriented (e.g. `sievio_accel.qc_utils`) so new accelerators can
+- Keep the public surface domain-oriented (e.g. `sievio_accel.qc`) so new accelerators can
   be added later without changing the import pattern.
 
 Compatibility posture:
@@ -60,14 +60,15 @@ Preferred approach:
   (`sievio_accel._native`), with multiple "domains" exposed as Python submodules.
 
 Implementation shape:
-- `sievio_accel/qc_utils.py` re-exports `sievio_accel._native.qc_*` functions.
+- `sievio_accel/qc.py` re-exports `sievio_accel._native.qc_*` functions.
 - Do not create separate compiled modules per domain unless strictly necessary.
 
 ---
 
 ## 4) Import shim pattern (core stays authoritative)
 
-In core Python modules (e.g., `src/sievio/core/qc_utils.py`):
+In core Python modules (e.g., `src/sievio/core/accel.py`):
+- Core Python should import accel only in the shim module; all other modules call through the shim.
 - Import accelerated functions behind a single local indirection layer.
 - Otherwise use the existing Python implementation.
 - Do not scatter `try/except ImportError` throughout the file.
@@ -128,6 +129,7 @@ Core rules:
 
 4) Unified control (one knob wins):
    - Primary knob: `SIEVIO_ACCEL_THREADS` (default 1).
+   - Define ‘initialization’ as Rust module initialization (extension import) unless the implementation explicitly documents otherwise.
    - Honor `RAYON_NUM_THREADS` only as a fallback when `SIEVIO_ACCEL_THREADS` is not set.
    - Reading the thread budget at initialization implies changes require a process restart.
 
@@ -146,9 +148,10 @@ Note: `maturin` lives in the project venv.
 
 1) Activate the repo venv (`source .venv/bin/activate`).
 2) Build/install into the venv: `python -m maturin develop`
-3) From the repo root, run the repo-root test command (canonical; keep in sync with `../AGENTS.md`).
+   - run from accel/ (where Cargo.toml lives)
+4) From the repo root, run the repo-root test command (canonical; keep in sync with `../AGENTS.md`).
    - Current repo-root command: `pytest`
-4) Run Rust tests inside `accel/`: `cargo test`
+5) Run Rust tests inside `accel/`: `cargo test`
 
 ---
 
@@ -159,22 +162,6 @@ Parity testing is mandatory:
 - Behavior: match Python reference semantics exactly (including "soft caps").
 - Determinism: identical results across runs and thread counts.
 
-## Testing (accel)
-
-Assumptions:
-- You are using the project venv (maturin is installed in the venv).
-- Tests are run from the repo root and expect the package import path to match the repo-root workflow.
-
-Steps:
-1) From the repo root, ensure Sievio is importable in this venv (use the repo-root documented command).
-   - If the repo-root uses editable install, run that exact command (e.g., `python -m pip install -e ...`).
-
-2) Build/install the accel extension into the SAME venv:
-   - `python -m maturin develop`
-   (Use repo-specific flags/paths if needed.)
-
-3) From the repo root, run the repo-root test command verbatim:
-   - `pytest`
 ---
 
 ## 9) Performance validation
@@ -214,6 +201,7 @@ P1 (Risk):
 
 - Core passes tests with no accel installed.
 - Core passes tests with accel installed and the accelerated path is exercised.
+- Run the repo-root required checks (tests/lint/typecheck) per root AGENTS.md.
 - At least one test explicitly targets the accelerator.
 - Parity verified for representative edge cases.
 - If internal parallelism exists, determinism is tested across thread counts.

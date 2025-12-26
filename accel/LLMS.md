@@ -14,6 +14,7 @@ parallelism, and packaging. Implementation workflow and checklists live in `acce
 - Python semantics are authoritative. Rust must match Python behavior (including edge cases
   and determinism) unless the task explicitly scopes a change and adds tests.
 - Do not introduce new required runtime dependencies for core `sievio`.
+- Python core resolves accel availability via the central shim `src/sievio/core/accel.py` (do not import sievio_accel directly elsewhere).
 
 ---
 
@@ -41,6 +42,7 @@ Terminology note:
 - Modern PyO3 uses `Python::attach` / `Python::detach` to reflect free-threaded Python support.
   Older PyO3 used `Python::with_gil` / `Python::allow_threads`. Code should use the pinned version;
   policy text uses attach/detach terminology.
+- The pinned PyO3 version in accel/Cargo.toml is authoritative for which API names are used.
 
 Rules:
 - CPU-bound Rust must detach for the compute phase using the pinned PyO3 API.
